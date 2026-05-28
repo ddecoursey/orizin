@@ -1,0 +1,6 @@
+# better-sqlite3 has no prebuilt binary for Node 22 yet, so npm falls
+# back to compiling it from source. node-gyp needs python3 (nixPkgs)
+# and a C toolchain with `cc` on PATH (aptPkgs build-essential).
+[phases.setup]
+nixPkgs = ['...', 'python3']
+aptPkgs = ['build-essential']

@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+/* ── Light theme overrides (applied when <html class="light"> is set) ───── */
+.light { color-scheme: light; }
+/* Off-white warm-neutral base. Deeper number = more "background-y" in dark mode,
+   so in light mode we want it to be the actual page background (off-white). */
+.light .bg-gray-950 { background-color: #fafaf9 !important; } /* page bg */
+.light .bg-gray-900 { background-color: #f5f5f4 !important; } /* card / sidebar */
+.light .bg-gray-800 { background-color: #ebeae8 !important; } /* chips, input bg */
+.light .hover\:bg-gray-800:hover { background-color: #ebeae8 !important; }
+.light .hover\:bg-gray-700:hover { background-color: #e0deda !important; }
+.light .bg-gray-800\/50 { background-color: rgba(235,234,232,0.6) !important; }
+.light .bg-gray-800\/30 { background-color: rgba(235,234,232,0.35) !important; }
+.light .bg-gray-950\/30 { background-color: rgba(250,250,249,0.6) !important; }
+/* Text */
+.light .text-white { color: #1c1917 !important; }
+.light .text-gray-100 { color: #1c1917 !important; }
+.light .text-gray-200 { color: #292524 !important; }
+.light .text-gray-300 { color: #44403c !important; }
+.light .text-gray-400 { color: #57534e !important; }
+.light .text-gray-500 { color: #78716c !important; }
+.light .text-gray-600 { color: #a8a29e !important; }
+.light .hover\:text-gray-300:hover { color: #1c1917 !important; }
+.light .hover\:text-gray-200:hover { color: #1c1917 !important; }
+/* Borders */
+.light .border-gray-800 { border-color: #e7e5e4 !important; }
+.light .border-gray-700 { border-color: #d6d3d1 !important; }
+.light .placeholder-gray-600::placeholder { color: #a8a29e !important; }
+/* Inverted buttons (dark chip on light background) */
+.light .bg-gray-100 { background-color: #1c1917 !important; color: #fafaf9 !important; }
+.light .text-gray-900 { color: #fafaf9 !important; }
+
+/* Heatmap cells — dark-mode uses deep emerald-900/red-900 with alpha,
+   which looks awful on white. Soften to pale tints with dark text. */
+.light .bg-emerald-900\/40 { background-color: rgba(34,197,94,0.18) !important; }
+.light .bg-emerald-900\/20 { background-color: rgba(34,197,94,0.10) !important; }
+.light .bg-red-900\/40     { background-color: rgba(239,68,68,0.18) !important; }
+.light .bg-red-900\/20     { background-color: rgba(239,68,68,0.10) !important; }
+.light .text-emerald-300   { color: #15803d !important; }
+.light .text-emerald-400   { color: #15803d !important; }
+.light .text-emerald-400\/80 { color: rgba(21,128,61,0.85) !important; }
+.light .text-red-300       { color: #b91c1c !important; }
+.light .text-red-400       { color: #b91c1c !important; }
+.light .text-red-400\/80   { color: rgba(185,28,28,0.85) !important; }
+
+/* Subtle bouncing animation for the floating Ori button */
+@keyframes ori-bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+.animate-ori-bounce {
+  animation: ori-bounce 2.2s ease-in-out infinite;
+}
+
+
+
+/* Pinned row sticky cells (amber in dark mode → soft warm yellow in light) */
+.light .bg-amber-950 { background-color: #fef3c7 !important; }
+.light .bg-amber-900\/10 { background-color: rgba(254,243,199,0.5) !important; }
+.light .text-amber-400 { color: #b45309 !important; }
+.light .hover\:text-amber-400:hover { color: #b45309 !important; }
