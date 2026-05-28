@@ -145,7 +145,7 @@ const COLS = [
   { key: "score", label: "Score", plain: true, nosort: false },
 ];
 
-export default function StockTable({ rows, pins, onTogglePin, onAskAI }) {
+export default function StockTable({ rows, pins, onTogglePin, onAskAI, hasEnrichedOnce = false }) {
   const [sortKey, setSortKey] = useState("mcap");
   const [sortDir, setSortDir] = useState(-1);
   const [sparklines, setSparklines] = useState(new Map()); // symbol -> number[]
@@ -156,7 +156,39 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI }) {
   // Fetch historical prices for sparklines (lazy, for visible rows)
   const inFlightRef = useRef(new Set());
 
-  const fetchSparkline = async (symbol) => {
+  // Note: fetchSparkline is now internal + scheduled via scheduleSparklineFetch for concurrency control
+
+  // Concurrency control for sparklines (max 10 at a time)
+  const MAX_SPARKLINE_CONCURRENCY = 10;
+  const activeSparklineFetches = useRef(0);
+  const sparklineQueue = useRef([]);
+
+  const processSparklineQueue = () => {
+    while (activeSparklineFetches.current < MAX_SPARKLINE_CONCURRENCY && sparklineQueue.current.length > 0) {
+      const symbol = sparklineQueue.current.shift();
+      if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) {
+        // Skip if already fetched or in flight
+        continue;
+      }
+      activeSparklineFetches.current++;
+      fetchSparklineInternal(symbol).finally(() => {
+        activeSparklineFetches.current--;
+        processSparklineQueue();
+      });
+    }
+  };
+
+  const scheduleSparklineFetch = (symbol) => {
+    if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) return;
+    // Avoid duplicates in queue
+    if (!sparklineQueue.current.includes(symbol)) {
+      sparklineQueue.current.push(symbol);
+    }
+    processSparklineQueue();
+  };
+
+  // The actual fetch logic (renamed from fetchSparkline)
+  const fetchSparklineInternal = async (symbol) => {
     if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) return;
 
     inFlightRef.current.add(symbol);
@@ -217,8 +249,22 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI }) {
     getItemKey: (index) => sorted[index]?.symbol ?? index, // Stable keys prevent unnecessary re-renders
   });
 
-  // Fetch sparklines for currently visible rows (lazy loading)
+  // 5-second delay before enabling sparkline fetching on initial load
+  const [sparklinesEnabled, setSparklinesEnabled] = useState(false);
+
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setSparklinesEnabled(true);
+      console.log('[Sparkline] Enabling sparkline fetching after 5s delay');
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Fetch sparklines for currently visible rows (lazy loading)
+  // Only start after the user has run "Gather Data" at least once
+  useEffect(() => {
+    if (!sparklinesEnabled || !hasEnrichedOnce) return;
+
     const visibleItems = rowVirtualizer.getVirtualItems();
     const visibleSymbols = visibleItems
       .map(vi => sorted[vi.index]?.symbol)
@@ -228,10 +274,10 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI }) {
     visibleSymbols.forEach(symbol => {
       if (!sparklines.has(symbol) && !inFlightRef.current.has(symbol)) {
         console.log('[Sparkline] Fetching for:', symbol);
-        fetchSparkline(symbol);
+        scheduleSparklineFetch(symbol);
       }
     });
-  }, [rowVirtualizer, sorted, sparklines]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rowVirtualizer, sorted, sparklines, sparklinesEnabled, hasEnrichedOnce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSort(key) {
     const col = COLS.find((c) => c.key === key);

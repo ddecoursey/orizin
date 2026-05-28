@@ -71,8 +71,16 @@ const loginLimiter = rateLimit({
 // Admin-only middleware
 export function requireAdmin(req, res, next) {
   try {
+    // Prefer DB users
     const user = db.getUserByUsername(req.userId);
     if (user && user.is_admin) {
+      return next();
+    }
+
+    // Legacy fallback: when using AUTH_PASSWORD (no DB users), treat the
+    // authenticated user as admin (consistent with how login works).
+    if (!hasDbUsers && req.userId && AUTH_PASSWORD) {
+      // In legacy mode the only valid user is AUTH_USER (defaults to 'admin')
       return next();
     }
   } catch (e) {
@@ -378,7 +386,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   const fmpSet = process.env.FMP_API_KEY && process.env.FMP_API_KEY !== 'your_fmp_api_key_here';
   const chatSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
   console.log(`Server running on http://0.0.0.0:${PORT} (accessible on all interfaces)`);
@@ -403,3 +411,31 @@ app.listen(PORT, '0.0.0.0', () => {
     }`,
   );
 });
+
+// Graceful shutdown (important for clean Ctrl+C and stopping long-running enrich)
+function shutdown(signal) {
+  console.log(`\n${signal} received. Shutting down gracefully...`);
+
+  server.close(() => {
+    console.log('HTTP server closed.');
+
+    // best-sqlite3 connections are usually fine to just let GC, but we can be explicit
+    try {
+      db.close?.();
+      console.log('Database connection closed.');
+    } catch (e) {
+      // ignore
+    }
+
+    process.exit(0);
+  });
+
+  // Force exit after 5 seconds if something is stuck (e.g. long FMP calls)
+  setTimeout(() => {
+    console.log('Forcing shutdown after timeout.');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

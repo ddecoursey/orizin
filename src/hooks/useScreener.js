@@ -81,7 +81,10 @@ function saveTabs(user, tabs) {
 }
 
 export const DEFAULT_FILTERS = {
-  mcapMin: "0.5",
+  // universe: 'us' | 'us-listed' | 'global' — controls both refresh scope and client-side filtering.
+  // Default is now global (with backend 500M mkt cap floor on fetch).
+  universe: "global",
+  mcapMin: "",
   mcapMax: "",
   volMin: "",
   grossMin: "",
@@ -117,6 +120,13 @@ export const DEFAULT_FILTERS = {
   rule40Only: false,
 };
 
+function normalizeUniverse(f = {}) {
+  if (f.universe && ["us", "us-listed", "global"].includes(f.universe)) return f.universe;
+  // Legacy migration for very old saved tabs that only had the boolean checkbox
+  if (f.usOnly != null) return f.usOnly ? "us" : "us-listed";
+  return "global";
+}
+
 function applyFilters(all, f, pins) {
   const g = (k, mul = 1) =>
     f[k] === "" || f[k] == null ? null : Number(f[k]) * mul;
@@ -132,6 +142,18 @@ function applyFilters(all, f, pins) {
 
   return all.filter((r) => {
     if (f.pinnedOnly && !pins.has(r.symbol)) return false;
+
+    // Universe scope filter (client-side; DB may contain stocks from any prior scope)
+    const scope = normalizeUniverse(f);
+    if (scope === "us-listed") {
+      const ex = String(r.exchange || "").toUpperCase();
+      if (ex && !["NYSE", "NASDAQ", "AMEX"].includes(ex)) return false;
+    } else if (scope === "us") {
+      const c = String(r.country || "").toUpperCase();
+      if (c && c !== "US") return false;
+    }
+    // "global": no restriction
+
     if (f.rule40Only) {
       const margin = r.ebitda_margin ?? r.fcf_margin;
       if (r.revenue_growth == null || margin == null) return false;
@@ -214,9 +236,11 @@ export function useScreener(currentUser) {
   const [pins, setPins] = useState(initialPins);
   const [loadProgress, setLoadProg] = useState(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
+  const [hasEnrichedOnce, setHasEnrichedOnce] = useState(false);
   const stocksRef = useRef([]);
   // Auto-enrich refs removed (feature disabled)
   const currentAbortRef = useRef(null); // for cancelling refresh or enrich
+  const loadProgRef = useRef(null); // latest progress numbers for status messages
 
   // Derived - split heavy ranking from light weighting for better slider perf
   const filteredRows = useMemo(
@@ -242,6 +266,7 @@ export function useScreener(currentUser) {
       currentAbortRef.current = null;
     }
     setLoadProg(null);
+    loadProgRef.current = null;
     setEnrichLoading(false);
     setStatus({ type: "ready", msg: "Operation cancelled by user" });
   }
@@ -266,7 +291,12 @@ export function useScreener(currentUser) {
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
     };
-    if (force) opts.body = JSON.stringify({ force: true });
+
+    const refreshBody = {
+      force: !!force,
+      scope: normalizeUniverse(filters),
+    };
+    opts.body = JSON.stringify(refreshBody);
 
     fetch("/api/stocks/refresh", opts)
       .then((res) => {
@@ -365,8 +395,6 @@ export function useScreener(currentUser) {
 
   function enrichAll(symbols, force = false) {
     if (enrichLoading) return;
-    setEnrichLoading(true);
-    setLoadProg({ done: 0, total: null, errors: 0 });
 
     const controller = startLongOperation();
 
@@ -374,6 +402,7 @@ export function useScreener(currentUser) {
     if (symbols) payload.symbols = symbols;
     if (force) payload.force = true;
     const body = JSON.stringify(payload);
+
     fetch("/api/stocks/enrich", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -381,6 +410,21 @@ export function useScreener(currentUser) {
       signal: controller.signal,
     })
       .then((res) => {
+        if (!res.ok) {
+          // The request failed (e.g. rate limiter on the enrich endpoint itself)
+          setEnrichLoading(false);
+          setLoadProg(null);
+          loadProgRef.current = null;
+          console.error("Enrich request failed with status", res.status);
+          return;
+        }
+
+        // Only show the loading bar once we have a real response streaming
+        setEnrichLoading(true);
+        const initialProg = { done: 0, total: null, errors: 0 };
+        setLoadProg(initialProg);
+        loadProgRef.current = initialProg;
+
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = "";
@@ -398,25 +442,45 @@ export function useScreener(currentUser) {
               if (!line.startsWith("data: ")) continue;
               try {
                 const evt = JSON.parse(line.slice(6));
+
                 if (evt.type === "progress") {
-                  setLoadProg({
+                  const prog = {
                     done: evt.done,
                     total: evt.total,
                     errors: evt.errors,
-                  });
+                  };
+                  setLoadProg(prog);
+                  loadProgRef.current = prog;
+
+                  // Go back to normal "Enriching" message after rate limit status
                   setStatus({
                     type: "loading",
                     msg: `Enriching: ${evt.done} / ${evt.total}`,
                   });
+                } else if (evt.type === "status") {
+                  // Show rate limit / queued messages from the backend,
+                  // including current progress numbers if available
+                  let msg = evt.message || "Waiting...";
+                  const currentProg = loadProgRef.current;
+                  if (currentProg && currentProg.done != null && currentProg.total != null) {
+                    msg = `${msg} (${currentProg.done} / ${currentProg.total})`;
+                  }
+                  setStatus({
+                    type: "loading",
+                    msg,
+                  });
                 } else if (evt.type === "done") {
                   currentAbortRef.current = null;
                   setLoadProg(null);
+                  loadProgRef.current = null;
                   setEnrichLoading(false);
+                  setHasEnrichedOnce(true);
                   loadStocks(false, true);
                 } else if (evt.type === "error") {
                   currentAbortRef.current = null;
                   setEnrichLoading(false);
                   setLoadProg(null);
+                  loadProgRef.current = null;
                 }
               } catch {}
             }
@@ -429,6 +493,7 @@ export function useScreener(currentUser) {
         if (e?.name !== 'AbortError') {
           setEnrichLoading(false);
           setLoadProg(null);
+          loadProgRef.current = null;
         }
         currentAbortRef.current = null;
       });
@@ -501,7 +566,12 @@ export function useScreener(currentUser) {
     localStorage.setItem(activeKey(user), id);
 
     const tabState = tab.state || {};
-    setFiltersRaw({ ...DEFAULT_FILTERS, ...tabState });
+    const restored = {
+      ...DEFAULT_FILTERS,
+      ...tabState,
+      universe: normalizeUniverse(tabState),
+    };
+    setFiltersRaw(restored);
 
     // Load pins specific to this screener/tab
     const tabPins = Array.isArray(tabState.pins) ? new Set(tabState.pins) : new Set();
@@ -580,6 +650,7 @@ export function useScreener(currentUser) {
       ),
     enrichLoading,
     loadProgress,
+    hasEnrichedOnce,
     addTicker,
     cancelOperation: cancelCurrentOperation,
   };

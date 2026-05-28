@@ -50,6 +50,7 @@ try {
     sector         TEXT,
     industry       TEXT,
     exchange       TEXT,
+    country        TEXT,
     price          REAL,
     mcap           REAL,
     volume         REAL,
@@ -120,6 +121,14 @@ try {
     updated_at       INTEGER
   );
 
+  CREATE TABLE IF NOT EXISTS sparklines (
+    symbol      TEXT NOT NULL,
+    days        INTEGER NOT NULL,
+    data        TEXT NOT NULL,   -- JSON array of {date, price}
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (symbol, days)
+  );
+
   CREATE TABLE IF NOT EXISTS chat_sessions (
     id          TEXT PRIMARY KEY,
     user_id     TEXT NOT NULL DEFAULT 'default',
@@ -157,6 +166,7 @@ try {
     ["fcf_growth", "REAL"],
     ["op_income_growth", "REAL"],
     ["has_growth", "INTEGER DEFAULT 0"],
+    ["country", "TEXT"],
   ];
   for (const [name, type] of NEW_COLS) {
     if (!existingCols.has(name)) {
@@ -199,15 +209,30 @@ try {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);`);
 } catch {}
 
+// Migration: sparklines table for persisted historical price data (for sparklines)
+try {
+  const sparkCols = new Set(
+    db.prepare("PRAGMA table_info(sparklines)").all().map((r) => r.name),
+  );
+  if (sparkCols.size === 0) {
+    // Table didn't exist yet
+    console.log('[db] Sparklines table ready (created on first run)');
+  } else {
+    console.log('[db] Sparklines table exists');
+  }
+} catch (e) {
+  // Ignore on very fresh DBs
+}
+
 // ── Upsert helpers ─────────────────────────────────────────────────────────
 
 const upsertStock = db.prepare(`
   INSERT INTO stocks (
-    symbol, name, sector, industry, exchange,
+    symbol, name, sector, industry, exchange, country,
     price, mcap, volume, beta,
     div_yield, updated_at
   ) VALUES (
-    @symbol, @name, @sector, @industry, @exchange,
+    @symbol, @name, @sector, @industry, @exchange, @country,
     @price, @mcap, @volume, @beta,
     @div_yield, @updated_at
   )
@@ -216,6 +241,7 @@ const upsertStock = db.prepare(`
     sector    = excluded.sector,
     industry  = excluded.industry,
     exchange  = excluded.exchange,
+    country   = COALESCE(NULLIF(excluded.country, ''), stocks.country),
     price     = excluded.price,
     mcap      = excluded.mcap,
     volume    = excluded.volume,
@@ -359,6 +385,17 @@ export function markGrowthChecked(symbol) {
   db.prepare(`UPDATE stocks SET has_growth=1, updated_at=? WHERE symbol=?`).run(Date.now(), symbol);
 }
 
+/**
+ * Prune stocks below a minimum market cap.
+ * Used after a forced universe refresh to enforce the 500M floor policy
+ * so the local DB doesn't keep growing with old small-cap data.
+ */
+export function pruneBelowMarketCap(minMcap) {
+  const stmt = db.prepare(`DELETE FROM stocks WHERE mcap IS NOT NULL AND mcap < ?`);
+  const info = stmt.run(minMcap);
+  return info.changes || 0;
+}
+
 export function getStockCount() {
   return db.prepare('SELECT COUNT(*) as c FROM stocks').get().c;
 }
@@ -411,6 +448,31 @@ export function getAiEnrichmentBatch(symbols) {
   if (!symbols.length) return [];
   const placeholders = symbols.map(() => '?').join(',');
   return db.prepare(`SELECT * FROM ai_enrichment WHERE symbol IN (${placeholders})`).all(...symbols);
+}
+
+// ── Sparklines (persisted historical prices for the chart) ────────────────
+
+const upsertSparkline = db.prepare(`
+  INSERT INTO sparklines (symbol, days, data, updated_at)
+  VALUES (@symbol, @days, @data, @updated_at)
+  ON CONFLICT(symbol, days) DO UPDATE SET
+    data = excluded.data,
+    updated_at = excluded.updated_at
+`);
+
+export function saveSparkline(symbol, days, data) {
+  upsertSparkline.run({
+    symbol,
+    days,
+    data: JSON.stringify(data),
+    updated_at: Date.now(),
+  });
+}
+
+export function getSparkline(symbol, days) {
+  return db
+    .prepare('SELECT * FROM sparklines WHERE symbol = ? AND days = ?')
+    .get(symbol, days);
 }
 
 // ── Chat sessions ─────────────────────────────────────────────────────────

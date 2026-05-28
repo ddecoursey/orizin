@@ -80,7 +80,7 @@ export default function Header({
         <button
           onClick={onRefresh}
           className="px-2.5 py-1 rounded-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 transition-colors flex items-center gap-1.5"
-          title="Fetch the latest stock list & prices from FMP. Lightweight — keeps existing enriched data."
+          title="Force a fresh pull of the universe from FMP (applies 500M+ mkt cap floor + current scope). Prunes old small-caps from the DB. Keeps existing enriched data for symbols that remain."
         >
           ↻ <span className="hidden sm:inline">Stock Refresh</span>
         </button>

@@ -193,6 +193,11 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
   const set = (key, val) => setFilters({ ...f, [key]: val });
   const setArr = (key, val) => setFilters({ ...f, [key]: val });
 
+  // Local universe scope (normalized; old tabs with only usOnly are handled in the hook)
+  const universeScope = f.universe && ["us", "us-listed", "global"].includes(f.universe)
+    ? f.universe
+    : "global";
+
   const sectors = useMemo(() =>
     [...new Set(stocks.map(r => r.sector).filter(s => s && s !== '—'))].sort(),
     [stocks]);
@@ -287,6 +292,41 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
           onSearchChange={setIndustrySearch}
           placeholder="Search industries…"
         />
+
+        <Section title="Universe" defaultOpen>
+          <div className="text-[9px] uppercase tracking-widest text-gray-600 font-bold mb-1">Scope</div>
+          <div className="flex border border-gray-700 rounded-md overflow-hidden text-[10px] mb-1">
+            {[
+              ["us", "US only"],
+              ["us-listed", "US + ADR"],
+              ["global", "Global"],
+            ].map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => set("universe", val)}
+                className={`flex-1 py-1 transition-colors ${
+                  universeScope === val
+                    ? "bg-blue-600 text-white font-medium"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200"
+                }`}
+                title={
+                  val === "us"
+                    ? "US-headquartered companies only (country=US)"
+                    : val === "us-listed"
+                    ? "Stocks listed on NYSE/NASDAQ/AMEX including ADRs (TSM, ASML, ARM...)"
+                    : "All markets worldwide (top ~8000 by screener)"
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="text-[9px] text-gray-500 mb-2 leading-snug">
+            {universeScope === "us" && "US-headquartered only. Refresh to update list."}
+            {universeScope === "us-listed" && "US exchanges + ADRs like TSM. Refresh for fresh list."}
+            {universeScope === "global" && "Worldwide (no geo filter). Refresh to pull more names."}
+          </div>
+        </Section>
 
         <Section title="Size" defaultOpen>
           <NumRow label="Mkt cap ≥ $B" value={f.mcapMin} onChange={v => set('mcapMin', v)} step={1} />

@@ -126,6 +126,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     enrichAll,
     enrichLoading,
     loadProgress,
+    hasEnrichedOnce,
     addTicker,
     cancelOperation,
   } = useScreener(currentUser);
@@ -285,6 +286,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                 pins={pins}
                 onTogglePin={togglePin}
                 onAskAI={chat.askAboutStock}
+                hasEnrichedOnce={hasEnrichedOnce}
               />
             </div>
           ) : (

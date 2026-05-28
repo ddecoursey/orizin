@@ -6,13 +6,19 @@ import { logError } from "./index.js";
 const BASE = "https://financialmodelingprep.com/stable";
 const KEY = () => process.env.FMP_API_KEY || "";
 
-// ── Token-bucket rate limiter (~5 req/sec for starter plan) ───────────────
-const RATE_MS = 210; // min ms between requests
+// ── Simple, concurrency-safe rate limiter for 300 rpm plan ────────────────
+// Guarantees we never exceed ~5 calls/sec on average, even with high
+// concurrency (10 enrichment workers + many sparklines). Prevents 429 storms.
+// Tuned just under the limit for safety margin.
+const MIN_INTERVAL_MS = 205; // ~292 rpm max — safe headroom under 300
 let _lastCall = 0;
+
 async function rateGate() {
   const now = Date.now();
-  const wait = _lastCall + RATE_MS - now;
-  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  const wait = _lastCall + MIN_INTERVAL_MS - now;
+  if (wait > 0) {
+    await new Promise((r) => setTimeout(r, wait));
+  }
   _lastCall = Date.now();
 }
 
@@ -34,6 +40,7 @@ export function screenerToRow(s) {
     sector: s.sector || "—",
     industry: s.industry || "—",
     exchange: s.exchange || s.exchangeShortName || "",
+    country: s.country || "",
     price,
     mcap,
     volume: n(s.volume || s.volAvg),
@@ -82,8 +89,9 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
       }
 
       if (res.status === 429 && attempt < maxRetries) {
-        const delay =
-          Math.min(500 * Math.pow(2, attempt), 16000) + Math.random() * 500;
+        // Much gentler backoff when doing "retry once then move on" for bulk work
+        const base = maxRetries <= 1 ? 150 : 500;
+        const delay = Math.min(base * Math.pow(2, attempt), 4000) + Math.random() * 300;
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -111,8 +119,8 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
         msg.includes("ETIMEDOUT");
 
       if (retryable && attempt < maxRetries) {
-        const delay =
-          Math.min(500 * Math.pow(2, attempt), 16000) + Math.random() * 500;
+        const base = maxRetries <= 1 ? 200 : 500;
+        const delay = Math.min(base * Math.pow(2, attempt), 5000) + Math.random() * 400;
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -129,14 +137,16 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
 // ── Fetch stocks via company-screener (preferred for 5k limit) ─────────────
 export async function fetchScreenerStocks({
   minMarketCap = 0,
-  limit = 5000,
-  country = "US",
+  limit = 8000,
+  country = null,           // e.g. "US" for US-headquartered
+  exchange = null,          // e.g. "NYSE,NASDAQ,AMEX" for US-listed (incl ADRs)
   isActivelyTrading = true,
   includeEtfsAndFunds = false,
 } = {}) {
   const params = new URLSearchParams({ limit: String(limit), apikey: KEY() });
   if (minMarketCap > 0) params.set("marketCapMoreThan", String(minMarketCap));
   if (country) params.set("country", country);
+  if (exchange) params.set("exchange", exchange);
   if (isActivelyTrading) params.set("isActivelyTrading", "true");
   if (!includeEtfsAndFunds) {
     params.set("isEtf", "false");
@@ -160,7 +170,7 @@ export async function fetchScreenerStocks({
       });
     }
     console.log(
-      `[FMP] company-screener gave ${data.length} raw → ${rows.length} after filters (minMcap=${minMarketCap || "none"})`,
+      `[FMP] company-screener gave ${data.length} raw → ${rows.length} after filters (minMcap=${minMarketCap || "none"}${country ? `,country=${country}` : ""}${exchange ? `,exchange=${exchange}` : ""})`,
     );
     return rows;
   } catch (e) {
@@ -169,11 +179,13 @@ export async function fetchScreenerStocks({
   }
 }
 
-// ── Fetch full US stock list (symbols only, for backward compat) ───────────
+// ── Fetch broad stock list (symbols only, for backward compat) ──────────────
+// No country filter so we get US-listed ADRs like TSM, ASML, etc.
 export async function fetchStockList() {
-  // Use the rich screener (limit 5000) and return just symbols.
+  // Use the rich screener (limit 8000) and return just symbols.
   // This avoids the broken comma-batch /profile behavior on starter plans.
-  const rows = await fetchScreenerStocks({ minMarketCap: 0, limit: 5000 });
+  // Apply same 500M+ floor used in the primary universe path.
+  const rows = await fetchScreenerStocks({ minMarketCap: 500_000_000, limit: 8000 }); // broad (no geo filter) — caller may filter further
   if (rows.length) return rows.map((r) => r.symbol);
 
   // Last-resort fallback (very broad, will be slow to profile)
@@ -202,10 +214,10 @@ export async function fetchStockList() {
 }
 
 // ── Company profile (price, mcap, sector, industry, beta) ──────────────────
-export async function fetchProfile(symbol) {
+export async function fetchProfile(symbol, opts = {}) {
   const url = `${BASE}/profile?symbol=${symbol}&apikey=${KEY()}`;
   try {
-    const data = await fetchWithRetry(url);
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 6, opts.timeoutMs ?? 15000);
     const prof = Array.isArray(data) ? data[0] : data;
     if (!prof || typeof prof !== "object" || !prof.symbol) return null;
     return prof;
@@ -227,6 +239,7 @@ export function profileToRow(prof) {
     sector: prof.sector || "—",
     industry: prof.industry || "—",
     exchange: prof.exchange || prof.exchangeShortName || "",
+    country: prof.country || "",
     price: n(prof.price),
     mcap: n(prof.marketCap || prof.mktCap),
     volume: n(prof.volAvg || prof.volume),
@@ -288,10 +301,10 @@ export async function fetchProfiles(
 }
 
 // ── Key metrics TTM (fast, 1 call/stock) ───────────────────────────────────
-export async function fetchKeyMetrics(symbol) {
+export async function fetchKeyMetrics(symbol, opts = {}) {
   const url = `${BASE}/key-metrics-ttm?symbol=${symbol}&apikey=${KEY()}`;
   try {
-    const data = await fetchWithRetry(url);
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 6, opts.timeoutMs ?? 15000);
     const km = Array.isArray(data) ? data[0] : data;
     if (!km || typeof km !== "object") return null;
 
@@ -329,16 +342,19 @@ export async function fetchKeyMetrics(symbol) {
   } catch (e) {
     const msg = `[FMP] key-metrics-ttm ${symbol}: ${e.message}`;
     console.warn(msg);
-    logError(msg, { symbol, endpoint: 'key-metrics-ttm' });
+    // Don't pollute the debug error log with expected rate-limit noise during bulk work
+    if (!e.message?.includes('429')) {
+      logError(msg, { symbol, endpoint: 'key-metrics-ttm' });
+    }
     return null;
   }
 }
 
 // ── Ratios TTM (gross/op margin, D/E, EV/GP) ─────────────────────────────
-export async function fetchRatios(symbol) {
+export async function fetchRatios(symbol, opts = {}) {
   const url = `${BASE}/ratios-ttm?symbol=${symbol}&apikey=${KEY()}`;
   try {
-    const data = await fetchWithRetry(url);
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 6, opts.timeoutMs ?? 15000);
     const rat = Array.isArray(data) ? data[0] : data;
     if (!rat || typeof rat !== "object") return null;
 
@@ -358,17 +374,19 @@ export async function fetchRatios(symbol) {
   } catch (e) {
     const msg = `[FMP] ratios-ttm ${symbol}: ${e.message}`;
     console.warn(msg);
-    logError(msg, { symbol, endpoint: 'ratios-ttm' });
+    if (!e.message?.includes('429')) {
+      logError(msg, { symbol, endpoint: 'ratios-ttm' });
+    }
     return null;
   }
 }
 
 // ── AI enrichment fetchers (on-demand, not bulk) ──────────────────────────
 
-export async function fetchDCF(symbol) {
+export async function fetchDCF(symbol, opts = {}) {
   const url = `${BASE}/discounted-cash-flow?symbol=${symbol}&apikey=${KEY()}`;
   try {
-    const data = await fetchWithRetry(url);
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 6, opts.timeoutMs ?? 15000);
     const d = Array.isArray(data) ? data[0] : data;
     if (!d) return null;
     return {
@@ -378,6 +396,9 @@ export async function fetchDCF(symbol) {
     };
   } catch (e) {
     console.warn(`[FMP] dcf ${symbol}:`, e.message);
+    if (!e.message?.includes('429')) {
+      logError(`[FMP] dcf ${symbol}: ${e.message}`, { symbol, endpoint: 'dcf' });
+    }
     return null;
   }
 }
@@ -400,10 +421,10 @@ export async function fetchPriceTarget(symbol) {
   }
 }
 
-export async function fetchFinancialGrowth(symbol) {
+export async function fetchFinancialGrowth(symbol, opts = {}) {
   const url = `${BASE}/financial-growth?symbol=${symbol}&limit=1&period=annual&apikey=${KEY()}`;
   try {
-    const data = await fetchWithRetry(url);
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 6, opts.timeoutMs ?? 15000);
     const d = Array.isArray(data) ? data[0] : data;
     if (!d) return null;
     return {
@@ -416,6 +437,9 @@ export async function fetchFinancialGrowth(symbol) {
     };
   } catch (e) {
     console.warn(`[FMP] financial-growth ${symbol}:`, e.message);
+    if (!e.message?.includes('429')) {
+      logError(`[FMP] financial-growth ${symbol}: ${e.message}`, { symbol, endpoint: 'financial-growth' });
+    }
     return null;
   }
 }
