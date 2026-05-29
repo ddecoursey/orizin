@@ -1,5 +1,42 @@
 import { useState } from "react";
 
+// Small dropdown: a trigger + a click-away panel. Mirrors the popover pattern
+// used elsewhere (Footer, the old gather menu). `button` renders the trigger
+// (given a toggle fn); `children` renders the panel (given a close fn).
+function HeaderMenu({ button, children, width = "w-56", align = "right" }) {
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+  return (
+    <div className="relative flex items-center">
+      {button(open, () => setOpen((o) => !o))}
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={close} />
+          <div
+            className={`absolute ${align === "right" ? "right-0" : "left-0"} top-full mt-1 z-50 ${width}
+              rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 py-1`}
+          >
+            {children(close)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({ onClick, disabled, children, className = "" }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800
+        disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${className}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function Header({
   status,
   filtered,
@@ -14,12 +51,7 @@ export default function Header({
   onLogout,
   onManageUsers,
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  const missing = filtered.filter(
-    (r) => !r.has_km || !r.has_rat,
-  ).length;
-
+  const missing = filtered.filter((r) => !r.has_km || !r.has_rat).length;
   const isFullyEnriched = missing === 0;
 
   // Some symbols (ETFs, indexes, funds) never return key-metrics/ratios from
@@ -50,10 +82,15 @@ export default function Header({
         ? "bg-red-500"
         : "bg-amber-400 animate-pulse";
 
+  const initial =
+    currentUser && currentUser !== "default"
+      ? currentUser.charAt(0).toUpperCase()
+      : "•";
+
   return (
-    <header className="bg-gray-950 border-b border-gray-800 px-4 py-2 flex items-center gap-3 shrink-0 text-sm">
+    <header className="bg-gray-950 border-b border-gray-800 px-3 sm:px-4 py-2 flex items-center gap-3 shrink-0 text-sm">
       {/* Orizen logo + wordmark + tagline */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-2.5 shrink-0">
         <OrizenLogo className="w-5 h-5" />
         <div className="flex items-baseline gap-2">
           <span
@@ -62,127 +99,136 @@ export default function Header({
           >
             Orizen
           </span>
-          <span className="text-[10.5px] text-gray-500 hidden sm:inline tracking-wide">
+          <span className="text-[10.5px] text-gray-500 hidden md:inline tracking-wide">
             stock recommendation engine
           </span>
         </div>
       </div>
 
       {/* Compact status */}
-      <div className="flex items-center gap-1.5 text-xs text-gray-400 border-l border-gray-800 pl-3">
-        <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-        <span>{status.msg}</span>
+      <div className="flex items-center gap-1.5 text-xs text-gray-400 border-l border-gray-800 pl-3 min-w-0">
+        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+        <span className="hidden sm:inline truncate">{status.msg}</span>
       </div>
 
-      {/* Actions */}
-      <div className="ml-auto flex items-center gap-1.5">
-        {isAdmin && (
-          <a
-            href="/debug"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[10px] text-gray-500 hover:text-gray-300 px-1.5 py-1 font-mono"
-            title="Open debug error log"
-          >
-            debug
-          </a>
-        )}
-
-        <button
-          onClick={onToggleTheme}
-          className="px-2 py-1 rounded-md text-xs bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 transition-colors"
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+      {/* Right: Data menu + Profile menu */}
+      <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        {/* Data menu (Refresh / Gather) */}
+        <HeaderMenu
+          width="w-64"
+          button={(open, toggle) => (
+            <button
+              onClick={toggle}
+              className={`px-2.5 py-1.5 rounded-md text-xs font-medium border transition-colors flex items-center gap-1.5
+                ${open ? "bg-gray-800 border-gray-700 text-gray-100" : "bg-gray-900 border-gray-800 text-gray-300 hover:bg-gray-800"}`}
+              title="Data actions"
+            >
+              <span>⚡</span>
+              <span className="hidden sm:inline">Data</span>
+              {!isFullyEnriched && filtered.length > 0 && (
+                <span className="text-[10px] text-amber-400">({missing})</span>
+              )}
+              <span className="text-gray-500 text-[10px]">▾</span>
+            </button>
+          )}
         >
-          {theme === "dark" ? "☀" : "☾"}
-        </button>
-
-        <button
-          onClick={onRefresh}
-          className="px-2.5 py-1 rounded-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 transition-colors flex items-center gap-1.5"
-          title="Force a fresh pull of the universe from FMP (applies 500M+ mkt cap floor + current scope). Prunes old small-caps from the DB. Keeps existing enriched data for symbols that remain."
-        >
-          ↻ <span className="hidden sm:inline">Stock Refresh</span>
-        </button>
-
-        <div className="relative flex items-center">
-          <button
-            onClick={() => runGather(isFullyEnriched)}
-            disabled={enrichLoading || filtered.length === 0}
-            className="px-2.5 py-1 rounded-l-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
-            title={
-              isFullyEnriched
-                ? "Force re-fetch key metrics, ratios, growth & DCF for all currently visible stocks (even if already gathered). Useful after scope changes or to refresh stale data."
-                : "Pull full financial data (key metrics, ratios, DCF, growth) for visible stocks missing data. Heavy API call — can take several minutes."
-            }
-          >
-            ⚡ {enrichLoading
-              ? "Gathering…"
-              : isFullyEnriched
-                ? "Re-gather Data"
-                : `Gather Data (${missing})`}
-          </button>
-          <button
-            onClick={() => setMenuOpen((o) => !o)}
-            disabled={enrichLoading || filtered.length === 0}
-            className="px-1.5 py-1 rounded-r-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-400 border border-l-0 border-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="More gather options"
-          >
-            ▾
-          </button>
-
-          {menuOpen && (
+          {(close) => (
             <>
-              {/* Click-away backdrop */}
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setMenuOpen(false)}
-              />
-              <div className="absolute right-0 top-full mt-1 z-50 w-60 rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 py-1">
-                <button
-                  onClick={() => {
-                    setMenuOpen(false);
-                    runGather(true);
-                  }}
-                  disabled={enrichLoading || filtered.length === 0}
-                  className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  ⚡ Force re-gather all ({filtered.length})
-                  <span className="block text-[10px] text-gray-500 mt-0.5">
-                    Re-fetches every visible stock, even ones that never return
-                    data (ETFs, indexes).
-                  </span>
-                </button>
-              </div>
+              <MenuItem
+                onClick={() => { close(); onRefresh?.(); }}
+                title="Force a fresh pull of the universe from FMP (applies 500M+ mkt cap floor + current scope). Prunes old small-caps from the DB."
+              >
+                ↻ Stock Refresh
+                <span className="block text-[10px] text-gray-500 mt-0.5">
+                  Fresh pull of the universe from FMP (current scope).
+                </span>
+              </MenuItem>
+              <MenuItem
+                onClick={() => { close(); runGather(isFullyEnriched); }}
+                disabled={enrichLoading || filtered.length === 0}
+              >
+                ⚡ {enrichLoading
+                  ? "Gathering…"
+                  : isFullyEnriched
+                    ? "Re-gather Data"
+                    : `Gather Data (${missing})`}
+                <span className="block text-[10px] text-gray-500 mt-0.5">
+                  Pull metrics, ratios, growth & DCF for visible stocks.
+                </span>
+              </MenuItem>
+              <MenuItem
+                onClick={() => { close(); runGather(true); }}
+                disabled={enrichLoading || filtered.length === 0}
+              >
+                ⚡ Force re-gather all ({filtered.length})
+                <span className="block text-[10px] text-gray-500 mt-0.5">
+                  Re-fetches every visible stock, even ETFs/indexes.
+                </span>
+              </MenuItem>
             </>
           )}
-        </div>
+        </HeaderMenu>
 
-        {onLogout && (
-          <>
-            {isAdmin && onManageUsers && (
-              <button
-                onClick={onManageUsers}
-                className="px-2.5 py-1 rounded-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 transition-colors flex items-center gap-1.5 ml-1"
-                title="Manage users"
-              >
-                👥 Users
-              </button>
-            )}
-
+        {/* Profile menu (account / theme / logout) */}
+        <HeaderMenu
+          width="w-56"
+          button={(open, toggle) => (
             <button
-              onClick={onLogout}
-              className="px-2.5 py-1 rounded-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 transition-colors flex items-center gap-1.5"
-              title={currentUser ? `Signed in as ${currentUser} — click to sign out` : "Sign out"}
+              onClick={toggle}
+              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white transition-all
+                ${open ? "ring-2 ring-blue-400/50" : ""}
+                bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110`}
+              title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser}` : "Account"}
             >
-              ⏻
-              <span className="hidden sm:inline">
-                {currentUser && currentUser !== "default"
-                  ? `Logout (${currentUser})`
-                  : "Logout"}
-              </span>
+              {initial}
             </button>
-          </>
-        )}
+          )}
+        >
+          {(close) => (
+            <>
+              <div className="px-3 py-2 border-b border-gray-800">
+                <div className="text-[10px] uppercase tracking-wider text-gray-500">Signed in as</div>
+                <div className="text-sm text-gray-200 font-medium truncate flex items-center gap-1.5">
+                  {currentUser && currentUser !== "default" ? currentUser : "Guest"}
+                  {isAdmin && (
+                    <span className="text-[9px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>
+                  )}
+                </div>
+              </div>
+
+              <MenuItem onClick={onToggleTheme}>
+                {theme === "dark" ? "☀  Light mode" : "☾  Dark mode"}
+              </MenuItem>
+
+              {onManageUsers && (
+                <MenuItem onClick={() => { close(); onManageUsers(); }}>
+                  ⚙  Account settings
+                </MenuItem>
+              )}
+
+              {isAdmin && (
+                <a
+                  href="/debug"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={close}
+                  className="block w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                >
+                  🐞  Debug log
+                </a>
+              )}
+
+              {onLogout && (
+                <MenuItem
+                  onClick={() => { close(); onLogout(); }}
+                  className="text-red-300 hover:bg-red-950/40 border-t border-gray-800"
+                >
+                  ⏻  Logout
+                </MenuItem>
+              )}
+            </>
+          )}
+        </HeaderMenu>
       </div>
     </header>
   );

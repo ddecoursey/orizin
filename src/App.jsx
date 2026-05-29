@@ -80,7 +80,11 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   const user = currentUser || "default";
   const themeKey = `theme:${user}`;
   const sidebarKey = `sidebarCollapsed:${user}`;
-  const [view, setView] = useState("table");
+  // Default to the vertical card view on narrow screens (phones / iPad portrait)
+  // so users aren't forced to drag the wide table sideways. Still toggleable.
+  const [view, setView] = useState(
+    () => (typeof window !== "undefined" && window.innerWidth < 1024 ? "cards" : "table"),
+  );
   const [showUsersModal, setShowUsersModal] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
   const [theme, setTheme] = useState(
@@ -267,8 +271,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             onDelete={deleteTab}
           />
 
-          {/* Controls bar */}
-          <div className="flex flex-wrap items-center gap-3 gap-y-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
+          {/* Controls bar — desktop / iPad landscape (≥ lg): unchanged */}
+          <div className="hidden lg:flex flex-wrap items-center gap-3 gap-y-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
             <div
               className="flex items-center gap-2 flex-1 min-w-[140px] max-w-xs bg-gray-900 border border-gray-800
               rounded-lg px-3 py-1.5"
@@ -325,6 +329,56 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                   }
                 />
               ))}
+            </div>
+          </div>
+
+          {/* Controls bar — compact (< lg) */}
+          <div className="flex lg:hidden flex-col gap-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
+            <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+              <span className="text-gray-600 text-sm">⌕</span>
+              <input
+                type="text"
+                value={filters.search}
+                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                placeholder="Search symbol or name…"
+                className="flex-1 bg-transparent text-sm text-gray-200 outline-none placeholder-gray-600"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSidebarCollapsed(false)}
+                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-gray-900 border border-gray-700
+                  text-gray-300 hover:bg-gray-800 transition-colors flex items-center gap-1.5"
+              >
+                ⚙ Filters
+              </button>
+              <span className="text-xs text-gray-600 whitespace-nowrap">
+                {filtered.length} / {stocks.length}
+              </span>
+
+              <div className="ml-auto flex items-center gap-2">
+                <div className="flex border border-gray-700 rounded-md overflow-hidden">
+                  {[
+                    ["table", "▦"],
+                    ["cards", "▤"],
+                  ].map(([v, icon]) => (
+                    <button
+                      key={v}
+                      onClick={() => setView(v)}
+                      title={v === "table" ? "Table" : "Scorecards"}
+                      className={`px-3 py-1.5 text-sm font-semibold transition-colors ${
+                        view === v
+                          ? "bg-gray-100 text-gray-900"
+                          : "bg-gray-900 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
+                      }`}
+                    >
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+                <WeightsPopover weights={weights} setWeights={setWeights} />
+              </div>
             </div>
           </div>
 
@@ -402,7 +456,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       <div
         className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
           ${detailStock && !chat.isOpen ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
-          ${!chat.isOpen ? 'animate-ori-bounce' : ''}`}
+          ${chat.isOpen ? 'hidden lg:block' : 'block animate-ori-bounce'}`}
       >
         <button
           onClick={() => chat.setIsOpen(!chat.isOpen)}
@@ -464,6 +518,76 @@ function rsiTrend(rsi) {
     change5d,
     direction: change5d > 1 ? "rising" : change5d < -1 ? "falling" : "flat",
   };
+}
+
+/**
+ * WeightsPopover — compact "Weights" button + dropdown holding the three Q/V/G
+ * sliders, used on narrow screens to keep them off the main controls bar.
+ */
+function WeightsPopover({ weights, setWeights }) {
+  const [open, setOpen] = useState(false);
+  const rows = [
+    ["q", "Quality"],
+    ["v", "Value"],
+    ["g", "Growth"],
+  ];
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={`px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors flex items-center gap-1.5
+          ${open ? "bg-gray-800 border-gray-700 text-gray-100" : "bg-gray-900 border-gray-700 text-gray-300 hover:bg-gray-800"}`}
+      >
+        ⚖ Weights
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 p-3 space-y-3">
+            <div className="text-[10px] uppercase tracking-wider text-gray-500">
+              Orizen Score weights
+            </div>
+            {rows.map(([k, label]) => (
+              <PopoverWeightRow
+                key={k}
+                label={label}
+                value={weights[k]}
+                onChange={(v) => setWeights((w) => ({ ...w, [k]: v }))}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function PopoverWeightRow({ label, value, onChange }) {
+  const [local, setLocal] = useState(value);
+  const timeoutRef = useRef(null);
+  useEffect(() => setLocal(value), [value]);
+  const handleChange = (e) => {
+    const v = Number(e.target.value);
+    setLocal(v);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => onChange(v), 120);
+  };
+  return (
+    <div>
+      <div className="flex justify-between text-xs text-gray-300 mb-1">
+        <span>{label}</span>
+        <span className="font-mono text-gray-400">{local}</span>
+      </div>
+      <input
+        type="range"
+        min="0"
+        max="100"
+        value={local}
+        onChange={handleChange}
+        className="w-full accent-blue-500 h-2"
+      />
+    </div>
+  );
 }
 
 /**

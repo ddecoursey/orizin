@@ -156,13 +156,19 @@ export default function ChatPanel({ chat }) {
 
   return (
     <>
-      {/* Backdrop on tablet/phone where the panel floats over the table */}
+      {/* Backdrop on tablet/phone where the sheet floats over the content */}
       <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => chat.setIsOpen(false)} />
       <div
-        className="fixed inset-y-0 right-0 z-50 w-full max-w-md shadow-2xl
-          lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none
-          shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden"
+        className="fixed inset-x-0 bottom-0 z-50 h-[85vh] rounded-t-2xl shadow-2xl border-t border-gray-700
+          lg:static lg:inset-auto lg:h-full lg:w-96 lg:rounded-none lg:shadow-none lg:border-t-0 lg:border-l lg:border-gray-800 lg:z-auto
+          shrink-0 bg-gray-900 flex flex-col overflow-hidden"
       >
+      {/* Grab handle — bottom-sheet dismiss affordance (mobile only) */}
+      <button
+        onClick={() => chat.setIsOpen(false)}
+        className="lg:hidden mx-auto mt-2 mb-1 h-1.5 w-10 rounded-full bg-gray-700 shrink-0"
+        aria-label="Close Ori"
+      />
       {/* Header */}
       <div className="relative px-3 py-2.5 border-b border-gray-800 flex items-center gap-2">
         <span className="text-sm font-bold text-gray-100">Ori</span>

@@ -21,7 +21,7 @@ function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
           step={step}
           placeholder={placeholder}
           onChange={e => onChange(e.target.value)}
-          className="w-16 px-1.5 py-0.5 text-xs rounded-l border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500
+          className="w-20 px-2 py-1.5 text-sm lg:w-16 lg:px-1.5 lg:py-0.5 lg:text-xs rounded-l border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500
             [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
         />
 
@@ -30,7 +30,7 @@ function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
           <button
             type="button"
             onClick={() => adjust(step)}
-            className="px-2 text-[9px] leading-none min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors"
+            className="px-2.5 text-[10px] leading-none min-h-[18px] lg:px-2 lg:text-[9px] lg:min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors"
             title={`+${step}`}
           >
             ▲
@@ -38,7 +38,7 @@ function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
           <button
             type="button"
             onClick={() => adjust(-step)}
-            className="px-2 text-[9px] leading-none min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors border-t border-gray-700"
+            className="px-2.5 text-[10px] leading-none min-h-[18px] lg:px-2 lg:text-[9px] lg:min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors border-t border-gray-700"
             title={`-${step}`}
           >
             ▼
@@ -86,7 +86,7 @@ function MultiSelect({ label, options, selected, onChange, search, onSearchChang
 
       <button
         onClick={() => setOpen(!open)}
-        className="w-full px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded flex justify-between items-center hover:border-gray-600 text-left"
+        className="w-full px-2 py-2 lg:py-1 text-xs bg-gray-800 border border-gray-700 rounded flex justify-between items-center hover:border-gray-600 text-left"
       >
         <span className="text-gray-300 truncate">
           {selected?.length > 0
@@ -218,8 +218,10 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
   }
 
   if (collapsed) {
+    // Thin re-open strip — desktop only. On < lg the controls-bar "Filters"
+    // button is the opener, so we don't steal width with a strip there.
     return (
-      <aside className="w-9 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col items-center pt-2">
+      <aside className="hidden lg:flex w-9 shrink-0 bg-gray-900 border-r border-gray-800 flex-col items-center pt-2">
         <button
           onClick={onToggleCollapsed}
           className="w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors text-sm"
@@ -233,24 +235,27 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
 
   return (
     <>
-      {/* Backdrop on tablet/phone where the expanded panel floats over the table */}
+      {/* Backdrop on tablet/phone where the expanded panel floats over the content */}
       <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={onToggleCollapsed} />
-      <aside className="fixed inset-y-0 left-0 z-40 w-64 shadow-2xl
-        lg:static lg:z-auto lg:w-56 lg:shadow-none
+      <aside className="fixed inset-y-0 left-0 z-40 w-[88vw] max-w-sm shadow-2xl
+        lg:static lg:z-auto lg:w-56 lg:max-w-none lg:shadow-none
         shrink-0 bg-gray-900 border-r border-gray-800
         flex flex-col overflow-y-auto overflow-x-hidden">
+      {/* Sticky header: title + Done (mobile) / collapse (desktop) */}
+      <div className="sticky top-0 z-10 bg-gray-900 flex items-center justify-between gap-2 px-3 py-2.5 lg:py-2 border-b border-gray-800">
+        <span className="text-xs uppercase tracking-wider text-gray-400 font-semibold">Filters</span>
+        <button
+          onClick={onToggleCollapsed}
+          className="font-semibold rounded-md transition-colors text-gray-200
+            px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-sm
+            lg:bg-transparent lg:text-gray-500 lg:hover:text-gray-200 lg:hover:bg-gray-800 lg:px-2 lg:py-1 lg:text-xs"
+          title="Collapse filter panel"
+        >
+          <span className="lg:hidden">Done</span>
+          <span className="hidden lg:inline">◀</span>
+        </button>
+      </div>
       <div className="p-3 flex-1">
-        {/* Collapse toggle */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Filters</span>
-          <button
-            onClick={onToggleCollapsed}
-            className="w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors text-xs"
-            title="Collapse filter panel"
-          >
-            ◀
-          </button>
-        </div>
 
         {/* Pinned only */}
         <label className="flex items-center gap-2 text-xs text-gray-400 mb-1.5 cursor-pointer">
