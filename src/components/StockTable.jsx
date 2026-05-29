@@ -558,9 +558,10 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
                 >
                   <button
                     onClick={() => onTogglePin(r.symbol)}
-                    className={`text-sm leading-none transition-colors ${
+                    className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none transition-colors ${
                       pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
                     }`}
+                    title={pinned ? "Unpin" : "Pin"}
                   >
                     {pinned ? "★" : "☆"}
                   </button>
@@ -659,7 +660,7 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
                   {onAskAI && (
                     <button
                       onClick={() => onAskAI(r.symbol)}
-                      className="opacity-0 group-hover:opacity-100 px-2 py-0.5 text-[9px] font-medium
+                      className="opacity-100 lg:opacity-0 lg:group-hover:opacity-100 px-2 py-1 text-[9px] font-medium
                         rounded bg-blue-600/20 text-blue-400 border border-blue-800/50
                         hover:bg-blue-600/40 transition-all whitespace-nowrap"
                     >

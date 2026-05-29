@@ -145,6 +145,12 @@ try {
     created_at    INTEGER,
     is_admin      INTEGER DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS user_settings (
+    user_id     TEXT PRIMARY KEY,
+    data        TEXT,            -- JSON blob: { tabs, activeTab, weights, theme, sidebarCollapsed }
+    updated_at  INTEGER
+  );
 `);
   console.log('[db] Schema initialized successfully');
 } catch (err) {
@@ -551,6 +557,52 @@ export function listUsers() {
 export function userCount() {
   const row = db.prepare('SELECT COUNT(*) as count FROM users').get();
   return row.count;
+}
+
+export function adminCount() {
+  return db.prepare('SELECT COUNT(*) as c FROM users WHERE is_admin = 1').get().c;
+}
+
+export function setUserAdmin(username, isAdmin) {
+  const info = db
+    .prepare('UPDATE users SET is_admin = ? WHERE username = ?')
+    .run(isAdmin ? 1 : 0, username);
+  return info.changes > 0;
+}
+
+// ── Per-user settings (screens/tabs, pins, weights, theme, sidebar) ─────────
+// Stored as a single JSON blob per user. Writes are a shallow merge so that
+// independent clients (the screener and the theme/sidebar layer) can update
+// their own keys without clobbering each other.
+
+const getUserSettingsStmt = db.prepare('SELECT data FROM user_settings WHERE user_id = ?');
+const upsertUserSettingsStmt = db.prepare(`
+  INSERT INTO user_settings (user_id, data, updated_at)
+  VALUES (@user_id, @data, @updated_at)
+  ON CONFLICT(user_id) DO UPDATE SET
+    data = excluded.data,
+    updated_at = excluded.updated_at
+`);
+
+export function getUserSettings(userId = 'default') {
+  const row = getUserSettingsStmt.get(userId);
+  if (!row || !row.data) return {};
+  try {
+    return JSON.parse(row.data);
+  } catch {
+    return {};
+  }
+}
+
+export function patchUserSettings(userId = 'default', partial = {}) {
+  const current = getUserSettings(userId);
+  const merged = { ...current, ...(partial && typeof partial === 'object' ? partial : {}) };
+  upsertUserSettingsStmt.run({
+    user_id: userId,
+    data: JSON.stringify(merged),
+    updated_at: Date.now(),
+  });
+  return merged;
 }
 
 export default db;

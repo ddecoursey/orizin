@@ -30,7 +30,7 @@ function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
           <button
             type="button"
             onClick={() => adjust(step)}
-            className="px-1 text-[9px] leading-none text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors"
+            className="px-2 text-[9px] leading-none min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors"
             title={`+${step}`}
           >
             ▲
@@ -38,7 +38,7 @@ function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
           <button
             type="button"
             onClick={() => adjust(-step)}
-            className="px-1 text-[9px] leading-none text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors border-t border-gray-700"
+            className="px-2 text-[9px] leading-none min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors border-t border-gray-700"
             title={`-${step}`}
           >
             ▼
@@ -168,20 +168,6 @@ function Section({ title, defaultOpen = false, children }) {
 }
 
 export default function Sidebar({ filters, setFilters, stocks, onAddTicker, collapsed, onToggleCollapsed }) {
-  if (collapsed) {
-    return (
-      <aside className="w-8 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col items-center pt-2">
-        <button
-          onClick={onToggleCollapsed}
-          className="w-6 h-6 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors text-xs"
-          title="Expand filter panel"
-        >
-          ▶
-        </button>
-      </aside>
-    );
-  }
-
   const [addInput, setAddInput] = useState('');
   const [addStatus, setAddStatus] = useState('');
   const [adding, setAdding] = useState(false);
@@ -231,16 +217,35 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
     }
   }
 
+  if (collapsed) {
+    return (
+      <aside className="w-9 shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col items-center pt-2">
+        <button
+          onClick={onToggleCollapsed}
+          className="w-8 h-8 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors text-sm"
+          title="Expand filter panel"
+        >
+          ▶
+        </button>
+      </aside>
+    );
+  }
+
   return (
-    <aside className="w-56 shrink-0 bg-gray-900 border-r border-gray-800
-      flex flex-col overflow-y-auto overflow-x-hidden">
+    <>
+      {/* Backdrop on tablet/phone where the expanded panel floats over the table */}
+      <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={onToggleCollapsed} />
+      <aside className="fixed inset-y-0 left-0 z-40 w-64 shadow-2xl
+        lg:static lg:z-auto lg:w-56 lg:shadow-none
+        shrink-0 bg-gray-900 border-r border-gray-800
+        flex flex-col overflow-y-auto overflow-x-hidden">
       <div className="p-3 flex-1">
         {/* Collapse toggle */}
         <div className="flex items-center justify-between mb-2">
           <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Filters</span>
           <button
             onClick={onToggleCollapsed}
-            className="w-5 h-5 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors text-[10px]"
+            className="w-7 h-7 flex items-center justify-center rounded text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors text-xs"
             title="Collapse filter panel"
           >
             ◀
@@ -424,6 +429,7 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
         </div>
 
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

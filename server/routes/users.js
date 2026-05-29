@@ -29,7 +29,7 @@ router.post("/users", (req, res) => {
       return res.status(403).json({ error: "Admin access required" });
     }
 
-    const { username, password } = req.body || {};
+    const { username, password, isAdmin } = req.body || {};
 
     if (!username || !password) {
       return res.status(400).json({ error: "Username and password are required" });
@@ -39,16 +39,46 @@ router.post("/users", (req, res) => {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
-    const result = db.createUser(username, password, false);
-    
+    const result = db.createUser(username, password, !!isAdmin);
+
     if (result.success) {
-      res.json({ ok: true, username });
+      res.json({ ok: true, username, isAdmin: !!isAdmin });
     } else {
       res.status(400).json({ error: result.error || "Failed to create user" });
     }
   } catch (err) {
     console.error("[users] POST /users error:", err);
     res.status(500).json({ error: "Internal server error while creating user" });
+  }
+});
+
+// PATCH /api/users/:username - Promote/demote a user's admin role (admin only)
+router.patch("/users/:username", (req, res) => {
+  try {
+    const currentUser = db.getUserByUsername(req.userId);
+    if (!currentUser || !currentUser.is_admin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const username = req.params.username;
+    const isAdmin = !!(req.body && req.body.isAdmin);
+
+    const target = db.getUserByUsername(username);
+    if (!target) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Don't allow removing the last remaining admin (would lock everyone out
+    // of user management).
+    if (!isAdmin && target.is_admin && db.adminCount() <= 1) {
+      return res.status(400).json({ error: "Cannot remove the last admin" });
+    }
+
+    db.setUserAdmin(username, isAdmin);
+    res.json({ ok: true, username, isAdmin });
+  } catch (err) {
+    console.error("[users] PATCH error:", err);
+    res.status(500).json({ error: "Failed to update user" });
   }
 });
 

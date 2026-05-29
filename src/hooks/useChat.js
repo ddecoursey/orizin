@@ -151,65 +151,68 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
                   }
                   return next;
                 });
+              } else if (evt.type === 'status') {
+                // Transient backend status (e.g. "Ori is busy — retrying…").
+                // Show it on the in-progress assistant bubble while it has no
+                // text yet, so the user knows we're still working.
+                setMessages(prev => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last?.role === 'assistant') {
+                    next[next.length - 1] = { ...last, status: evt.message };
+                  }
+                  return next;
+                });
               } else if (evt.type === 'done') {
                 setSessionId(evt.sessionId);
                 setIsStreaming(false);
 
-                const _extractedDiag = extractUpdatesFromResponse(accumulated);
-                console.log('[Ori] diagnostic ' + JSON.stringify({
-                  length: accumulated.length,
-                  tail: accumulated.slice(-600),
-                  extracted: _extractedDiag,
-                  hasRecommendBlock: /recommendFilters|recommendWeights|applyFilters|applyWeights/.test(accumulated),
-                }));
+                // Do NOT auto-apply. We show a confirmation UI instead.
+                const extracted = extractUpdatesFromResponse(accumulated);
+                if (accumulated && extracted) {
+                  let cleaned = accumulated;
+                  if (extracted.stripStart != null && extracted.stripEnd != null) {
+                    cleaned = (
+                      accumulated.slice(0, extracted.stripStart) +
+                      accumulated.slice(extracted.stripEnd)
+                    ).trimEnd();
+                  }
 
-                // Extra loud logging when Ori tried to recommend something
-                if (/recommendFilters|recommendWeights|applyFilters|applyWeights/.test(accumulated) && !_extractedDiag) {
-                  console.warn('[Ori] ⚠️  Detected recommendation JSON in response but extraction returned null. Raw last 1200 chars:');
-                  console.warn(accumulated.slice(-1200));
-                }
+                  // Normalize recommendation for the UI.
+                  // Weights are intentionally ignored — the user controls the Q/V/G sliders directly.
+                  const rec = {
+                    filters: extracted.filters || extracted.recommendFilters || extracted.applyFilters,
+                    // weights from Ori are deliberately discarded
+                  };
 
-                // New behavior: Do NOT auto-apply. We will show a confirmation UI instead.
-                if (accumulated) {
-                  const extracted = _extractedDiag;
-                  if (extracted) {
-                    let cleaned = accumulated;
-                    if (extracted.stripStart != null && extracted.stripEnd != null) {
-                      cleaned = (
-                        accumulated.slice(0, extracted.stripStart) +
-                        accumulated.slice(extracted.stripEnd)
-                      ).trimEnd();
-                    }
-
-                    // Normalize recommendation for the UI.
-                    // Weights are intentionally ignored — the user controls the Q/V/G sliders directly.
-                    const rec = {
-                      filters: extracted.filters || extracted.recommendFilters || extracted.applyFilters,
-                      // weights from Ori are deliberately discarded
-                    };
-
-                    // Only attach if we actually have something useful to apply
-                    if (rec.filters || rec.weights) {
-                      setMessages(prev => {
-                        const next = [...prev];
-                        const last = next[next.length - 1];
-                        if (last?.role === 'assistant') {
-                          next[next.length - 1] = {
-                            ...last,
-                            content: cleaned,
-                            recommendation: rec,
-                          };
-                        }
-                        return next;
-                      });
-                    } else {
-                      console.warn('[Ori] Extraction produced an object but no usable filters/weights after normalization');
-                    }
+                  // Only attach if we actually have something useful to apply
+                  if (rec.filters || rec.weights) {
+                    setMessages(prev => {
+                      const next = [...prev];
+                      const last = next[next.length - 1];
+                      if (last?.role === 'assistant') {
+                        next[next.length - 1] = {
+                          ...last,
+                          content: cleaned,
+                          recommendation: rec,
+                        };
+                      }
+                      return next;
+                    });
                   }
                 }
               } else if (evt.type === 'error') {
                 setError(evt.message);
                 setIsStreaming(false);
+                // Drop the trailing assistant bubble if it never produced any
+                // text (otherwise it stays stuck on "Thinking…").
+                setMessages(prev => {
+                  const last = prev[prev.length - 1];
+                  if (last?.role === 'assistant' && !last.content) {
+                    return prev.slice(0, -1);
+                  }
+                  return prev;
+                });
               } else if (evt.type === 'apply_updates' || evt.type === 'apply_filters') {
                 // New behavior: store as recommendation instead of auto-applying
                 setMessages(prev => {
@@ -252,6 +255,65 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     setError(null);
   }
 
+  // ── Recall: past conversations (persisted server-side per user) ────────────
+
+  async function listSessions() {
+    try {
+      const res = await fetch('/api/chat/sessions');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.sessions || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function loadSession(id) {
+    try {
+      const res = await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`);
+      if (!res.ok) return;
+      const session = await res.json();
+
+      let stored = [];
+      try { stored = JSON.parse(session.messages || '[]'); } catch {}
+
+      const ts = session.updated_at || Date.now();
+      const mapped = stored.map((m) => ({ role: m.role, content: m.content, ts }));
+
+      // Re-attach a recommendation (+ cleaned content) to the most recent
+      // assistant message so a recalled suggestion can still be applied.
+      for (let i = mapped.length - 1; i >= 0; i--) {
+        if (mapped[i].role !== 'assistant') continue;
+        const extracted = extractUpdatesFromResponse(mapped[i].content);
+        if (extracted) {
+          let cleaned = mapped[i].content;
+          if (extracted.stripStart != null && extracted.stripEnd != null) {
+            cleaned = (
+              mapped[i].content.slice(0, extracted.stripStart) +
+              mapped[i].content.slice(extracted.stripEnd)
+            ).trimEnd();
+          }
+          const filters = extracted.filters || extracted.recommendFilters || extracted.applyFilters;
+          if (filters) {
+            mapped[i] = { ...mapped[i], content: cleaned, recommendation: { filters } };
+          }
+        }
+        break; // only the last assistant message
+      }
+
+      setError(null);
+      setMessages(mapped);
+      setSessionId(id);
+      setIsOpen(true);
+    } catch {}
+  }
+
+  async function deleteSession(id) {
+    try {
+      await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {}
+  }
+
   function dismissRecommendation(messageIndex) {
     setMessages(prev => {
       const next = [...prev];
@@ -269,6 +331,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     sessionId, focusSymbols, setFocusSymbols,
     sendMessage, askAboutStock, clearChat,
     dismissRecommendation,
+    listSessions, loadSession, deleteSession,
     stockCount: filteredStocks?.length || 0,
   };
 }
@@ -436,6 +499,24 @@ function mapNestedToFlat(nestedKey, direction) {
   return map[k] || null;
 }
 
+/**
+ * Guards against unit mistakes Ori sometimes makes. The screener expects market
+ * cap in billions (2 = $2B) and volume in millions, but the model occasionally
+ * emits raw dollar/share counts (e.g. mcapMin: 2000000000). Any market-cap or
+ * volume value at or above 1e6 is far outside the sane billions/millions range,
+ * so we rescale it. Mutates `f` in place.
+ */
+function sanitizeFilterUnits(f) {
+  if (!f || typeof f !== 'object') return f;
+  for (const key of ['mcapMin', 'mcapMax']) {
+    const n = Number(f[key]);
+    if (Number.isFinite(n) && Math.abs(n) >= 1e6) f[key] = n / 1e9; // dollars → billions
+  }
+  const v = Number(f.volMin);
+  if (Number.isFinite(v) && Math.abs(v) >= 1e6) f.volMin = v / 1e6; // shares → millions
+  return f;
+}
+
 function tryParseUpdates(jsonStr) {
   try {
     const parsed = tolerantJsonParse(jsonStr);
@@ -458,6 +539,8 @@ function tryParseUpdates(jsonStr) {
       // Then merge in any nested style Ori actually used
       const normalized = normalizeFilterObject(rawFilters);
       cleanFilters = { ...cleanFilters, ...normalized };
+
+      sanitizeFilterUnits(cleanFilters);
 
       if (Object.keys(cleanFilters).length > 0) updates.filters = cleanFilters;
     }

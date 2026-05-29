@@ -14,6 +14,7 @@ import LoginPage from "./pages/LoginPage.jsx";
 import UsersModal from "./components/UsersModal.jsx";
 import StockDetailModal from "./components/StockDetailModal.jsx";
 import Footer from "./components/Footer.jsx";
+import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -85,15 +86,44 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   const [theme, setTheme] = useState(
     () => localStorage.getItem(themeKey) || localStorage.getItem("theme") || "dark",
   );
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () =>
-      localStorage.getItem(sidebarKey) === "1" ||
-      (localStorage.getItem(sidebarKey) == null &&
-        localStorage.getItem("sidebarCollapsed") === "1"),
-  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    const explicit = localStorage.getItem(sidebarKey);
+    if (explicit != null) return explicit === "1";
+    const legacy = localStorage.getItem("sidebarCollapsed");
+    if (legacy != null) return legacy === "1";
+    // No saved preference yet → collapse by default on tablet/narrow screens
+    // so the filter panel doesn't steal width from the table.
+    return typeof window !== "undefined" && window.innerWidth < 1024;
+  });
+
+  // True once theme/sidebar have been reconciled with the server, so the
+  // initial local values can't clobber server-side prefs before hydration.
+  const settingsHydrated = useRef(false);
+
+  // Hydrate theme + sidebar from the server (follows the account across
+  // devices). If absent server-side, migrate the current local values up once.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const server = await fetchUserSettings();
+      if (cancelled) return;
+      const patch = {};
+      if (typeof server.theme === "string") setTheme(server.theme);
+      else patch.theme = theme;
+      if (typeof server.sidebarCollapsed === "boolean") setSidebarCollapsed(server.sidebarCollapsed);
+      else patch.sidebarCollapsed = sidebarCollapsed;
+      if (Object.keys(patch).length) patchUserSettings(patch);
+      settingsHydrated.current = true;
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(sidebarKey, sidebarCollapsed ? "1" : "0");
+    if (settingsHydrated.current) patchUserSettings({ sidebarCollapsed });
   }, [sidebarCollapsed, sidebarKey]);
 
   // Expose for easy debugging in console (as requested)
@@ -108,6 +138,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   useEffect(() => {
     document.documentElement.classList.toggle("light", theme === "light");
     localStorage.setItem(themeKey, theme);
+    if (settingsHydrated.current) patchUserSettings({ theme });
   }, [theme]);
   const {
     stocks,
@@ -369,8 +400,9 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       {/* Floating Ori button — slides left to clear the detail pane (w-96)
           when it's open and chat isn't (chat would already sit on top of it). */}
       <div
-        className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out ${!chat.isOpen ? 'animate-ori-bounce' : ''}`}
-        style={{ right: detailStock && !chat.isOpen ? 'calc(24rem + 1.5rem)' : '1.5rem' }}
+        className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
+          ${detailStock && !chat.isOpen ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
+          ${!chat.isOpen ? 'animate-ori-bounce' : ''}`}
       >
         <button
           onClick={() => chat.setIsOpen(!chat.isOpen)}

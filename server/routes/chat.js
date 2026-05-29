@@ -144,6 +144,12 @@ If the user wants more emphasis on Quality, Growth, or Value while narrowing res
 
 Use the precise flat filter keys the system understands (roicMin, deMax, opMin, grossMin, mcapMin, peMax, ndMax, sectors, industries, rule40Only, etc.). Do **not** use nested objects.
 
+UNITS (critical — get these right):
+- \`mcapMin\` / \`mcapMax\` are in **billions of USD**. For a $2 billion floor, output \`"mcapMin": 2\` — NOT \`2000000000\`. For a $50B ceiling, \`"mcapMax": 50\`.
+- \`volMin\` is in **millions** of shares (e.g. \`"volMin": 1\` = 1,000,000).
+- Percentage filters (roicMin, grossMin, opMin, fcfMin, divMin, growth mins, etc.) are whole-number percents (e.g. \`"roicMin": 15\` = 15%).
+- Ratio/multiple filters (peMax, pbMax, evEbMax, deMax, ndMax, crMin, beta) are plain numbers (e.g. \`"peMax": 20\`).
+
 Output recommendations at the very end of your response in this exact shape:
 
 \`\`\`json
@@ -158,6 +164,11 @@ Output recommendations at the very end of your response in this exact shape:
 \`\`\`
 
 Then explicitly ask the user if they want to apply the filters.
+
+IMPORTANT reliability rules for this block:
+- Whenever the user asks to narrow, refine, tighten, filter, or change the set of stocks in view, you **must** end your response with the \`recommendFilters\` JSON block. Don't describe filters only in prose — always emit the block so the Apply / Don't-apply buttons appear.
+- Keep the surrounding analysis **concise** when you are recommending filters, so the JSON block is reliably included and never cut off.
+- The JSON block must be the **last thing** in your response.
 **Never** recommend weight changes. **Never** emit this block unprompted on pure analysis questions.
 **Never apply changes yourself.** Always show the recommendation and ask for confirmation.
 `;
@@ -229,6 +240,82 @@ function summarizeFilters(f) {
   return parts.length ? parts.join(", ") : "default (mcap >= $2B)";
 }
 
+// ── Gemini call with retry/backoff ─────────────────────────────────────────
+// Gemini Flash regularly returns 429 (rate limit) / 503 (overloaded) under
+// load. Rather than surfacing the raw API error, retry a few times with
+// exponential backoff + jitter and only give up (with a friendly message)
+// after several attempts. Retries happen before we stream any text to the
+// client, so the user never sees a partial answer get clobbered.
+const GEMINI_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse";
+const MAX_GEMINI_RETRIES = 3;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function backoffDelay(attempt) {
+  // 500ms, 1s, 2s (+ up to 250ms jitter)
+  return 500 * 2 ** attempt + Math.random() * 250;
+}
+
+function isOverloaded(status, bodyText) {
+  if (status === 429 || status === 503) return true;
+  if (status >= 500 && /unavailable|overloaded|try again/i.test(bodyText || ""))
+    return true;
+  return false;
+}
+
+// Resolves to { res } on success, or { friendly, status, body } when the call
+// ultimately failed (friendly=true means it was an overload we should phrase nicely).
+async function fetchGeminiWithRetry({ apiKey, body, send }) {
+  let lastStatus = 0;
+  let lastBody = "";
+
+  for (let attempt = 0; attempt <= MAX_GEMINI_RETRIES; attempt++) {
+    let res;
+    try {
+      res = await fetch(GEMINI_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+        body: JSON.stringify(body),
+      });
+    } catch (e) {
+      // Network-level failure — treat as retryable.
+      lastStatus = 0;
+      lastBody = e?.message || String(e);
+      if (attempt < MAX_GEMINI_RETRIES) {
+        send("status", { message: "Ori is busy — retrying…" });
+        await sleep(backoffDelay(attempt));
+        continue;
+      }
+      return { friendly: true, status: 0, body: lastBody };
+    }
+
+    if (res.ok) return { res };
+
+    lastBody = await res.text();
+    lastStatus = res.status;
+
+    if (isOverloaded(res.status, lastBody) && attempt < MAX_GEMINI_RETRIES) {
+      send("status", { message: "Ori is busy — retrying…" });
+      await sleep(backoffDelay(attempt));
+      continue;
+    }
+
+    // Non-retryable error, or out of retries.
+    return {
+      friendly: isOverloaded(lastStatus, lastBody),
+      status: lastStatus,
+      body: lastBody,
+    };
+  }
+
+  return {
+    friendly: isOverloaded(lastStatus, lastBody),
+    status: lastStatus,
+    body: lastBody,
+  };
+}
+
 // ── POST /api/chat ─────────────────────────────────────────────────────────
 router.post("/chat", async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -261,26 +348,22 @@ router.post("/chat", async (req, res) => {
       parts: [{ text: m.content }],
     }));
 
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-goog-api-key": apiKey,
-        },
-        body: JSON.stringify({
+    const { res: geminiRes, friendly, status, body: errBody } =
+      await fetchGeminiWithRetry({
+        apiKey,
+        body: {
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: geminiContents,
-          generationConfig: { maxOutputTokens: 4096 }
-        }),
-      },
-    );
+          generationConfig: { maxOutputTokens: 8192 },
+        },
+        send,
+      });
 
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text();
+    if (!geminiRes) {
       send("error", {
-        message: `Gemini API error ${geminiRes.status}: ${errText}`,
+        message: friendly
+          ? "Ori is experiencing high demand right now. Please try again in a moment."
+          : `Gemini API error ${status || ""}: ${errBody || "request failed"}`.trim(),
       });
       res.end();
       return;

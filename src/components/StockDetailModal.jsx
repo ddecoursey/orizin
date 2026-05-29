@@ -90,11 +90,15 @@ function PriceChart({ points, rsi }) {
     Math.round((k / (vCount - 1)) * (n - 1)),
   );
 
-  const onMove = (e) => {
+  const moveToClientX = (clientX) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     if (!rect || rect.width === 0) return;
-    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     setHover(Math.round(ratio * (n - 1)));
+  };
+  const onMove = (e) => moveToClientX(e.clientX);
+  const onTouch = (e) => {
+    if (e.touches?.[0]) moveToClientX(e.touches[0].clientX);
   };
 
   const hp = hover != null ? points[hover] : null;
@@ -118,9 +122,12 @@ function PriceChart({ points, rsi }) {
       <div
         ref={wrapRef}
         className="relative select-none"
-        style={{ height: H }}
+        style={{ height: H, touchAction: "pan-y" }}
         onMouseMove={onMove}
         onMouseLeave={() => setHover(null)}
+        onTouchStart={onTouch}
+        onTouchMove={onTouch}
+        onTouchEnd={() => setHover(null)}
       >
         {w > 0 && (
           <svg width={w} height={H} className="block">
@@ -427,7 +434,14 @@ export default function StockDetailModal({
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   return (
-    <aside className="w-96 shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden">
+    <>
+      {/* Backdrop on tablet/phone where the pane floats over the table */}
+      <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={onClose} />
+      <aside
+        className="fixed inset-y-0 right-0 z-40 w-full max-w-md shadow-2xl
+          lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none
+          shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden"
+      >
         {/* Header */}
         <div className="bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-start justify-between gap-3 shrink-0">
           <div className="flex items-center gap-3">
@@ -602,7 +616,8 @@ export default function StockDetailModal({
             </div>
           </div>
         </div>
-    </aside>
+      </aside>
+    </>
   );
 }
 

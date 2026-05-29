@@ -10,6 +10,7 @@ import bcrypt from 'bcryptjs';
 import stocksRouter from './routes/stocks.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
+import settingsRouter from './routes/settings.js';
 import * as db from './db.js';
 
 // Simple in-memory error logger for debugging
@@ -77,10 +78,10 @@ export function requireAdmin(req, res, next) {
       return next();
     }
 
-    // Legacy fallback: when using AUTH_PASSWORD (no DB users), treat the
-    // authenticated user as admin (consistent with how login works).
-    if (!hasDbUsers && req.userId && AUTH_PASSWORD) {
-      // In legacy mode the only valid user is AUTH_USER (defaults to 'admin')
+    // Legacy fallback: when using AUTH_PASSWORD and no DB users yet,
+    // treat the authenticated user as admin.
+    const hasUsersNow = (db.userCount?.() ?? 0) > 0;
+    if (!hasUsersNow && req.userId && AUTH_PASSWORD) {
       return next();
     }
   } catch (e) {
@@ -97,8 +98,9 @@ export function requireAdmin(req, res, next) {
 //
 // Fallback (legacy): AUTH_USER + AUTH_PASSWORD (single user, plaintext).
 //
-// For Railway: Set AUTH_USERS_JSON once for initial users. After that,
-// manage users via the app (future) or by re-setting the env var on bootstrap.
+// For Railway / first deploy: You can optionally set AUTH_USERS_JSON to bootstrap
+// the first users. After the first user exists, user management is fully dynamic
+// via the in-app User Management modal (no more env var changes or redeploys needed).
 const AUTH_USER = process.env.AUTH_USER || 'admin';
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
 
@@ -150,7 +152,9 @@ function promoteDesignatedAdmins() {
 bootstrapUsersFromEnv();
 promoteDesignatedAdmins();
 
-const hasDbUsers = db.userCount() > 0;
+// Note: We intentionally compute "has users" dynamically in most places now
+// so that the first-admin setup flow works without requiring a server restart.
+const hasDbUsersAtStartup = db.userCount() > 0;
 
 // Derive a stable signing key. 
 // Strongly recommended: Set AUTH_SECRET in your environment (especially on Railway)
@@ -160,7 +164,19 @@ const AUTH_SECRET = process.env.AUTH_SECRET
        .update(`orizen-session-v1:stable-dev-secret`)   // stable default for local dev
        .digest('hex');
 
-const authEnabled = hasDbUsers || !!AUTH_PASSWORD;
+// Legacy single-user mode still supported via AUTH_PASSWORD
+const legacyAuthEnabled = !!AUTH_PASSWORD;
+
+// Dynamic helper: is auth required right now?
+function isAuthEnabled() {
+  // If we have DB users, auth is always on.
+  // Otherwise fall back to legacy AUTH_PASSWORD mode.
+  try {
+    return db.userCount() > 0 || legacyAuthEnabled;
+  } catch {
+    return legacyAuthEnabled;
+  }
+}
 const COOKIE_NAME = 'orizen_auth';
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
@@ -220,7 +236,8 @@ function buildCookie(name, value, { maxAgeMs, secure }) {
 
 // Auth endpoints — accessible without a session.
 app.post('/api/auth/login', loginLimiter, (req, res) => {
-  if (!authEnabled) return res.json({ ok: true, user: 'default', authEnabled: false });
+  const currentlyAuthEnabled = isAuthEnabled();
+  if (!currentlyAuthEnabled) return res.json({ ok: true, user: 'default', authEnabled: false });
 
   const username = String(req.body?.user || '');
   const password = String(req.body?.password || '');
@@ -237,10 +254,11 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
     console.error('[auth] Error verifying user from DB:', e.message);
   }
 
-  // Legacy fallback (plaintext from env) if no DB users matched
-  if (!match && !hasDbUsers && AUTH_PASSWORD) {
+  // Legacy fallback (plaintext from env) if no DB users exist yet
+  const hasUsersNow = (db.userCount?.() ?? 0) > 0;
+  if (!match && !hasUsersNow && AUTH_PASSWORD) {
     if (safeEqual(username, AUTH_USER) && safeEqual(password, AUTH_PASSWORD)) {
-      match = { user: AUTH_USER, isAdmin: true }; // legacy admin is treated as admin
+      match = { user: AUTH_USER, isAdmin: true };
     }
   }
 
@@ -269,7 +287,8 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => {
-  if (!authEnabled) return res.json({ user: 'default', authenticated: true, authEnabled: false });
+  const currentlyAuthEnabled = isAuthEnabled();
+  if (!currentlyAuthEnabled) return res.json({ user: 'default', authenticated: true, authEnabled: false });
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ authenticated: false, authEnabled: true });
@@ -292,11 +311,62 @@ app.get('/api/auth/me', (req, res) => {
   res.json({ user: payload.user, isAdmin, authenticated: true, authEnabled: true });
 });
 
+// Public status endpoint — used by the login page to decide whether to show
+// "Create First Admin" setup flow or normal login.
+app.get('/api/auth/status', (req, res) => {
+  const userCount = db.userCount ? db.userCount() : 0;
+  res.json({
+    needsSetup: userCount === 0,
+    authEnabled: isAuthEnabled(),
+    hasUsers: userCount > 0,
+  });
+});
+
+// One-time setup endpoint: create the very first admin user when the database is empty.
+// This is unauthenticated and only works if there are currently zero users.
+app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
+  const userCount = db.userCount ? db.userCount() : 0;
+  if (userCount > 0) {
+    return res.status(400).json({ error: 'Setup is only allowed when there are no users yet' });
+  }
+
+  const username = String(req.body?.user || '').trim();
+  const password = String(req.body?.password || '');
+
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password are required' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  }
+
+  const result = db.createUser(username, password, true); // first user is always admin
+
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to create user' });
+  }
+
+  // Automatically log the new admin in
+  const tokenPayload = {
+    user: username,
+    isAdmin: true,
+    exp: Date.now() + SESSION_MAX_AGE_MS,
+  };
+  const token = signToken(tokenPayload);
+
+  res.set('Set-Cookie', buildCookie(COOKIE_NAME, token, {
+    maxAgeMs: SESSION_MAX_AGE_MS,
+    secure: req.secure,
+  }));
+
+  res.json({ ok: true, user: username, isAdmin: true, message: 'First admin account created successfully' });
+});
+
 // Gate the rest of /api/* on a valid session cookie, and attach the
 // current user's id to req so downstream routes can scope per-user data.
 app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/auth/')) return next();
-  if (!authEnabled) {
+  if (!isAuthEnabled()) {
     req.userId = 'default';
     return next();
   }
@@ -319,6 +389,7 @@ app.use('/api', (req, res, next) => {
 app.use('/api', stocksRouter);
 app.use('/api', chatRouter);
 app.use('/api', usersRouter);
+app.use('/api', settingsRouter);
 
 // Global error handler for all /api routes — ensures we never return HTML
 app.use('/api', (err, req, res, next) => {
@@ -395,7 +466,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`DB path: ${process.env.DB_PATH || './data/screener.db'}`);
   let userList = 'none';
   try {
-    if (hasDbUsers) {
+    if (hasDbUsersAtStartup) {
       const users = db.listUsers ? db.listUsers() : [];
       userList = users.map(u => u.username).join(', ') || 'none';
     } else if (AUTH_PASSWORD) {
@@ -405,7 +476,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
   console.log(
     `Auth: ${
-      authEnabled
+      isAuthEnabled()
         ? `enabled (cookie sessions, users: ${userList})`
         : 'DISABLED — set AUTH_PASSWORD or AUTH_USERS_JSON to enable'
     }`,

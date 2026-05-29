@@ -6,6 +6,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
   const [error, setError] = useState("");
   const [newUsername, setNewUsername] = useState("");
   const [newPassword, setNewPassword] = useState("");
+  const [newIsAdmin, setNewIsAdmin] = useState(false);
   const [adding, setAdding] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [currentPw, setCurrentPw] = useState("");
@@ -40,7 +41,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: newUsername, password: newPassword }),
+        body: JSON.stringify({ username: newUsername, password: newPassword, isAdmin: newIsAdmin }),
       });
 
       const text = await res.text();
@@ -54,11 +55,30 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
       if (!res.ok) throw new Error(data.error || "Failed to add user");
       setNewUsername("");
       setNewPassword("");
+      setNewIsAdmin(false);
       await loadUsers();
     } catch (e) {
       setError(e.message);
     }
     setAdding(false);
+  }
+
+  async function toggleAdmin(username, makeAdmin) {
+    setError("");
+    try {
+      const res = await fetch(`/api/users/${encodeURIComponent(username)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isAdmin: makeAdmin }),
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = {}; }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      await loadUsers();
+    } catch (e) {
+      setError(e.message);
+    }
   }
 
   async function deleteUser(username) {
@@ -127,23 +147,32 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
                   placeholder="Username"
                   value={newUsername}
                   onChange={e => setNewUsername(e.target.value)}
-                  className="flex-1 bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"
+                  className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"
                 />
                 <input
                   type="password"
                   placeholder="Password"
                   value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
-                  className="flex-1 bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"
+                  className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"
                 />
                 <button
                   onClick={addUser}
                   disabled={adding || !newUsername || !newPassword}
-                  className="px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm"
+                  className="shrink-0 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm"
                 >
                   Add
                 </button>
               </div>
+              <label className="flex items-center gap-2 mt-2 text-xs text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newIsAdmin}
+                  onChange={e => setNewIsAdmin(e.target.checked)}
+                  className="accent-emerald-500"
+                />
+                Make this user an admin
+              </label>
             </div>
 
             {/* User list */}
@@ -160,14 +189,24 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
                         {u.is_admin && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>}
                         {u.username === currentUser && <span className="text-xs text-blue-400 ml-2">(you)</span>}
                       </div>
-                      {users.length > 1 && u.username !== currentUser && (
-                        <button
-                          onClick={() => deleteUser(u.username)}
-                          className="text-red-400 hover:text-red-300 text-xs"
-                        >
-                          Remove
-                        </button>
-                      )}
+                      <div className="flex items-center gap-3">
+                        {u.username !== currentUser && (
+                          <button
+                            onClick={() => toggleAdmin(u.username, !u.is_admin)}
+                            className="text-xs text-gray-400 hover:text-emerald-300"
+                          >
+                            {u.is_admin ? "Revoke admin" : "Make admin"}
+                          </button>
+                        )}
+                        {users.length > 1 && u.username !== currentUser && (
+                          <button
+                            onClick={() => deleteUser(u.username)}
+                            className="text-red-400 hover:text-red-300 text-xs"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

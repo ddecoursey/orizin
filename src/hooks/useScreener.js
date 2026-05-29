@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { computeRankedRows, applyWeights } from "../lib/scoring.js";
+import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
 // localStorage keys are namespaced per logged-in user so two people sharing
 // the same browser (or admins switching accounts) don't see each other's
@@ -12,6 +13,27 @@ function tabsKey(user) {
 }
 function activeKey(user) {
   return `screener_active_tab_v2:${user}`;
+}
+function weightsKey(user) {
+  return `screener_weights_v1:${user}`;
+}
+
+const DEFAULT_WEIGHTS = { q: 25, v: 25, b: 15, d: 20, g: 15 };
+
+function loadWeights(user) {
+  try {
+    const raw = localStorage.getItem(weightsKey(user));
+    if (!raw) return { ...DEFAULT_WEIGHTS };
+    const w = JSON.parse(raw);
+    return w && typeof w === "object" ? { ...DEFAULT_WEIGHTS, ...w } : { ...DEFAULT_WEIGHTS };
+  } catch {
+    return { ...DEFAULT_WEIGHTS };
+  }
+}
+function saveWeights(user, weights) {
+  try {
+    localStorage.setItem(weightsKey(user), JSON.stringify(weights));
+  } catch {}
 }
 
 // One-time migration: copy pre-multiuser keys to the current user's
@@ -220,7 +242,7 @@ export function useScreener(currentUser) {
   const [status, setStatus] = useState({ type: "loading", msg: "Connecting…" });
   const [lastFetch, setLastFetch] = useState(null);
   const [filters, setFiltersRaw] = useState({ ...DEFAULT_FILTERS });
-  const [weights, setWeights] = useState({ q: 25, v: 25, b: 15, d: 20, g: 15 });
+  const [weights, setWeightsRaw] = useState(() => loadWeights(user));
   const [tabs, setTabsState] = useState(() => loadTabs(user));
   const [activeTab, setActiveTabState] = useState(
     () => localStorage.getItem(activeKey(user)) || "default",
@@ -234,6 +256,22 @@ export function useScreener(currentUser) {
     : new Set();
 
   const [pins, setPins] = useState(initialPins);
+  // True once we've reconciled local state with the server copy. Until then we
+  // don't push writes up, so the initial local/default values can't clobber
+  // settings that exist server-side before hydration finishes.
+  const hydratedRef = useRef(false);
+
+  // Weights setter that mirrors to localStorage (instant on reload) and, once
+  // hydrated, syncs to the server so the user's lens follows their account.
+  function setWeights(updater) {
+    setWeightsRaw((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      saveWeights(user, next);
+      if (hydratedRef.current) patchUserSettings({ weights: next });
+      return next;
+    });
+  }
+
   const [loadProgress, setLoadProg] = useState(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
   const [hasEnrichedOnce, setHasEnrichedOnce] = useState(false);
@@ -391,6 +429,53 @@ export function useScreener(currentUser) {
     loadStocks();
   }, []);
 
+  // Hydrate screens/weights from the server so they follow the account across
+  // devices. If the server has nothing yet (fresh account / first upgrade),
+  // migrate the current local state up once. localStorage stays as the offline
+  // mirror and instant-load source.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const server = await fetchUserSettings();
+      if (cancelled) return;
+
+      const hasServerState =
+        server && (Array.isArray(server.tabs) || server.weights || server.activeTab);
+
+      if (hasServerState) {
+        let nextTabs = tabs;
+        if (Array.isArray(server.tabs) && server.tabs.length) {
+          nextTabs = server.tabs;
+          setTabsState(nextTabs);
+          saveTabs(user, nextTabs);
+        }
+        let nextActive = activeTab;
+        if (server.activeTab) {
+          nextActive = server.activeTab;
+          setActiveTabState(nextActive);
+          localStorage.setItem(activeKey(user), nextActive);
+        }
+        if (server.weights) {
+          setWeightsRaw(server.weights);
+          saveWeights(user, server.weights);
+        }
+        // Re-derive pins from the adopted active tab (parity with mount init).
+        const at = nextTabs.find((t) => t.id === nextActive);
+        const tp = at?.state?.pins;
+        setPins(Array.isArray(tp) ? new Set(tp) : new Set());
+      } else {
+        patchUserSettings({ tabs, activeTab, weights });
+      }
+
+      hydratedRef.current = true;
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only: intentionally uses the initial local state for migrate-up.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Combined enrichment SSE loader ───────────────────────────────────────
 
   function enrichAll(symbols, force = false) {
@@ -523,6 +608,7 @@ export function useScreener(currentUser) {
             : t,
         );
         saveTabs(user, nextTabs);
+        if (hydratedRef.current) patchUserSettings({ tabs: nextTabs });
         return nextTabs;
       });
 
@@ -549,6 +635,7 @@ export function useScreener(currentUser) {
           : t,
       );
       saveTabs(user, next);
+      if (hydratedRef.current) patchUserSettings({ tabs: next });
       return next;
     });
   }
@@ -564,6 +651,7 @@ export function useScreener(currentUser) {
 
     setActiveTabState(id);
     localStorage.setItem(activeKey(user), id);
+    if (hydratedRef.current) patchUserSettings({ activeTab: id });
 
     const tabState = tab.state || {};
     const restored = {
@@ -591,6 +679,7 @@ export function useScreener(currentUser) {
     setTabsState((prev) => {
       const next = [...prev, newTab];
       saveTabs(user, next);
+      if (hydratedRef.current) patchUserSettings({ tabs: next, activeTab: id });
       return next;
     });
     setActiveTabState(id);
@@ -601,6 +690,7 @@ export function useScreener(currentUser) {
     setTabsState((prev) => {
       const next = prev.filter((t) => t.id !== id);
       saveTabs(user, next);
+      if (hydratedRef.current) patchUserSettings({ tabs: next });
       return next;
     });
     if (activeTab === id) activateTab("default");
