@@ -87,9 +87,26 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   );
   const [showUsersModal, setShowUsersModal] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
+
+  // Track whether enough time has passed to show the full error UI.
+  // This prevents a scary "Failed to load" flash on hard refresh while the
+  // hook's delay + auto-retry logic has time to work.
+  const [showFullErrorUI, setShowFullErrorUI] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowFullErrorUI(true), 1550);
+    return () => clearTimeout(timer);
+  }, []);
   const [theme, setTheme] = useState(
     () => localStorage.getItem(themeKey) || localStorage.getItem("theme") || "dark",
   );
+
+  // Toggle behavior: clicking the same stock again closes the company overview.
+  const handleSelectStock = (stock) => {
+    setDetailStock((current) =>
+      current && current.symbol === stock.symbol ? null : stock
+    );
+  };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     const explicit = localStorage.getItem(sidebarKey);
     if (explicit != null) return explicit === "1";
@@ -226,7 +243,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   const [sparklineForceVersion, setSparklineForceVersion] = useState(0);
 
   return (
-    <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
+    <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       <Header
         status={status}
         filtered={filtered}
@@ -378,36 +395,46 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
               <p className="text-xs">{status.msg}</p>
             </div>
           ) : status.type === "error" ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
-              <span className="text-3xl">⚠️</span>
-              <h3 className="text-sm font-semibold text-red-400">
-                Failed to load data
-              </h3>
-              <p className="text-xs text-gray-500 text-center max-w-sm">
-                {status.msg}
-              </p>
-              <button
-                onClick={() => loadStocks()}
-                className="px-4 py-2 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                Retry
-              </button>
-            </div>
+            // On the very first load (especially after hard refresh), be gentler.
+            // The hook already has a delay + auto-retry. Only show the full failure
+            // UI after the initial grace period.
+            !showFullErrorUI ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-gray-500">
+                <span className="text-2xl">📡</span>
+                <p className="text-xs">Connecting to data source…</p>
+              </div>
+            ) : (
+              <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
+                <span className="text-3xl">⚠️</span>
+                <h3 className="text-sm font-semibold text-red-400">
+                  Failed to load data
+                </h3>
+                <p className="text-xs text-gray-500 text-center max-w-sm">
+                  {status.msg}
+                </p>
+                <button
+                  onClick={() => loadStocks()}
+                  className="px-4 py-2 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            )
           ) : view === "table" ? (
-            <div className="flex-1 min-h-0 overflow-hidden" style={{ height: '100%' }}>
+            <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
               <StockTable
                 rows={filtered}
                 pins={pins}
                 onTogglePin={togglePin}
                 onAskAI={chat.askAboutStock}
-                onSelectStock={setDetailStock}
+                onSelectStock={handleSelectStock}
                 enrichLoading={enrichLoading}
                 sparklineForceVersion={sparklineForceVersion}
               />
             </div>
           ) : (
-            <div className="flex-1 min-h-0 overflow-auto" style={{ height: '100%' }}>
-              <ScorecardGrid rows={filtered} onSelectStock={setDetailStock} />
+            <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
+              <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} />
             </div>
           )}
         </div>

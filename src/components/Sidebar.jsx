@@ -236,7 +236,7 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
   return (
     <>
       {/* Backdrop on tablet/phone where the expanded panel floats over the content */}
-      <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={onToggleCollapsed} />
+      <div className="fixed inset-0 z-30 bg-black/50 touch-none lg:hidden" onClick={onToggleCollapsed} />
       <aside className="fixed inset-y-0 left-0 z-40 w-[88vw] max-w-sm shadow-2xl
         lg:static lg:z-auto lg:w-56 lg:max-w-none lg:shadow-none
         shrink-0 bg-gray-900 border-r border-gray-800

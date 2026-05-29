@@ -436,7 +436,7 @@ export default function StockDetailModal({
   return (
     <>
       {/* Backdrop on tablet/phone where the pane floats over the table */}
-      <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={onClose} />
+      <div className="fixed inset-0 z-30 bg-black/50 touch-none lg:hidden" onClick={onClose} />
       <aside
         className="fixed inset-y-0 right-0 z-40 w-full max-w-md shadow-2xl
           lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none
@@ -487,7 +487,7 @@ export default function StockDetailModal({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-5">
           {/* Price chart */}
           <div>
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">

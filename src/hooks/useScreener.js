@@ -318,6 +318,24 @@ export function useScreener(currentUser) {
     return controller;
   }
 
+  // Retry helper available to all data loading functions.
+  async function fetchWithRetry(url, options = {}, retries = 3, baseDelay = 220) {
+    let lastError;
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const res = await fetch(url, options);
+        return res;
+      } catch (e) {
+        lastError = e;
+        if (attempt < retries - 1) {
+          const delay = baseDelay * Math.pow(1.6, attempt) + Math.random() * 80;
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+    throw lastError;
+  }
+
   function streamRefresh(onDone, force = false) {
     const controller = startLongOperation();
 
@@ -336,7 +354,9 @@ export function useScreener(currentUser) {
     };
     opts.body = JSON.stringify(refreshBody);
 
-    fetch("/api/stocks/refresh", opts)
+    // Retry the start of the streaming refresh as well. This path is taken
+    // on the first load after a refresh when the local cache is empty.
+    fetchWithRetry("/api/stocks/refresh", opts, 2, 280)
       .then((res) => {
         const reader = res.body.getReader();
         const dec = new TextDecoder();
@@ -392,13 +412,34 @@ export function useScreener(currentUser) {
       });
   }
 
+  // Simple retry wrapper for fetch. Useful for transient network hiccups
+  // that happen during hard page refreshes.
+  async function fetchWithRetry(url, options = {}, retries = 3, baseDelay = 220) {
+    let lastError;
+    for (let attempt = 0; attempt < retries; attempt++) {
+      try {
+        const res = await fetch(url, options);
+        // We still let the caller decide what to do with !res.ok,
+        // but we at least retry on actual network failures.
+        return res;
+      } catch (e) {
+        lastError = e;
+        if (attempt < retries - 1) {
+          const delay = baseDelay * Math.pow(1.6, attempt) + Math.random() * 80;
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async function loadStocks(forceRefresh = false, silent = false) {
     const hasStocks = stocksRef.current.length > 0;
     if (!silent && !hasStocks) {
       setStatus({ type: "loading", msg: "Loading universe…" });
     }
     try {
-      const res = await fetch("/api/stocks");
+      const res = await fetchWithRetry("/api/stocks", {}, 3, 200);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
@@ -425,8 +466,32 @@ export function useScreener(currentUser) {
     }
   }
 
+  // Initial load with a small deliberate delay + automatic retry.
+  // The delay helps on hard browser refreshes where the backend (or SQLite WAL)
+  // may still be settling from the previous request. We then do one automatic
+  // retry if the first attempt left us with no data.
   useEffect(() => {
-    loadStocks();
+    let cancelled = false;
+
+    const runInitialLoad = async () => {
+      // Light delay on hard refresh before the first attempt.
+      // The real protection now comes from fetchWithRetry (multiple attempts + backoff).
+      await new Promise((r) => setTimeout(r, 160));
+
+      if (cancelled) return;
+
+      await loadStocks();
+
+      // One automatic retry if we still have zero stocks after the first attempt.
+      setTimeout(() => {
+        if (!cancelled && stocksRef.current.length === 0) {
+          loadStocks();
+        }
+      }, 650);
+    };
+
+    runInitialLoad();
+    return () => { cancelled = true; };
   }, []);
 
   // Hydrate screens/weights from the server so they follow the account across

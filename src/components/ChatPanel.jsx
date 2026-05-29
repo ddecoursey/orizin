@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import OriEmblem from "./OriEmblem.jsx";
 
 function relTime(ts) {
   if (!ts) return "";
@@ -157,11 +158,11 @@ export default function ChatPanel({ chat }) {
   return (
     <>
       {/* Backdrop on tablet/phone where the sheet floats over the content */}
-      <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => chat.setIsOpen(false)} />
-      <div
-        className="fixed inset-x-0 bottom-0 z-50 max-h-[min(65vh,520px)] rounded-t-2xl shadow-2xl border-t border-gray-700
-          lg:static lg:inset-auto lg:h-full lg:w-96 lg:rounded-none lg:shadow-none lg:border-t-0 lg:border-l lg:border-gray-800 lg:z-auto
-          shrink-0 bg-gray-900 flex flex-col overflow-hidden"
+      <div className="fixed inset-0 z-40 bg-black/50 touch-none lg:hidden" onClick={() => chat.setIsOpen(false)} />
+      <aside
+        className="fixed inset-x-0 bottom-0 z-50 max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700
+          lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none lg:rounded-none lg:border-t-0 lg:max-h-none lg:h-full
+          shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden"
       >
       {/* Grab handle — bottom-sheet dismiss affordance (mobile only) */}
       <button
@@ -242,10 +243,10 @@ export default function ChatPanel({ chat }) {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 lg:py-3 space-y-2 lg:space-y-3">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-2 lg:py-3 space-y-2 lg:space-y-3">
         {chat.messages.length === 0 && (
           <div className="text-center py-6 lg:py-10 text-gray-600">
-            <div className="text-2xl lg:text-3xl mb-2">🤖</div>
+            <OriEmblem className="w-10 h-10 mx-auto mb-2 text-violet-400/90" />
             <p className="text-xs font-medium text-gray-500 mb-1">
               Ori — Stock Analyst
             </p>
@@ -377,7 +378,7 @@ export default function ChatPanel({ chat }) {
           </button>
         </div>
       </div>
-      </div>
+      </aside>
     </>
   );
 }

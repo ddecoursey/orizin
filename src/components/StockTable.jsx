@@ -467,7 +467,7 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
   return (
     <div 
       ref={parentRef} 
-      className="overflow-auto flex-1 min-h-0"
+      className="overflow-auto flex-1 min-h-0 overscroll-contain"
       style={{ height: '100%' }}
     >
       <table className="w-full border-collapse text-xs">

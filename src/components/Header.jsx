@@ -1,4 +1,5 @@
 import { useState } from "react";
+import OrizenLogo from "./OrizenLogo.jsx";
 
 // Small dropdown: a trigger + a click-away panel. Mirrors the popover pattern
 // used elsewhere (Footer, the old gather menu). `button` renders the trigger
@@ -123,7 +124,6 @@ export default function Header({
                 ${open ? "bg-gray-800 border-gray-700 text-gray-100" : "bg-gray-900 border-gray-800 text-gray-300 hover:bg-gray-800"}`}
               title="Data actions"
             >
-              <span>⚡</span>
               <span className="hidden sm:inline">Data</span>
               {!isFullyEnriched && filtered.length > 0 && (
                 <span className="text-[10px] text-amber-400">({missing})</span>
@@ -147,7 +147,7 @@ export default function Header({
                 onClick={() => { close(); runGather(isFullyEnriched); }}
                 disabled={enrichLoading || filtered.length === 0}
               >
-                ⚡ {enrichLoading
+                ↻ {enrichLoading
                   ? "Gathering…"
                   : isFullyEnriched
                     ? "Re-gather Data"
@@ -160,7 +160,7 @@ export default function Header({
                 onClick={() => { close(); runGather(true); }}
                 disabled={enrichLoading || filtered.length === 0}
               >
-                ⚡ Force re-gather all ({filtered.length})
+                ↻ Force re-gather all ({filtered.length})
                 <span className="block text-[10px] text-gray-500 mt-0.5">
                   Re-fetches every visible stock, even ETFs/indexes.
                 </span>
@@ -234,23 +234,3 @@ export default function Header({
   );
 }
 
-// Clean modern Orizen space logo (constellation-inspired)
-function OrizenLogo({ className = "" }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-      {/* Subtle nebula glow */}
-      <circle cx="12" cy="12" r="9.5" className="text-blue-500/10" fill="currentColor" stroke="none" />
-      {/* Orion belt stars + lines */}
-      <circle cx="8" cy="9" r="1.1" fill="currentColor" stroke="none" className="text-white" />
-      <circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none" className="text-white" />
-      <circle cx="16" cy="15" r="1.1" fill="currentColor" stroke="none" className="text-white" />
-      <line x1="8.7" y1="9.7" x2="11.3" y2="11.4" stroke="rgba(255,255,255,0.7)" />
-      <line x1="12.7" y1="12.6" x2="15.3" y2="14.4" stroke="rgba(255,255,255,0.7)" />
-      {/* Subtle cross stars (Orion) */}
-      <circle cx="6.5" cy="6" r="0.7" fill="currentColor" className="text-white/70" stroke="none" />
-      <circle cx="17.5" cy="18" r="0.7" fill="currentColor" className="text-white/70" stroke="none" />
-      <line x1="6.5" y1="6" x2="7.8" y2="8.2" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
-      <line x1="17.5" y1="18" x2="16.2" y2="15.8" stroke="rgba(255,255,255,0.35)" strokeWidth="1" />
-    </svg>
-  );
-}

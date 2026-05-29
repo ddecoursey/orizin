@@ -82,3 +82,17 @@
 .light .bg-amber-900\/10 { background-color: rgba(254,243,199,0.5) !important; }
 .light .text-amber-400 { color: #b45309 !important; }
 .light .hover\:text-amber-400:hover { color: #b45309 !important; }
+
+/* Mobile/tablet (< lg): lock the main app shell so it never scrolls.
+   Only the data view (table or scorecard grid) is allowed to scroll internally.
+   This prevents the whole page (header + tabs + controls + footer) from moving. */
+@media (max-width: 1023px) {
+  html, body {
+    overscroll-behavior: none;
+  }
+
+  /* Reinforce that the root app container cannot introduce scroll */
+  .h-\[100dvh\] {
+    overflow: hidden;
+  }
+}
