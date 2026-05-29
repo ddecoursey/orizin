@@ -145,10 +145,34 @@ const COLS = [
   { key: "score", label: "Score", plain: true, nosort: false },
 ];
 
-export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false }) {
+export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
   const [sortKey, setSortKey] = useState("mcap");
   const [sortDir, setSortDir] = useState(-1);
-  const [sparklines, setSparklines] = useState(new Map()); // symbol -> number[]
+  const [sparklines, setSparklines] = useState(() => {
+    // Hydrate from localStorage on initial mount so that after a refresh
+    // we don't immediately re-request everything that we already have persisted.
+    // This makes sparklines behave like the main metric data: once gathered,
+    // refresh/scroll is instant with no network activity for previously seen symbols.
+    const initial = new Map();
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('sparkline_v1:')) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            // key format: sparkline_v1:SYMBOL:45
+            const parts = key.split(':');
+            const sym = parts[1];
+            if (sym && Array.isArray(parsed?.prices) && parsed.prices.length > 0) {
+              initial.set(sym, parsed.prices);
+            }
+          }
+        }
+      }
+    } catch {}
+    return initial;
+  }); // symbol -> number[]
 
   // Memoize expensive computations
   const heat = useMemo(() => buildHeat(rows), [rows]);
@@ -165,37 +189,109 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
 
   const processSparklineQueue = () => {
     while (activeSparklineFetches.current < MAX_SPARKLINE_CONCURRENCY && sparklineQueue.current.length > 0) {
-      const symbol = sparklineQueue.current.shift();
-      if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) {
-        // Skip if already fetched or in flight
+      const item = sparklineQueue.current.shift(); // { symbol, force }
+      const symbol = typeof item === 'string' ? item : item.symbol;
+      const force = typeof item === 'object' ? !!item.force : false;
+
+      if (!force && (sparklines.has(symbol) || inFlightRef.current.has(symbol))) {
+        // Skip if already fetched or in flight (unless forcing)
         continue;
       }
       activeSparklineFetches.current++;
-      fetchSparklineInternal(symbol).finally(() => {
+      fetchSparklineInternal(symbol, force).finally(() => {
         activeSparklineFetches.current--;
         processSparklineQueue();
       });
     }
   };
 
-  const scheduleSparklineFetch = (symbol) => {
-    if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) return;
-    // Avoid duplicates in queue
-    if (!sparklineQueue.current.includes(symbol)) {
-      sparklineQueue.current.push(symbol);
+  const scheduleSparklineFetch = (symbol, force = false) => {
+    if (!force && (sparklines.has(symbol) || inFlightRef.current.has(symbol))) return;
+
+    if (force) {
+      // On force, clear any in-flight guard and existing data so we re-fetch
+      inFlightRef.current.delete(symbol);
+      setSparklines(prev => {
+        const next = new Map(prev);
+        next.delete(symbol);
+        return next;
+      });
+      // Also clear localStorage cache for this symbol so we don't serve stale on next normal load
+      try {
+        localStorage.removeItem(`sparkline_v1:${symbol}:45`);
+      } catch {}
+    }
+
+    const item = { symbol, force };
+
+    // Avoid duplicates in queue (unless forcing)
+    const alreadyQueued = sparklineQueue.current.some(i =>
+      (typeof i === 'string' ? i : i.symbol) === symbol
+    );
+
+    if (force || !alreadyQueued) {
+      if (force) {
+        // Put force requests at the front
+        sparklineQueue.current.unshift(item);
+      } else {
+        sparklineQueue.current.push(item);
+      }
     }
     processSparklineQueue();
   };
 
+  // Simple localStorage-backed cache for sparklines so we don't hammer the backend (and thus FMP)
+  // on every page reload or when scrolling to new symbols that were previously loaded.
+  const getSparklineFromLocal = (symbol, days) => {
+    try {
+      const key = `sparkline_v1:${symbol}:${days}`;
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      // Consider data fresh for a long time (e.g. 30 days) unless force is used
+      const maxAge = 1000 * 60 * 60 * 24 * 30;
+      if (Date.now() - parsed.savedAt < maxAge) {
+        return parsed.prices;
+      }
+    } catch {}
+    return null;
+  };
+
+  const saveSparklineToLocal = (symbol, days, prices) => {
+    try {
+      const key = `sparkline_v1:${symbol}:${days}`;
+      localStorage.setItem(key, JSON.stringify({
+        prices,
+        savedAt: Date.now(),
+      }));
+    } catch {}
+  };
+
   // The actual fetch logic (renamed from fetchSparkline)
-  const fetchSparklineInternal = async (symbol) => {
-    if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) return;
+  const fetchSparklineInternal = async (symbol, force = false) => {
+    if (!force && (sparklines.has(symbol) || inFlightRef.current.has(symbol))) return;
 
     inFlightRef.current.add(symbol);
 
     try {
-      console.log(`[Sparkline] Fetching from backend for ${symbol}`);
-      const res = await fetch(`/api/stocks/sparkline/${symbol}?days=45`);
+      // First check localStorage (unless forcing)
+      if (!force) {
+        const localPrices = getSparklineFromLocal(symbol, 45);
+        if (localPrices && localPrices.length > 0) {
+          console.log(`[Sparkline] LocalStorage hit for ${symbol}`);
+          setSparklines(prev => {
+            const next = new Map(prev);
+            next.set(symbol, localPrices);
+            return next;
+          });
+          inFlightRef.current.delete(symbol);
+          return;
+        }
+      }
+
+      const forceParam = force ? '&force=1' : '';
+      console.log(`[Sparkline] Fetching from backend for ${symbol}${force ? ' (force)' : ''}`);
+      const res = await fetch(`/api/stocks/sparkline/${symbol}?days=45${forceParam}`);
 
       console.log(`[Sparkline] Backend response status for ${symbol}:`, res.status);
 
@@ -216,6 +312,11 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
         next.set(symbol, prices);
         return next;
       });
+
+      // Persist to localStorage for fast reloads
+      if (prices.length > 0) {
+        saveSparklineToLocal(symbol, 45, prices);
+      }
     } catch (e) {
       console.error(`[Sparkline] Fetch failed for ${symbol}:`, e);
     } finally {
@@ -273,12 +374,30 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
 
     console.log('[Sparkline] Visible symbols:', visibleSymbols);
     visibleSymbols.forEach(symbol => {
-      if (!sparklines.has(symbol) && !inFlightRef.current.has(symbol)) {
-        console.log('[Sparkline] Fetching for:', symbol);
-        scheduleSparklineFetch(symbol);
+      // Skip if we already have it (either from this session or hydrated from localStorage on refresh)
+      if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) {
+        return;
       }
+      console.log('[Sparkline] Fetching for:', symbol);
+      scheduleSparklineFetch(symbol);
     });
   }, [rowVirtualizer, sorted, sparklines, sparklinesEnabled, enrichLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When the parent triggers a Force Re-gather, also force-refresh
+  // sparklines for whatever is currently visible.
+  useEffect(() => {
+    if (sparklineForceVersion === 0) return;
+
+    const visibleItems = rowVirtualizer.getVirtualItems();
+    const visibleSymbols = visibleItems
+      .map(vi => sorted[vi.index]?.symbol)
+      .filter(Boolean);
+
+    console.log('[Sparkline] Force refresh due to global re-gather:', visibleSymbols);
+    visibleSymbols.forEach(symbol => {
+      scheduleSparklineFetch(symbol, true); // force = true
+    });
+  }, [sparklineForceVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSort(key) {
     const col = COLS.find((c) => c.key === key);

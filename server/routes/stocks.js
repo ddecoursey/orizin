@@ -430,6 +430,21 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
 
             if (cancelled) return;
 
+            // Sparkline data is gathered as part of the same enrichment pass
+            // so it behaves exactly like the main metrics (populated by Gather/Force,
+            // served from DB on refresh, only re-fetched on explicit force).
+            const needSpark = force || !getSparkline(symbol, 45);
+            if (needSpark) {
+              try {
+                const spark = await fetchHistoricalPricesLight(symbol, 45);
+                if (spark && spark.length > 0) {
+                  saveSparkline(symbol, 45, spark);
+                }
+              } catch (e) {
+                console.warn(`[Enrich] Sparkline fetch failed for ${symbol}:`, e.message);
+              }
+            }
+
             // Growth phase removed from main hot path (Option D - separate lighter phase)
             // Growth can be run later in a low-concurrency background pass if needed.
           } catch (err) {
@@ -653,21 +668,28 @@ router.get("/stocks/:symbol", (req, res) => {
 router.get("/stocks/sparkline/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const days = parseInt(req.query.days) || 45;
+  const force = req.query.force === '1' || req.query.force === 'true';
 
-  console.log(`[Sparkline] Incoming request for ${symbol} (days=${days})`);
+  console.log(`[Sparkline] Incoming request for ${symbol} (days=${days}, force=${force})`);
 
   try {
-    // Check if we have reasonably fresh data in DB (24h cache)
-    const cached = getSparkline(symbol, days);
-    const ONE_DAY = 24 * 60 * 60 * 1000;
-
-    if (cached && (Date.now() - cached.updated_at) < ONE_DAY) {
-      const prices = JSON.parse(cached.data || '[]');
-      console.log(`[Sparkline] Cache hit for ${symbol} (${prices.length} points)`);
-      return res.json({ symbol, prices });
+    if (!force) {
+      // Serve from SQLite if we have any data at all for this (symbol, days).
+      // Sparklines are historical and relatively stable — we only re-fetch
+      // when the user explicitly uses the Force Re-gather button.
+      const cached = getSparkline(symbol, days);
+      if (cached) {
+        const prices = JSON.parse(cached.data || '[]');
+        console.log(`[Sparkline] Cache hit for ${symbol} (${prices.length} points)`);
+        return res.json({ symbol, prices });
+      }
     }
 
-    // Fetch from FMP (will be rate-limited at the global level)
+    // The individual endpoint is now mostly a fallback / convenience.
+    // Primary population happens inside the main /enrich flow (so sparklines
+    // behave exactly like key-metrics and ratios: gathered via the button,
+    // served from DB on refresh, only re-fetched on explicit Force).
+    console.log(`[Sparkline] ${force ? 'Force' : 'No cache'} — fetching from FMP for ${symbol} (standalone request)`);
     const prices = await fetchHistoricalPricesLight(symbol, days);
 
     if (prices && prices.length > 0) {

@@ -397,58 +397,21 @@ function Stat({ label, value, type }) {
   );
 }
 
-export default function StockDetailModal({ row, onClose }) {
-  const symbol = row?.symbol;
-  const [profile, setProfile] = useState(null);
-  const [points, setPoints] = useState(null);
-  const [rsi, setRsi] = useState([]);
-  const [ratings, setRatings] = useState(null);
-  const [grades, setGrades] = useState([]);
-  // Per-section loading so each part renders the moment its own data arrives,
-  // instead of the whole pane waiting on the slowest request.
-  const [loadingProfile, setLoadingProfile] = useState(true);
-  const [loadingChart, setLoadingChart] = useState(true);
-  const [loadingRatings, setLoadingRatings] = useState(true);
-  const [loadingGrades, setLoadingGrades] = useState(true);
-
-  useEffect(() => {
-    if (!symbol) return;
-    let cancelled = false;
-    const getJson = (url) =>
-      fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-
-    getJson(`/api/stocks/profile/${symbol}`).then((d) => {
-      if (cancelled) return;
-      setProfile(d?.profile || null);
-      setLoadingProfile(false);
-    });
-
-    // Chart unblocks on prices; RSI overlays whenever it lands.
-    getJson(`/api/stocks/sparkline/${symbol}?days=365`).then((d) => {
-      if (cancelled) return;
-      setPoints(d?.prices || []);
-      setLoadingChart(false);
-    });
-    getJson(`/api/stocks/rsi/${symbol}?periodLength=10`).then((d) => {
-      if (!cancelled) setRsi(d?.rsi || []);
-    });
-
-    getJson(`/api/stocks/ratings/${symbol}`).then((d) => {
-      if (cancelled) return;
-      setRatings(d?.ratings || null);
-      setLoadingRatings(false);
-    });
-
-    getJson(`/api/stocks/grades/${symbol}`).then((d) => {
-      if (cancelled) return;
-      setGrades(d?.grades || []);
-      setLoadingGrades(false);
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [symbol]);
+export default function StockDetailModal({
+  row,
+  onClose,
+  symbol: symbolProp,
+  profile = null,
+  points = null,
+  rsi = [],
+  ratings = null,
+  grades = [],
+  loadingProfile = false,
+  loadingChart = false,
+  loadingRatings = false,
+  loadingGrades = false,
+}) {
+  const symbol = symbolProp || row?.symbol;
 
   // Close on Escape
   useEffect(() => {

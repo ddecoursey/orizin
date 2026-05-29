@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import Starfield from "./components/Starfield";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
+import { useStockDetail } from "./hooks/useStockDetail.js";
 import Header from "./components/Header.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import TabsBar from "./components/TabsBar.jsx";
@@ -134,22 +135,14 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   } = useScreener(currentUser);
 
   const applyRecommendation = (rec) => {
+    // Ori no longer recommends weight changes — user controls the Q/V/G sliders directly.
     const filtersToApply = rec.filters || rec.recommendFilters || rec.applyFilters;
-    const weightsToApply = rec.weights || rec.recommendWeights;
 
     if (filtersToApply) {
       applyFiltersFromAI({ ...filters, ...filtersToApply });
     }
-    if (weightsToApply) {
-      setWeights(weightsToApply);
-    }
+    // weights from recommendations are ignored by design
   };
-
-  const chat = useChat(filtered, filters, weights, applyRecommendation);
-
-  // Expose functions for the chat panel
-  chat.applyRecommendation = applyRecommendation;
-  chat.dismissRecommendation = chat.dismissRecommendation; // already returned from hook, re-exposing for clarity
 
   // Resolve the open detail stock against the live `filtered` set so its score
   // (and pillar scores) re-compute as the Q/V/G weights change. Falls back to
@@ -158,6 +151,45 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     ? filtered.find((r) => r.symbol === detailStock.symbol) || detailStock
     : null;
 
+  // Fetch the open stock's rich detail (profile, chart, RSI, ratings, grades)
+  // once, here, so both the overview pane AND Ori's chat context share it.
+  const detail = useStockDetail(detailStock?.symbol || null);
+
+  // Derive price performance and RSI trend for the open stock from the data we
+  // already fetched for the chart — gives Ori momentum/timing context for free.
+  const activeStock = detailRow
+    ? {
+        ...detailRow,
+        profile: detail.profile,
+        ratings: detail.ratings,
+        grades: detail.grades,
+        latestRsi: detail.rsi?.length ? detail.rsi[detail.rsi.length - 1].rsi : null,
+        performance: pricePerformance(detail.points),
+        rsiTrend: rsiTrend(detail.rsi),
+      }
+    : null;
+
+  // What the user is actively working with: their pinned watchlist and the
+  // screener (tab) they're in. Pinned rows pull from the filtered set first
+  // (so they carry live scores), falling back to the full universe.
+  const activeScreenerName = tabs.find((t) => t.id === activeTab)?.name || null;
+  const pinnedStocks = [...pins]
+    .map((sym) => filtered.find((r) => r.symbol === sym) || stocks.find((r) => r.symbol === sym))
+    .filter(Boolean);
+
+  const chat = useChat(filtered, filters, weights, applyRecommendation, activeStock, {
+    activeScreener: activeScreenerName,
+    pinnedStocks,
+  });
+
+  // Expose functions for the chat panel
+  chat.applyRecommendation = applyRecommendation;
+  chat.dismissRecommendation = chat.dismissRecommendation; // already returned from hook, re-exposing for clarity
+
+  // Bump this when the user does a Force Re-gather so the table can also
+  // force-refresh its sparklines from the server (which will hit FMP).
+  const [sparklineForceVersion, setSparklineForceVersion] = useState(0);
+
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       <Header
@@ -165,7 +197,12 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         filtered={filtered}
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
-        onGatherData={(force) => enrichAll(!!force)}
+        onGatherData={(force) => {
+          if (force) {
+            setSparklineForceVersion(v => v + 1);
+          }
+          enrichAll(!!force);
+        }}
         enrichLoading={enrichLoading}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -297,6 +334,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                 onAskAI={chat.askAboutStock}
                 onSelectStock={setDetailStock}
                 enrichLoading={enrichLoading}
+                sparklineForceVersion={sparklineForceVersion}
               />
             </div>
           ) : (
@@ -308,9 +346,18 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
 
         {detailRow && (
           <StockDetailModal
-            key={detailRow.symbol}
             row={detailRow}
+            symbol={detailStock?.symbol}
             onClose={() => setDetailStock(null)}
+            profile={detail.profile}
+            points={detail.points}
+            rsi={detail.rsi}
+            ratings={detail.ratings}
+            grades={detail.grades}
+            loadingProfile={detail.loadingProfile}
+            loadingChart={detail.loadingChart}
+            loadingRatings={detail.loadingRatings}
+            loadingGrades={detail.loadingGrades}
           />
         )}
 
@@ -355,6 +402,36 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       )}
     </div>
   );
+}
+
+// Price % change over ~N trading days back from the latest close, plus the
+// full-window (1y) change. points: [{ date, price }] oldest→newest.
+function pricePerformance(points) {
+  if (!points || points.length < 2) return null;
+  const last = points[points.length - 1].price;
+  const at = (n) => {
+    const base = points[Math.max(0, points.length - 1 - n)].price;
+    return base ? (last - base) / base : null;
+  };
+  return {
+    m1: at(21),
+    m3: at(63),
+    m6: at(126),
+    y1: at(points.length - 1),
+  };
+}
+
+// Latest RSI plus its direction over the last ~5 sessions. rsi: [{ date, rsi }].
+function rsiTrend(rsi) {
+  if (!rsi || rsi.length < 2) return null;
+  const latest = rsi[rsi.length - 1].rsi;
+  const prev = rsi[Math.max(0, rsi.length - 6)].rsi;
+  const change5d = latest - prev;
+  return {
+    latest,
+    change5d,
+    direction: change5d > 1 ? "rising" : change5d < -1 ? "falling" : "flat",
+  };
 }
 
 /**

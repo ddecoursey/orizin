@@ -14,60 +14,28 @@ const router = Router();
 // Note: We are using JSON output in the response text instead of native tool calling
 // for better reliability with Gemini.
 
-const MODE_INSTRUCTIONS = {
-  compounding_moat: `ANALYSIS MODE: Compounding Moat
-Identify durable competitive advantages. Prioritize:
-- High ROIC (>15% sustained) indicating capital-efficient compounding
-- Stable/growing gross margins (>40%) signaling pricing power
-- Strong and growing FCF generation
-- Low debt relative to earnings (ND/EBITDA < 2)
-Look for businesses with network effects, switching costs, brand power, or scale economies.
-Rank the top 3-5 candidates and explain the moat source for each.`,
+function buildSystemPrompt(context) {
+  const {
+    filters, weights, stocks, focusSymbols, availableSectors, availableIndustries,
+    activeStock, today, totalFiltered, activeScreener, pinnedStocks,
+  } = context || {};
 
-  emerging_disruptor: `ANALYSIS MODE: Emerging Disruptor
-Identify high-growth companies disrupting traditional industries. Prioritize:
-- Revenue growth trajectory and acceleration
-- Expanding margins (even if currently low)
-- Large total addressable market (TAM)
-- Technology or platform advantages
-Accept higher valuations if the growth trajectory justifies them.
-Flag which legacy industries each disruptor threatens.`,
-
-  moonshot: `ANALYSIS MODE: Moonshot / High-Risk High-Reward
-Identify asymmetric risk/reward opportunities:
-- Undervalued turnaround stories with catalysts
-- Early-stage growth with massive TAM but unproven profitability
-- Companies with optionality (new products, markets, or pivots)
-- Heavily discounted stocks where the market may be wrong
-Be explicit about the specific risks and what could go wrong. Estimate rough upside/downside scenarios.`,
-
-  valuation_check: `ANALYSIS MODE: Valuation Analysis
-Perform rigorous valuation analysis on the filtered stocks:
-- Compare PE, PB, PS, EV/EBITDA, EV/GP, FCF yield against sector medians
-- Identify stocks that appear significantly over- or under-valued relative to quality
-- Flag valuation anomalies (e.g., high quality + low valuation = potential opportunity)
-- Consider whether current multiples are justified by growth or quality differentials
-Present a clear table of the most over- and under-valued stocks with reasoning.`,
-
-  hold_duration: `ANALYSIS MODE: Hold Duration Analysis
-Analyze stocks through the lens of investment time horizon:
-SHORT-TERM (1-6 months): Focus on momentum, upcoming earnings catalysts, technical support levels, and near-term sentiment drivers.
-MEDIUM-TERM (1-3 years): Focus on earnings growth trajectory, margin expansion potential, and business cycle positioning.
-LONG-TERM (3-5+ years): Focus on competitive moat durability, secular tailwinds, reinvestment runway, and management quality.
-Categorize each recommended stock by its optimal holding period and explain why.`,
-
-  general: "",
-};
-
-function buildSystemPrompt(mode, context) {
-  const { filters, weights, stocks, focusSymbols, availableSectors, availableIndustries } = context || {};
+  const shown = stocks?.length || 0;
+  const total = totalFiltered ?? shown;
+  const viewLine =
+    total > shown
+      ? `${total} (showing the top ${shown} by Orizen Score below)`
+      : `${shown}`;
 
   let prompt = `You are Ori, a senior equity research analyst with deep expertise in fundamental analysis. You have access to the user's Orizen filtered stock universe.
+
+Today's date: ${today || "unknown"}.
 
 IMPORTANT: Always provide a disclaimer that this is analysis for informational purposes, not financial advice.
 
 SCREENER CONTEXT:
-- Stocks in view: ${stocks?.length || 0}
+- Stocks in view: ${viewLine}
+- Active screener: ${activeScreener || "All Stocks"}
 - Current filters: ${summarizeFilters(filters)}
 - Current scorecard weights: Q=${weights?.q ?? 35} (Quality), V=${weights?.v ?? 35} (Value), G=${weights?.g ?? 30} (Growth). These determine how the final Orizen Score is calculated.
 
@@ -91,8 +59,17 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
       prompt += `\n(Showing top 50 of ${stocks.length} by composite score)\n`;
   }
 
-  const modeInstr = MODE_INSTRUCTIONS[mode] || MODE_INSTRUCTIONS.general;
-  if (modeInstr) prompt += "\n" + modeInstr + "\n";
+  if (pinnedStocks?.length) {
+    prompt += `\n📌 PINNED (the user's watchlist in this screener — they've flagged these as ones they care about):\n`;
+    for (const s of pinnedStocks.slice(0, 30)) {
+      prompt += `- ${s.symbol} (${s.name || ""}) — ${(s.sector || "").slice(0, 16)} · ${fmt(s.mcap, "money")} · P/E ${fmt(s.pe, "x")} · EV/EBITDA ${fmt(s.ev_ebitda, "x")} · ROIC ${fmt(s.roic, "pct")} · Score ${s.score != null ? Math.round(s.score * 100) : "—"}\n`;
+    }
+    if (pinnedStocks.length > 30) prompt += `(…and ${pinnedStocks.length - 30} more pinned)\n`;
+  }
+
+  if (activeStock) {
+    prompt += "\n" + buildActiveStockSection(activeStock) + "\n";
+  }
 
   prompt += `
 RESPONSE GUIDELINES:
@@ -127,28 +104,113 @@ Critical mechanics Ori must understand:
 - Final score = weighted average. If a stock has no data for a pillar, that weight is dropped and redistributed (this is why "Effective Weights" on cards can differ from the sliders).
 
 Current slider values are provided in the context as Q / V / G.
+`;
 
-=== SCREENER RECOMMENDATIONS ===
-You have two tools: filters and weights. Use both.
+const q = weights?.q ?? 35;
+const v = weights?.v ?? 35;
+const g = weights?.g ?? 30;
+prompt += `
+=== USER PREFERENCE LENS (ADAPT TO CURRENT Q/V/G WEIGHTS) ===
 
-When the user expresses a preference (e.g. "DCA friendly", "emerging disruptor", "high quality", "focus on value"), you should usually recommend changes to the weights in addition to filters.
+The user has deliberately set their Orizen Score weights to:
+Q = ${q}%, V = ${v}%, G = ${g}%
 
-Current weights are shown above. When relevant, output this at the very end of your response:
+This is their current explicit preference and "lens" for looking at stocks. You must adapt your tone, what you emphasize, and how critical or enthusiastic you are based on these weights:
+
+- **High G relative to V** (especially G ≥ 55 and V ≤ 25): The user is hunting growth, disruption, and asymmetric upside. They are willing to pay higher multiples for strong revenue/EPS/FCF acceleration, large TAM, platform advantages, or optionality. Be more constructive on high-growth names even if they look expensive on traditional value metrics. Highlight momentum, scalability, and future optionality. Downplay current margins or "cheapness" unless the growth is faltering.
+
+- **High Q** (Q ≥ 50): The user wants durable compounders. Emphasize sustained ROIC, high and stable or expanding margins (especially gross and FCF), pricing power, clean balance sheets, and long reinvestment runway. Be more skeptical of growth stories that come at the expense of capital efficiency or balance sheet risk. Moat durability and quality of earnings matter more than near-term growth rates.
+
+- **High V** (V ≥ 50): The user is value- and margin-of-safety focused. Stress cheapness on EV/EBITDA, EV/GP, P/E, FCF yield, and DCF vs current price. Point out cases where the market is overly pessimistic relative to the fundamentals. Be cautious about "growth at any price" narratives.
+
+- **Relatively balanced** (weights within ~15 points of each other): Provide a balanced, well-rounded view while still noting where the mild tilt points.
+
+When discussing whether something is "attractive", "interesting", or "worth owning", always do so through the user's current weight distribution. If their weights are extreme (e.g. 80 G / 10 V / 10 Q), your analysis should feel like it is coming from a growth investor's perspective.
+`;
+
+prompt += `
+=== SCREENER RECOMMENDATIONS (FILTERS ONLY) ===
+
+You can **only** recommend changes to filters. You must **never** suggest changes to the Q/V/G scorecard weights.
+
+The Q/V/G weights are controlled exclusively by the user via the sliders at the top of the screen. Do not output "recommendWeights", "applyWeights", or any weight suggestions.
+
+When the user explicitly asks to narrow, refine, tighten, or adjust the set of stocks in view (e.g. "narrow this down", "show me only", "filter to", "remove the high debt ones", "more quality names", "growthier companies", "better value stocks"), you may suggest filter changes.
+
+If the user wants more emphasis on Quality, Growth, or Value while narrowing results, translate that preference into **filters**, for example:
+- More Quality → higher roicMin, higher grossMin / opMin / fcfMargMin, lower deMax or ndMax, higher crMin, etc.
+- More Growth → higher revGrowthMin, epsGrowthMin, fcfGrowthMin, or r40Min.
+- More Value → lower peMax, pbMax, evEbMax, or higher fcfMin / evGpMax, etc.
+
+Use the precise flat filter keys the system understands (roicMin, deMax, opMin, grossMin, mcapMin, peMax, ndMax, sectors, industries, rule40Only, etc.). Do **not** use nested objects.
+
+Output recommendations at the very end of your response in this exact shape:
 
 \`\`\`json
 {
-  "recommendFilters": {...},
-  "recommendWeights": { "q": 30, "v": 45, "g": 25 }
+  "recommendFilters": {
+    "roicMin": 15,
+    "deMax": 0.3,
+    "opMin": 12,
+    "sectors": ["Technology", "Healthcare"]
+  }
 }
 \`\`\`
 
-Then ask the user if they want to apply it.
-
-**Strongly prefer recommending weight changes** (via \`recommendWeights\`) when the user's language suggests they want more emphasis on quality, value, or growth — even without them saying the word "weight".
+Then explicitly ask the user if they want to apply the filters.
+**Never** recommend weight changes. **Never** emit this block unprompted on pure analysis questions.
 **Never apply changes yourself.** Always show the recommendation and ask for confirmation.
 `;
 
   return prompt;
+}
+
+// Renders the stock the user currently has open in the detail pane, with the
+// extra data (company profile, FMP ratings, analyst grades, RSI) that isn't in
+// the screener table — so Ori can speak directly to what they're looking at.
+function buildActiveStockSection(s) {
+  const rsiNote =
+    s.latestRsi == null
+      ? "n/a"
+      : `${s.latestRsi.toFixed(1)} (${s.latestRsi >= 70 ? "overbought" : s.latestRsi <= 30 ? "oversold" : "neutral"})`;
+
+  let out = `=== ⭐ CURRENTLY OPEN STOCK — ${s.symbol} (${s.name || ""}) ===
+The user has this stock open in the company-overview panel right now. Unless they clearly ask about something else, assume questions are about ${s.symbol} and prioritize it. You have richer data on it than the rest of the table:
+
+- Sector / Industry: ${s.sector || "—"} / ${s.industry || "—"}
+- Price: ${fmt(s.price, "price")} · Market cap: ${fmt(s.mcap, "money")} · Beta: ${s.beta != null ? s.beta.toFixed(2) : "—"}
+- Valuation: P/E ${fmt(s.pe, "x")}, P/B ${fmt(s.pb, "x")}, P/S ${fmt(s.ps, "x")}, EV/EBITDA ${fmt(s.ev_ebitda, "x")}, EV/GP ${fmt(s.ev_gp, "x")}, FCF yield ${fmt(s.fcf_yield, "pct")}
+- Quality: ROIC ${fmt(s.roic, "pct")}, ROE ${fmt(s.roe, "pct")}, ROA ${fmt(s.roa, "pct")}, Gross ${fmt(s.gross_margin, "pct")}, Op ${fmt(s.op_margin, "pct")}, Net ${fmt(s.net_margin, "pct")}, ND/EBITDA ${fmt(s.net_debt_ebitda, "r")}, D/E ${fmt(s.debt_equity, "r")}, Current ratio ${fmt(s.current_ratio, "r")}
+- Growth (TTM): Revenue ${fmt(s.revenue_growth, "pct")}, EPS ${fmt(s.eps_growth, "pct")}, FCF ${fmt(s.fcf_growth, "pct")}
+- Dividend yield: ${fmt(s.div_yield, "pct")}
+- Orizen Score: ${s.score != null ? Math.round(s.score * 100) : "—"} (Q ${s.qScore != null ? Math.round(s.qScore * 100) : "—"}, V ${s.vScore != null ? Math.round(s.vScore * 100) : "—"}, G ${s.gScore != null ? Math.round(s.gScore * 100) : "—"})
+- RSI(10): ${rsiNote}${s.rsiTrend ? ` — ${s.rsiTrend.direction} (${s.rsiTrend.change5d >= 0 ? "+" : ""}${s.rsiTrend.change5d.toFixed(1)} over ~5 sessions)` : ""}`;
+
+  if (s.performance) {
+    const p = s.performance;
+    out += `\n- Price performance: 1mo ${fmt(p.m1, "pct")}, 3mo ${fmt(p.m3, "pct")}, 6mo ${fmt(p.m6, "pct")}, 1yr ${fmt(p.y1, "pct")}`;
+  }
+
+  if (s.profile) {
+    const p = s.profile;
+    out += `\n- Company: ${p.ceo ? `CEO ${p.ceo}; ` : ""}${p.fullTimeEmployees ? `${p.fullTimeEmployees} employees; ` : ""}${p.country ? `${p.country}; ` : ""}${p.exchange ? `${p.exchange}; ` : ""}${p.ipoDate ? `IPO ${p.ipoDate}; ` : ""}${p.range ? `52W range ${p.range}` : ""}`;
+    if (p.website) out += `\n- Website: ${p.website}`;
+    if (p.description) out += `\n- Business: ${String(p.description).slice(0, 700)}`;
+  }
+
+  if (s.ratings && s.ratings.rating) {
+    const r = s.ratings;
+    out += `\n- FMP Ratings (1-5 sub-scores): grade ${r.rating}, overall ${r.overall_score ?? "—"}/5 — DCF ${r.dcf_score ?? "—"}, ROE ${r.roe_score ?? "—"}, ROA ${r.roa_score ?? "—"}, D/E ${r.de_score ?? "—"}, P/E ${r.pe_score ?? "—"}, P/B ${r.pb_score ?? "—"}`;
+  }
+
+  if (s.grades && s.grades.length) {
+    const g = s.grades
+      .map((x) => `${x.date || ""} ${x.company || ""} ${x.action || ""}${x.new_grade ? ` → ${x.new_grade}` : ""}`.trim())
+      .join("; ");
+    out += `\n- Recent analyst grades: ${g}`;
+  }
+
+  return out;
 }
 
 function summarizeFilters(f) {
@@ -186,8 +248,8 @@ router.post("/chat", async (req, res) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
 
   try {
-    const { sessionId, message, mode, context } = req.body;
-    const systemPrompt = buildSystemPrompt(mode || "general", context);
+    const { sessionId, message, context } = req.body;
+    const systemPrompt = buildSystemPrompt(context);
 
     let session = sessionId ? getChatSession(sessionId, req.userId) : null;
     const messages = session ? JSON.parse(session.messages) : [];

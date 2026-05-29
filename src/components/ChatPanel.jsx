@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from "react";
-import { MODES } from "../hooks/useChat.js";
 
 function Markdown({ text }) {
   const html = text
@@ -112,25 +111,6 @@ export default function ChatPanel({ chat }) {
         </div>
       </div>
 
-      {/* Mode selector */}
-      <div className="px-3 py-2 border-b border-gray-800 flex gap-1.5 flex-wrap">
-        {MODES.map((m) => (
-          <button
-            key={m.id}
-            onClick={() => chat.setMode(m.id)}
-            className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px]
-              font-medium transition-all whitespace-nowrap
-              ${
-                chat.mode === m.id
-                  ? `${m.color} text-white ring-1 ring-white/20`
-                  : "bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700"
-              }`}
-          >
-            <span>{m.icon}</span> {m.label}
-          </button>
-        ))}
-      </div>
-
       {/* Error banner */}
       {chat.error && (
         <div className="px-3 py-2 bg-red-900/30 border-b border-red-800/50 text-xs text-red-300">
@@ -146,16 +126,17 @@ export default function ChatPanel({ chat }) {
             <p className="text-xs font-medium text-gray-500 mb-1">
               Ori — Stock Analyst
             </p>
-            <p className="text-[10px] text-gray-600 max-w-[200px] mx-auto">
-              Select a mode above and ask about the stocks in your current view.
-              Ori can see all your filtered data.
+            <p className="text-[10px] text-gray-600 max-w-[240px] mx-auto">
+              Ori can suggest filters to narrow your results. It will never suggest
+              changes to the Q/V/G weights (those are yours to control with the sliders).
+              It will always ask before applying anything.
             </p>
             <div className="mt-4 flex flex-col gap-1.5">
               {[
-                "Find the emerging disruptors in the aerospace industry",
-                "Which stocks here have the best compounding moat?",
-                "Are any of these significantly undervalued?",
-                "Compare the top 5 by ROIC",
+                "What looks interesting here given my current weights?",
+                "Narrow to higher growth companies",
+                "Narrow to high-quality compounders with strong balance sheets",
+                "Is the stock I have open attractive under my Q/V/G settings?",
               ].map((q) => (
                 <button
                   key={q}
@@ -191,41 +172,41 @@ export default function ChatPanel({ chat }) {
                   <Markdown text={msg.content} />
 
                   {/* Confirmation UI for Ori's screener recommendations */}
-                  {msg.recommendation && (
+                  {msg.recommendation && msg.recommendation.filters && (
                     <div className="mt-3 pt-3 border-t border-gray-700">
                       <div className="text-[10px] text-gray-400 mb-1.5">
-                        Ori recommends the following changes:
+                        Ori recommends these filters:
                       </div>
-                      <div className="text-[10px] text-gray-300 mb-2 space-y-0.5">
-                        {msg.recommendation.filters && (
-                          <div>Filters: {JSON.stringify(msg.recommendation.filters)}</div>
-                        )}
-                        {msg.recommendation.weights && (
-                          <div>
-                            Weights: Q={msg.recommendation.weights.q ?? '—'} / 
-                            V={msg.recommendation.weights.v ?? '—'} / 
-                            G={msg.recommendation.weights.g ?? '—'}
-                          </div>
-                        )}
+                      <div className="text-[10px] text-gray-300 mb-2">
+                        {Object.entries(msg.recommendation.filters)
+                          .map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(',') : v}`)
+                          .join(' · ')}
                       </div>
                       <div className="flex gap-2">
                         <button
                           onClick={() => {
-                            if (chat.applyRecommendation) {
-                              chat.applyRecommendation(msg.recommendation);
+                            const rec = msg.recommendation;
+                            if (rec && chat.applyRecommendation) {
+                              chat.applyRecommendation(rec);
                             }
                             if (chat.dismissRecommendation) {
-                              chat.dismissRecommendation(i);
+                              const liveIdx = chat.messages.findIndex(m => m === msg);
+                              if (liveIdx !== -1) {
+                                chat.dismissRecommendation(liveIdx);
+                              }
                             }
                           }}
                           className="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
                         >
-                          Apply this screen
+                          Apply filters
                         </button>
                         <button
                           onClick={() => {
                             if (chat.dismissRecommendation) {
-                              chat.dismissRecommendation(i);
+                              const liveIdx = chat.messages.findIndex(m => m === msg);
+                              if (liveIdx !== -1) {
+                                chat.dismissRecommendation(liveIdx);
+                              }
                             }
                           }}
                           className="px-3 py-1.5 text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
