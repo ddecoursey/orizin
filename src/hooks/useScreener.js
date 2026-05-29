@@ -642,12 +642,15 @@ export function useScreener(currentUser) {
     createTab,
     deleteTab,
     loadStocks,
-    enrichAll: () =>
-      enrichAll(
-        filtered
-          .filter((r) => !r.has_km || !r.has_rat || !r.has_growth || !r.has_dcf)
-          .map((r) => r.symbol),
-      ),
+    // Normal call → only missing data. Pass true (or call enrichAll(true)) to force re-enrich everything visible.
+    enrichAll: (force = false) => {
+      const targets = force
+        ? filtered.map((r) => r.symbol)
+        : filtered
+            .filter((r) => !r.has_km || !r.has_rat)
+            .map((r) => r.symbol);
+      return enrichAll(targets, force);
+    },
     enrichLoading,
     loadProgress,
     hasEnrichedOnce,

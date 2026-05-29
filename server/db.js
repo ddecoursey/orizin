@@ -334,7 +334,7 @@ export function getMissingRat() {
 }
 
 export function getMissingEnrich() {
-  return db.prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0 OR has_dcf=0 OR has_growth=0').all().map(r => r.symbol);
+  return db.prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0').all().map(r => r.symbol);
 }
 
 const applyDcf = db.prepare(`

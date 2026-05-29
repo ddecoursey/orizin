@@ -60,11 +60,29 @@ import {
   fetchOwnerEarnings,
   fetchStockList,
   fetchHistoricalPricesLight,
+  fetchRSI,
+  fetchRatingsSnapshot,
+  fetchGrades,
 } from "../fmp.js";
 // We dynamically fetch up to 8000 symbols via company-screener with scope-aware filters + 500M mkt cap floor.
 // Supports: 'us' (country=US), 'us-listed' (NYSE,NASDAQ,AMEX incl. ADRs like TSM), 'global' (no geo filter).
 
 const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// In-memory TTL cache for per-symbol detail lookups (profile / ratings / grades
+// / rsi). These power the stock detail pane and don't change intraday, so a
+// short-lived cache makes reopening a stock instant and spares FMP round-trips.
+// Only meaningful results are cached (non-null object / non-empty array), so a
+// transient failure isn't pinned for the whole TTL.
+const detailCache = new Map(); // key -> { at, data }
+async function cachedDetail(key, ttlMs, fn) {
+  const hit = detailCache.get(key);
+  if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+  const data = await fn();
+  const useful = Array.isArray(data) ? data.length > 0 : data != null;
+  if (useful) detailCache.set(key, { at: Date.now(), data });
+  return data;
+}
 
 async function getUniverse(force = false) {
   const cachedAt = getMeta("universe_cache_at");
@@ -278,7 +296,7 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
     if (symbols?.length) {
       targets = symbols.filter((s) => {
         const r = getStock(s);
-        return r && (force || !r.has_km || !r.has_rat || !r.has_growth || !r.has_dcf);
+        return r && (force || !r.has_km || !r.has_rat);
       });
     } else if (force) {
       targets = getAllStocks().map((r) => r.symbol);
@@ -556,6 +574,66 @@ router.post("/stocks/add", async (req, res) => {
       saveRat(sym, rat);
     }
     res.json({ stock: getStock(sym) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/rsi/:symbol ────────────────────────────────────────────
+// RSI technical indicator (0–100) for the detail chart overlay.
+router.get("/stocks/rsi/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const periodLength = parseInt(req.query.periodLength) || 10;
+  try {
+    const rsi = await cachedDetail(`rsi:${symbol}:${periodLength}`, 6 * 60 * 60 * 1000, () =>
+      fetchRSI(symbol, { periodLength }),
+    );
+    res.json({ symbol, periodLength, rsi });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/ratings/:symbol ────────────────────────────────────────
+// Ratings snapshot (letter grade + 1–5 sub-scores) for the detail pane.
+router.get("/stocks/ratings/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const ratings = await cachedDetail(`ratings:${symbol}`, 6 * 60 * 60 * 1000, () =>
+      fetchRatingsSnapshot(symbol),
+    );
+    if (!ratings) return res.status(404).json({ error: "No ratings available" });
+    res.json({ ratings });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/grades/:symbol ─────────────────────────────────────────
+// Recent analyst grading actions (upgrades / downgrades / maintains).
+router.get("/stocks/grades/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const grades = await cachedDetail(`grades:${symbol}`, 6 * 60 * 60 * 1000, () =>
+      fetchGrades(symbol),
+    );
+    res.json({ symbol, grades });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/profile/:symbol ────────────────────────────────────────
+// Full company profile from FMP (description, CEO, website, employees, etc.)
+// for the detail overview modal.
+router.get("/stocks/profile/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const profile = await cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () =>
+      fetchProfile(symbol),
+    );
+    if (!profile) return res.status(404).json({ error: "Profile not found" });
+    res.json({ profile });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

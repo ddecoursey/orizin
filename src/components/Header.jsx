@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 export default function Header({
   status,
   filtered,
@@ -12,18 +14,33 @@ export default function Header({
   onLogout,
   onManageUsers,
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   const missing = filtered.filter(
-    (r) => !r.has_km || !r.has_rat || !r.has_growth || !r.has_dcf,
+    (r) => !r.has_km || !r.has_rat,
   ).length;
 
-  function handleGatherData() {
-    if (enrichLoading || missing === 0) return;
-    const ok = window.confirm(
-      `Gather full financial data for ${missing} stock${missing === 1 ? "" : "s"} from FMP?\n\n` +
+  const isFullyEnriched = missing === 0;
+
+  // Some symbols (ETFs, indexes, funds) never return key-metrics/ratios from
+  // FMP, so `missing` may never reach 0. `force` lets the user re-gather ALL
+  // visible stocks regardless of how many are still pending.
+  function runGather(force) {
+    if (enrichLoading) return;
+
+    const count = force ? filtered.length : missing;
+    if (count === 0) return;
+
+    const confirmText = force
+      ? `Force re-gather financial data for all ${count} visible stock${count === 1 ? "" : "s"}?\n\n` +
+        `This will re-fetch key metrics, ratios, growth, and DCF from FMP even for already-enriched symbols.\n` +
+        `Heavy API call — can take several minutes.`
+      : `Gather full financial data for ${count} stock${count === 1 ? "" : "s"} from FMP?\n\n` +
         `This is a heavy API call — depending on the count it can take several minutes. ` +
-        `Are you sure you want to continue?`,
-    );
-    if (ok) onGatherData?.();
+        `Are you sure you want to continue?`;
+
+    const ok = window.confirm(confirmText);
+    if (ok) onGatherData?.(force);
   }
 
   const dotColor =
@@ -59,15 +76,17 @@ export default function Header({
 
       {/* Actions */}
       <div className="ml-auto flex items-center gap-1.5">
-        <a
-          href="/debug"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[10px] text-gray-500 hover:text-gray-300 px-1.5 py-1 font-mono"
-          title="Open debug error log"
-        >
-          debug
-        </a>
+        {isAdmin && (
+          <a
+            href="/debug"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[10px] text-gray-500 hover:text-gray-300 px-1.5 py-1 font-mono"
+            title="Open debug error log"
+          >
+            debug
+          </a>
+        )}
 
         <button
           onClick={onToggleTheme}
@@ -85,18 +104,58 @@ export default function Header({
           ↻ <span className="hidden sm:inline">Stock Refresh</span>
         </button>
 
-        <button
-          onClick={handleGatherData}
-          disabled={enrichLoading || missing === 0}
-          className="px-2.5 py-1 rounded-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
-          title="Pull full financial data (key metrics, ratios, DCF, growth) for visible stocks missing data. Heavy API call — can take several minutes."
-        >
-          ⚡ {enrichLoading
-            ? "Gathering…"
-            : missing > 0
-              ? `Gather Data (${missing})`
-              : "Data Gathered"}
-        </button>
+        <div className="relative flex items-center">
+          <button
+            onClick={() => runGather(isFullyEnriched)}
+            disabled={enrichLoading || filtered.length === 0}
+            className="px-2.5 py-1 rounded-l-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-300 border border-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
+            title={
+              isFullyEnriched
+                ? "Force re-fetch key metrics, ratios, growth & DCF for all currently visible stocks (even if already gathered). Useful after scope changes or to refresh stale data."
+                : "Pull full financial data (key metrics, ratios, DCF, growth) for visible stocks missing data. Heavy API call — can take several minutes."
+            }
+          >
+            ⚡ {enrichLoading
+              ? "Gathering…"
+              : isFullyEnriched
+                ? "Re-gather Data"
+                : `Gather Data (${missing})`}
+          </button>
+          <button
+            onClick={() => setMenuOpen((o) => !o)}
+            disabled={enrichLoading || filtered.length === 0}
+            className="px-1.5 py-1 rounded-r-md text-xs font-medium bg-gray-900 hover:bg-gray-800 text-gray-400 border border-l-0 border-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            title="More gather options"
+          >
+            ▾
+          </button>
+
+          {menuOpen && (
+            <>
+              {/* Click-away backdrop */}
+              <div
+                className="fixed inset-0 z-40"
+                onClick={() => setMenuOpen(false)}
+              />
+              <div className="absolute right-0 top-full mt-1 z-50 w-60 rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 py-1">
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    runGather(true);
+                  }}
+                  disabled={enrichLoading || filtered.length === 0}
+                  className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  ⚡ Force re-gather all ({filtered.length})
+                  <span className="block text-[10px] text-gray-500 mt-0.5">
+                    Re-fetches every visible stock, even ones that never return
+                    data (ETFs, indexes).
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
 
         {onLogout && (
           <>

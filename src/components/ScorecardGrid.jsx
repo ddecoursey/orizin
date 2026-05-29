@@ -43,15 +43,17 @@ function SubChip({ label, value, colors, title }) {
   );
 }
 
-function Scorecard({ r, index }) {
+function Scorecard({ r, index, onSelectStock }) {
   const sc = r.score != null ? Math.round(r.score * 100) : null;
   const scoreColor = sc >= 70 ? '#10b981' : sc >= 45 ? '#f59e0b' : '#ef4444';
   const sec = SECTOR_COLORS[r.sector] || { bg: '#1e293b', fg: '#94a3b8' };
 
   return (
     <div
-      className="bg-gray-900 border border-gray-800 rounded-xl p-3.5
-        hover:border-gray-600 hover:shadow-lg hover:shadow-black/40 transition-all"
+      onClick={() => onSelectStock?.(r)}
+      className={`bg-gray-900 border border-gray-800 rounded-xl p-3.5
+        hover:border-gray-600 hover:shadow-lg hover:shadow-black/40 transition-all
+        ${onSelectStock ? 'cursor-pointer' : ''}`}
       style={{ borderTop: `3px solid ${sec.bg}` }}
     >
       <div className="flex justify-between items-start mb-1">
@@ -132,13 +134,13 @@ function Scorecard({ r, index }) {
 
 const MemoizedScorecard = React.memo(Scorecard);
 
-export default function ScorecardGrid({ rows }) {
+export default function ScorecardGrid({ rows, onSelectStock }) {
   const sorted = [...rows].sort((a, b) => (b.score || 0) - (a.score || 0));
 
   return (
     <div className="p-3 grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3">
       {sorted.map((r, i) => (
-        <MemoizedScorecard key={r.symbol} r={r} index={i} />
+        <MemoizedScorecard key={r.symbol} r={r} index={i} onSelectStock={onSelectStock} />
       ))}
       {sorted.length === 0 && (
         <div className="col-span-full flex flex-col items-center py-16 text-gray-500">

@@ -5,9 +5,19 @@ export default function DebugErrorLog() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(null);
   const [lastUpdated, setLastUpdated] = useState(null);
+  // 'checking' → calling /api/auth/me, 'allowed' → admin, 'denied' → not admin
+  const [access, setAccess] = useState('checking');
 
   useEffect(() => {
     document.title = 'Debug • Orizen';
+  }, []);
+
+  // Gate the page on admin access — non-admins (and signed-out users) get nothing.
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setAccess(data?.isAdmin ? 'allowed' : 'denied'))
+      .catch(() => setAccess('denied'));
   }, []);
 
   const fetchErrors = async () => {
@@ -32,10 +42,33 @@ export default function DebugErrorLog() {
   };
 
   useEffect(() => {
+    if (access !== 'allowed') return;
     fetchErrors();
     const interval = setInterval(fetchErrors, 3000); // auto-refresh every 3s
     return () => clearInterval(interval);
-  }, []);
+  }, [access]);
+
+  if (access === 'checking') {
+    return <div className="min-h-screen bg-gray-950" />;
+  }
+
+  if (access === 'denied') {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col items-center justify-center gap-3 p-6">
+        <span className="text-3xl">🔒</span>
+        <h1 className="text-xl font-semibold">Access denied</h1>
+        <p className="text-sm text-gray-400">
+          This page is restricted to administrators.
+        </p>
+        <a
+          href="/"
+          className="mt-2 px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 transition-colors"
+        >
+          Back to Orizen
+        </a>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100 p-6">

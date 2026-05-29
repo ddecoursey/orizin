@@ -11,6 +11,8 @@ import ProgressBar from "./components/ProgressBar.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import UsersModal from "./components/UsersModal.jsx";
+import StockDetailModal from "./components/StockDetailModal.jsx";
+import Footer from "./components/Footer.jsx";
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -78,6 +80,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   const sidebarKey = `sidebarCollapsed:${user}`;
   const [view, setView] = useState("table");
   const [showUsersModal, setShowUsersModal] = useState(false);
+  const [detailStock, setDetailStock] = useState(null);
   const [theme, setTheme] = useState(
     () => localStorage.getItem(themeKey) || localStorage.getItem("theme") || "dark",
   );
@@ -126,7 +129,6 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     enrichAll,
     enrichLoading,
     loadProgress,
-    hasEnrichedOnce,
     addTicker,
     cancelOperation,
   } = useScreener(currentUser);
@@ -149,6 +151,13 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   chat.applyRecommendation = applyRecommendation;
   chat.dismissRecommendation = chat.dismissRecommendation; // already returned from hook, re-exposing for clarity
 
+  // Resolve the open detail stock against the live `filtered` set so its score
+  // (and pillar scores) re-compute as the Q/V/G weights change. Falls back to
+  // the clicked snapshot if filters now exclude it.
+  const detailRow = detailStock
+    ? filtered.find((r) => r.symbol === detailStock.symbol) || detailStock
+    : null;
+
   return (
     <div className="h-screen flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       <Header
@@ -156,7 +165,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         filtered={filtered}
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
-        onGatherData={() => enrichAll()}
+        onGatherData={(force) => enrichAll(!!force)}
         enrichLoading={enrichLoading}
         theme={theme}
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
@@ -191,9 +200,9 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
           />
 
           {/* Controls bar */}
-          <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
+          <div className="flex flex-wrap items-center gap-3 gap-y-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
             <div
-              className="flex items-center gap-2 flex-1 max-w-xs bg-gray-900 border border-gray-800
+              className="flex items-center gap-2 flex-1 min-w-[140px] max-w-xs bg-gray-900 border border-gray-800
               rounded-lg px-3 py-1.5"
             >
               <span className="text-gray-600 text-sm">⌕</span>
@@ -212,7 +221,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
               {filtered.length} / {stocks.length}
             </span>
 
-            <div className="flex border border-gray-700 rounded-md overflow-hidden ml-auto">
+            <div className="flex shrink-0 border border-gray-700 rounded-md overflow-hidden ml-auto">
               {[
                 ["table", "▦ Table"],
                 ["cards", "▤ Scorecards"],
@@ -220,7 +229,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                 <button
                   key={v}
                   onClick={() => setView(v)}
-                  className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                  className={`px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
                     view === v
                       ? "bg-gray-100 text-gray-900"
                       : "bg-gray-900 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
@@ -232,7 +241,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             </div>
 
             {/* Pillar weights — always available. Controls the Orizen Score in both Table and Scorecards. */}
-            <div className="flex items-center gap-3 text-xs text-gray-500">
+            <div className="flex shrink-0 items-center gap-3 text-xs text-gray-500">
               {[
                 ["q", "Q", "Quality — Profitable, capital-efficient businesses with strong balance sheets (ROIC, margins, low debt, liquidity)."],
                 ["v", "V", "Value — Cheap on multiples + margin of safety (EV/GP, EV/EBITDA, P/E, FCF yield, DCF)."],
@@ -286,21 +295,36 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                 pins={pins}
                 onTogglePin={togglePin}
                 onAskAI={chat.askAboutStock}
-                hasEnrichedOnce={hasEnrichedOnce}
+                onSelectStock={setDetailStock}
+                enrichLoading={enrichLoading}
               />
             </div>
           ) : (
             <div className="flex-1 min-h-0 overflow-auto" style={{ height: '100%' }}>
-              <ScorecardGrid rows={filtered} />
+              <ScorecardGrid rows={filtered} onSelectStock={setDetailStock} />
             </div>
           )}
         </div>
 
+        {detailRow && (
+          <StockDetailModal
+            key={detailRow.symbol}
+            row={detailRow}
+            onClose={() => setDetailStock(null)}
+          />
+        )}
+
         {chat.isOpen && <ChatPanel chat={chat} />}
       </div>
 
-      {/* Floating Ori button */}
-      <div className={`fixed bottom-6 right-6 z-50 ${!chat.isOpen ? 'animate-ori-bounce' : ''}`}>
+      <Footer />
+
+      {/* Floating Ori button — slides left to clear the detail pane (w-96)
+          when it's open and chat isn't (chat would already sit on top of it). */}
+      <div
+        className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out ${!chat.isOpen ? 'animate-ori-bounce' : ''}`}
+        style={{ right: detailStock && !chat.isOpen ? 'calc(24rem + 1.5rem)' : '1.5rem' }}
+      >
         <button
           onClick={() => chat.setIsOpen(!chat.isOpen)}
           className={`w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-sm font-semibold transition-all
@@ -323,8 +347,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       </div>
 
       {showUsersModal && (
-        <UsersModal 
-          onClose={() => setShowUsersModal(false)} 
+        <UsersModal
+          onClose={() => setShowUsersModal(false)}
           currentUser={currentUser}
           isAdmin={isAdmin}
         />

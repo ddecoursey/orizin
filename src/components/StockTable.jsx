@@ -145,7 +145,7 @@ const COLS = [
   { key: "score", label: "Score", plain: true, nosort: false },
 ];
 
-export default function StockTable({ rows, pins, onTogglePin, onAskAI, hasEnrichedOnce = false }) {
+export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false }) {
   const [sortKey, setSortKey] = useState("mcap");
   const [sortDir, setSortDir] = useState(-1);
   const [sparklines, setSparklines] = useState(new Map()); // symbol -> number[]
@@ -260,10 +260,11 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, hasEnrich
     return () => clearTimeout(timer);
   }, []);
 
-  // Fetch sparklines for currently visible rows (lazy loading)
-  // Only start after the user has run "Gather Data" at least once
+  // Fetch sparklines for currently visible rows (lazy loading).
+  // Load whenever no heavy enrich/refresh fetch is running — not every ticker
+  // will ever have data, so we don't wait for the "missing" count to hit zero.
   useEffect(() => {
-    if (!sparklinesEnabled || !hasEnrichedOnce) return;
+    if (!sparklinesEnabled || enrichLoading) return;
 
     const visibleItems = rowVirtualizer.getVirtualItems();
     const visibleSymbols = visibleItems
@@ -277,7 +278,7 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, hasEnrich
         scheduleSparklineFetch(symbol);
       }
     });
-  }, [rowVirtualizer, sorted, sparklines, sparklinesEnabled, hasEnrichedOnce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [rowVirtualizer, sorted, sparklines, sparklinesEnabled, enrichLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSort(key) {
     const col = COLS.find((c) => c.key === key);
@@ -451,14 +452,18 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, hasEnrich
                   className={`px-3 py-2 text-left sticky left-10 z-10 ${pinned ? "bg-amber-950" : "bg-gray-950"}`}
                   style={{ width: '92px', minWidth: '92px', left: '32px' }}
                 >
-                  <div className="flex flex-col gap-0.5">
+                  <div
+                    className={`flex flex-col gap-0.5 ${onSelectStock ? "cursor-pointer group/sym" : ""}`}
+                    onClick={() => onSelectStock?.(r)}
+                    title={onSelectStock ? "View company details" : undefined}
+                  >
                     <div className="flex items-center gap-1">
                       {r.has_km ? (
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" title="Metrics loaded" />
                       ) : (
                         <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" title="Metrics not loaded" />
                       )}
-                      <span className="font-bold text-gray-100 text-[11.5px]">{r.symbol}</span>
+                      <span className="font-bold text-gray-100 text-[11.5px] group-hover/sym:text-blue-400 transition-colors">{r.symbol}</span>
                     </div>
                     <span className="text-[9.5px] text-gray-500 max-w-[130px] truncate">{r.name}</span>
                   </div>

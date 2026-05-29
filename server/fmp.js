@@ -480,6 +480,69 @@ export async function fetchHistoricalPricesLight(symbol, days = 45) {
   }
 }
 
+// RSI technical indicator (momentum oscillator, 0–100) for the detail chart.
+// Returns [{ date: 'YYYY-MM-DD', rsi }] sorted oldest → newest.
+export async function fetchRSI(symbol, { periodLength = 14, timeframe = "1day" } = {}) {
+  const url = `${BASE}/technical-indicators/rsi?symbol=${symbol}&periodLength=${periodLength}&timeframe=${timeframe}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((d) => ({
+        date: typeof d.date === "string" ? d.date.split(" ")[0] : d.date,
+        rsi: n(d.rsi),
+      }))
+      .filter((d) => d.rsi != null)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+  } catch (e) {
+    console.warn(`[FMP] rsi ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Ratings snapshot: letter grade + 1–5 sub-scores across key ratios.
+export async function fetchRatingsSnapshot(symbol, opts = {}) {
+  const url = `${BASE}/ratings-snapshot?symbol=${symbol}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 3, opts.timeoutMs ?? 12000);
+    const r = Array.isArray(data) ? data[0] : data;
+    if (!r || typeof r !== "object" || !r.symbol) return null;
+    return {
+      symbol: r.symbol,
+      rating: r.rating ?? null,
+      overall_score: n(r.overallScore),
+      dcf_score: n(r.discountedCashFlowScore),
+      roe_score: n(r.returnOnEquityScore),
+      roa_score: n(r.returnOnAssetsScore),
+      de_score: n(r.debtToEquityScore),
+      pe_score: n(r.priceToEarningsScore),
+      pb_score: n(r.priceToBookScore),
+    };
+  } catch (e) {
+    console.warn(`[FMP] ratings-snapshot ${symbol}:`, e.message);
+    return null;
+  }
+}
+
+// Stock grades: recent analyst grading actions (upgrade/downgrade/maintain).
+export async function fetchGrades(symbol, { limit = 15 } = {}) {
+  const url = `${BASE}/grades?symbol=${symbol}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url);
+    if (!Array.isArray(data)) return [];
+    return data.slice(0, limit).map((g) => ({
+      date: g.date ?? null,
+      company: g.gradingCompany ?? null,
+      previous_grade: g.previousGrade ?? null,
+      new_grade: g.newGrade ?? null,
+      action: g.action ?? null,
+    }));
+  } catch (e) {
+    console.warn(`[FMP] grades ${symbol}:`, e.message);
+    return [];
+  }
+}
+
 export async function fetchAnalystEstimates(symbol) {
   const url = `${BASE}/analyst-estimates?symbol=${symbol}&period=annual&limit=2&apikey=${KEY()}`;
   try {
