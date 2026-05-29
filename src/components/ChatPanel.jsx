@@ -159,18 +159,18 @@ export default function ChatPanel({ chat }) {
       {/* Backdrop on tablet/phone where the sheet floats over the content */}
       <div className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => chat.setIsOpen(false)} />
       <div
-        className="fixed inset-x-0 bottom-0 z-50 h-[85vh] rounded-t-2xl shadow-2xl border-t border-gray-700
+        className="fixed inset-x-0 bottom-0 z-50 max-h-[min(65vh,520px)] rounded-t-2xl shadow-2xl border-t border-gray-700
           lg:static lg:inset-auto lg:h-full lg:w-96 lg:rounded-none lg:shadow-none lg:border-t-0 lg:border-l lg:border-gray-800 lg:z-auto
           shrink-0 bg-gray-900 flex flex-col overflow-hidden"
       >
       {/* Grab handle — bottom-sheet dismiss affordance (mobile only) */}
       <button
         onClick={() => chat.setIsOpen(false)}
-        className="lg:hidden mx-auto mt-2 mb-1 h-1.5 w-10 rounded-full bg-gray-700 shrink-0"
+        className="lg:hidden mx-auto mt-1.5 mb-0.5 h-1 w-8 rounded-full bg-gray-700 shrink-0"
         aria-label="Close Ori"
       />
       {/* Header */}
-      <div className="relative px-3 py-2.5 border-b border-gray-800 flex items-center gap-2">
+      <div className="relative px-3 py-2 lg:py-2.5 border-b border-gray-800 flex items-center gap-2">
         <span className="text-sm font-bold text-gray-100">Ori</span>
         <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
           {chat.stockCount} stocks in view
@@ -201,7 +201,7 @@ export default function ChatPanel({ chat }) {
 
         {/* Recall dropdown — past conversations (server-persisted per user) */}
         {showRecall && (
-          <div className="absolute right-2 top-full mt-1 w-72 max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50">
+          <div className="absolute right-2 top-full mt-1 w-72 max-w-[calc(100%-1rem)] max-h-64 lg:max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50">
             <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-800 sticky top-0 bg-gray-900">
               Past conversations
             </div>
@@ -242,31 +242,29 @@ export default function ChatPanel({ chat }) {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-3 py-2 lg:py-3 space-y-2 lg:space-y-3">
         {chat.messages.length === 0 && (
-          <div className="text-center py-12 text-gray-600">
-            <div className="text-3xl mb-3">🤖</div>
+          <div className="text-center py-6 lg:py-10 text-gray-600">
+            <div className="text-2xl lg:text-3xl mb-2">🤖</div>
             <p className="text-xs font-medium text-gray-500 mb-1">
               Ori — Stock Analyst
             </p>
-            <p className="text-[10px] text-gray-600 max-w-[240px] mx-auto">
-              Ori can suggest filters to narrow your results. It will never suggest
-              changes to the Q/V/G weights (those are yours to control with the sliders).
-              It will always ask before applying anything.
+            <p className="text-[10px] text-gray-600 max-w-[260px] mx-auto leading-snug">
+              Suggests filters. Never touches your Q/V/G weights. Always asks first.
             </p>
-            <div className="mt-4 flex flex-col gap-1.5">
+            <div className="mt-3 lg:mt-4 flex flex-col gap-1">
               {[
                 "What looks interesting here given my current weights?",
                 "Narrow to higher growth companies",
-                "Narrow to high-quality compounders with strong balance sheets",
-                "Is the stock I have open attractive under my Q/V/G settings?",
+                "Narrow to high-quality compounders",
+                "Is the open stock attractive under my weights?",
               ].map((q) => (
                 <button
                   key={q}
                   onClick={() => {
                     chat.sendMessage(q);
                   }}
-                  className="text-[10px] text-left text-blue-400 hover:text-blue-300 px-2 py-1.5
+                  className="text-[10px] text-left text-blue-400 hover:text-blue-300 px-2 py-1
                     bg-gray-800/50 rounded-lg hover:bg-gray-800 transition-colors"
                 >
                   "{q}"
@@ -352,7 +350,7 @@ export default function ChatPanel({ chat }) {
       </div>
 
       {/* Input */}
-      <div className="px-3 py-2.5 border-t border-gray-800">
+      <div className="px-3 py-2 lg:py-2.5 border-t border-gray-800">
         <div className="flex gap-2">
           <input
             ref={inputRef}

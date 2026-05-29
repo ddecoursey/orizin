@@ -312,24 +312,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
               ))}
             </div>
 
-            {/* Pillar weights — always available. Controls the Orizen Score in both Table and Scorecards. */}
-            <div className="flex shrink-0 items-center gap-3 text-xs text-gray-500">
-              {[
-                ["q", "Q", "Quality — Profitable, capital-efficient businesses with strong balance sheets (ROIC, margins, low debt, liquidity)."],
-                ["v", "V", "Value — Cheap on multiples + margin of safety (EV/GP, EV/EBITDA, P/E, FCF yield, DCF)."],
-                ["g", "G", "Growth — Revenue, EPS, and FCF growth (TTM). Higher = favor faster-growing companies."],
-              ].map(([k, label, tip]) => (
-                <WeightSlider
-                  key={k}
-                  label={label}
-                  tip={tip}
-                  value={weights[k]}
-                  onChange={(newValue) =>
-                    setWeights((w) => ({ ...w, [k]: newValue }))
-                  }
-                />
-              ))}
-            </div>
+            <WeightsPopover weights={weights} setWeights={setWeights} />
           </div>
 
           {/* Controls bar — compact (< lg) */}
@@ -522,7 +505,8 @@ function rsiTrend(rsi) {
 
 /**
  * WeightsPopover — compact "Weights" button + dropdown holding the three Q/V/G
- * sliders, used on narrow screens to keep them off the main controls bar.
+ * sliders. Used in both desktop and mobile controls bars for a consistent,
+ * uncluttered experience.
  */
 function WeightsPopover({ weights, setWeights }) {
   const [open, setOpen] = useState(false);
@@ -590,55 +574,3 @@ function PopoverWeightRow({ label, value, onChange }) {
   );
 }
 
-/**
- * WeightSlider - Renders the slider with instant visual feedback
- * while debouncing the actual weight update (critical for perf with large datasets).
- */
-function WeightSlider({ label, tip, value, onChange }) {
-  const [localValue, setLocalValue] = useState(value);
-  const timeoutRef = useRef(null);
-
-  // Keep local state in sync if parent changes weights externally
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
-
-  const handleChange = (e) => {
-    const newVal = Number(e.target.value);
-    setLocalValue(newVal); // instant UI feedback
-
-    // Debounce the expensive global update
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => {
-      onChange(newVal);
-    }, 120); // 120ms debounce feels responsive but cuts down recomputes dramatically
-  };
-
-  return (
-    <label className="group relative flex items-center gap-1.5 cursor-default">
-      <span className="border-b border-dotted border-gray-600">{label}</span>
-
-      {/* Premium tooltip - positioned below to avoid clipping at top of screen */}
-      <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2.5 hidden group-hover:block z-[90] pointer-events-none">
-        <div className="relative flex flex-col items-center transition-all duration-150 ease-out group-hover:opacity-100 group-hover:translate-y-0 opacity-0 -translate-y-1">
-          {/* Arrow pointing up */}
-          <div className="relative -mb-px h-2.5 w-4 overflow-hidden">
-            <div className="absolute left-1/2 bottom-0 -translate-x-1/2 h-3 w-3 rotate-45 bg-zinc-900 border-r border-b border-white/15" />
-          </div>
-          <div className="bg-zinc-900/95 backdrop-blur-xl border border-white/15 text-gray-200 text-[10.5px] leading-relaxed px-3.5 py-2 rounded-xl shadow-2xl shadow-black/70 max-w-[260px] whitespace-normal text-left">
-            {tip}
-          </div>
-        </div>
-      </div>
-
-      <input
-        type="range"
-        min="0"
-        max="100"
-        value={localValue}
-        onChange={handleChange}
-        className="w-14 accent-blue-500"
-      />
-    </label>
-  );
-}
