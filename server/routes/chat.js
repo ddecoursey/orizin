@@ -147,8 +147,8 @@ Use either the classic flat keys **or** the new flexible operator format for num
 Classic examples: "priceMin": 25, "mcapMax": 50, "betaMin": 0.8
 
 New flexible format (preferred when you want exact control):
-- Single condition: `"price": { "op": ">", "value": 30 }`
-- Between: `"mcap": { "op": "between", "min": 5, "max": 30 }`
+- Single condition: \` "price": { "op": ">", "value": 30 } \`
+- Between: \` "mcap": { "op": "between", "min": 5, "max": 30 } \`
 
 Supported operators: ">", ">=", "<", "<=", "=", "between"
 
