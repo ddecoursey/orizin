@@ -404,6 +404,64 @@ function Stat({ label, value, type }) {
   );
 }
 
+// DCF fair value + analyst price targets + owner earnings for the open stock.
+// Renders nothing if none of it is available (e.g. the FMP plan doesn't expose
+// these endpoints), so it never shows an empty shell.
+function Valuation({ aiData, loading, price }) {
+  if (loading) {
+    return (
+      <div>
+        <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
+          Valuation &amp; Targets
+        </h3>
+        <div className="h-20 bg-gray-900/50 rounded-lg animate-pulse" />
+      </div>
+    );
+  }
+  const a = aiData;
+  const hasAny = a && (a.dcf != null || a.target_consensus != null || a.owner_earnings != null);
+  if (!hasAny) return null;
+
+  const mos = a.dcf != null && price ? (a.dcf - price) / a.dcf : null; // margin of safety vs DCF
+  const upside = a.target_consensus != null && price ? (a.target_consensus - price) / price : null;
+  const pctClass = (v) => (v == null ? "text-gray-400" : v >= 0 ? "text-emerald-400" : "text-red-400");
+  const pct = (v) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
+
+  return (
+    <div>
+      <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
+        Valuation &amp; Targets
+      </h3>
+      <div className="grid grid-cols-2 gap-3">
+        {a.dcf != null && (
+          <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
+            <div className="text-[9px] uppercase tracking-wider text-gray-600">DCF fair value</div>
+            <div className="text-sm font-bold font-mono text-gray-100">{fmt(a.dcf, "price")}</div>
+            <div className={`text-[11px] font-semibold ${pctClass(mos)}`}>{pct(mos)} margin of safety</div>
+          </div>
+        )}
+        {a.target_consensus != null && (
+          <div className="bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
+            <div className="text-[9px] uppercase tracking-wider text-gray-600">Analyst target</div>
+            <div className="text-sm font-bold font-mono text-gray-100">{fmt(a.target_consensus, "price")}</div>
+            <div className={`text-[11px] font-semibold ${pctClass(upside)}`}>{pct(upside)} upside</div>
+          </div>
+        )}
+      </div>
+      {(a.target_low != null || a.target_high != null || a.owner_earnings != null) && (
+        <div className="mt-2 text-[10px] text-gray-500">
+          {(a.target_low != null || a.target_high != null) && (
+            <>Analyst range: <span className="font-mono text-gray-400">{fmt(a.target_low, "price")} – {fmt(a.target_high, "price")}</span></>
+          )}
+          {a.owner_earnings != null && (
+            <> · Owner earnings/sh: <span className="font-mono text-gray-400">{fmt(a.owner_eps, "price")}</span></>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StockDetailModal({
   row,
   onClose,
@@ -413,10 +471,12 @@ export default function StockDetailModal({
   rsi = [],
   ratings = null,
   grades = [],
+  aiData = null,
   loadingProfile = false,
   loadingChart = false,
   loadingRatings = false,
   loadingGrades = false,
+  loadingAi = false,
 }) {
   const symbol = symbolProp || row?.symbol;
 
@@ -499,6 +559,9 @@ export default function StockDetailModal({
               <PriceChart points={points} rsi={rsi} />
             )}
           </div>
+
+          {/* Valuation & analyst targets (DCF fair value, consensus, owner earnings) */}
+          <Valuation aiData={aiData} loading={loadingAi} price={row.price} />
 
           {/* Ratings snapshot */}
           <div>

@@ -146,9 +146,11 @@ Use either the classic flat keys **or** the new flexible operator format for num
 
 Classic examples: "priceMin": 25, "mcapMax": 50, "betaMin": 0.8
 
-New flexible format (preferred when you want exact control):
-- Single condition: \` "price": { "op": ">", "value": 30 } \`
-- Between: \` "mcap": { "op": "between", "min": 5, "max": 30 } \`
+New flexible format (preferred when you want exact control) — IMPORTANT: use the
+SAME key names as the classic format (roicMin, peMax, grossMin, …). Do NOT invent
+base keys like "roic" or "pe":
+- Single condition: \` "peMax": { "op": "<", "value": 25 } \` or \` "roicMin": { "op": ">=", "value": 15 } \`
+- Ranges use the base keys mcap / price / beta: \` "mcap": { "op": "between", "min": 5, "max": 30 } \`
 
 Supported operators: ">", ">=", "<", "<=", "=", "between"
 
@@ -211,6 +213,18 @@ The user has this stock open in the company-overview panel right now. Unless the
   if (s.performance) {
     const p = s.performance;
     out += `\n- Price performance: 1mo ${fmt(p.m1, "pct")}, 3mo ${fmt(p.m3, "pct")}, 6mo ${fmt(p.m6, "pct")}, 1yr ${fmt(p.y1, "pct")}`;
+  }
+
+  if (s.dcf != null || s.targetConsensus != null || s.ownerEarnings != null) {
+    const mos = s.dcf != null && s.price ? ((s.dcf - s.price) / s.dcf) * 100 : null;
+    const upside = s.targetConsensus != null && s.price ? ((s.targetConsensus - s.price) / s.price) * 100 : null;
+    const parts = [];
+    if (s.dcf != null)
+      parts.push(`DCF fair value ${fmt(s.dcf, "price")}${mos != null ? ` (${mos >= 0 ? "+" : ""}${mos.toFixed(0)}% margin of safety vs price)` : ""}`);
+    if (s.targetConsensus != null)
+      parts.push(`analyst consensus target ${fmt(s.targetConsensus, "price")}${upside != null ? ` (${upside >= 0 ? "+" : ""}${upside.toFixed(0)}% implied upside)` : ""}${s.targetLow != null || s.targetHigh != null ? `, range ${fmt(s.targetLow, "price")}–${fmt(s.targetHigh, "price")}` : ""}`);
+    if (s.ownerEarnings != null) parts.push(`owner earnings/share ${fmt(s.ownerEps, "price")}`);
+    out += `\n- Intrinsic value & analyst targets: ${parts.join("; ")}`;
   }
 
   if (s.profile) {

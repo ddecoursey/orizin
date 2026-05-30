@@ -74,6 +74,14 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
           grades: (activeStock.grades || []).slice(0, 8),
           performance: activeStock.performance || null,
           rsiTrend: activeStock.rsiTrend || null,
+          // DCF fair value, analyst price targets, and owner earnings for the
+          // open stock — lets Ori speak to intrinsic value & analyst upside.
+          dcf: activeStock.aiData?.dcf ?? null,
+          targetConsensus: activeStock.aiData?.target_consensus ?? null,
+          targetHigh: activeStock.aiData?.target_high ?? null,
+          targetLow: activeStock.aiData?.target_low ?? null,
+          ownerEarnings: activeStock.aiData?.owner_earnings ?? null,
+          ownerEps: activeStock.aiData?.owner_eps ?? null,
         }
       : null;
 
@@ -327,12 +335,19 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     });
   }
 
+  // Apply a recommendation by delegating to the screener callback the parent
+  // passed in. Exposed from the hook so callers don't have to mutate the return
+  // value (which React 19 disallows).
+  function applyRecommendation(rec) {
+    if (onApplyUpdates) onApplyUpdates(rec);
+  }
+
   return {
     isOpen, setIsOpen,
     messages, isStreaming, error,
     sessionId, focusSymbols, setFocusSymbols,
     sendMessage, askAboutStock, clearChat,
-    dismissRecommendation,
+    applyRecommendation, dismissRecommendation,
     listSessions, loadSession, deleteSession,
     stockCount: filteredStocks?.length || 0,
   };

@@ -45,6 +45,18 @@ const enrichLimiter = rateLimit({
   validate: { trustProxy: false },
 });
 
+// Light limiter for the per-symbol valuation lookup (DCF / targets / owner
+// earnings). It's cached 24h in the DB, so this only guards against bursts.
+const aiDetailLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30,
+  message: { error: 'Too many requests — slow down a moment.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  validate: { trustProxy: false },
+});
+
 import {
   fetchProfiles,
   fetchKeyMetrics,
@@ -649,6 +661,53 @@ router.get("/stocks/profile/:symbol", async (req, res) => {
     );
     if (!profile) return res.status(404).json({ error: "Profile not found" });
     res.json({ profile });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/ai/:symbol ─────────────────────────────────────────────
+// Lazy per-symbol valuation enrichment for the open stock: DCF fair value,
+// analyst price targets, and owner earnings. Cached 24h in SQLite so reopening
+// a stock is free and we don't hammer FMP. Degrades gracefully if any single
+// FMP endpoint isn't available on the current plan.
+router.get("/stocks/ai/:symbol", aiDetailLimiter, async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const cached = getAiEnrichment(symbol);
+    if (cached && Date.now() - cached.updated_at < 24 * 60 * 60 * 1000) {
+      return res.json({ data: cached });
+    }
+
+    const settled = await Promise.allSettled([
+      fetchDCF(symbol),
+      fetchPriceTarget(symbol),
+      fetchFinancialGrowth(symbol),
+      fetchOwnerEarnings(symbol),
+    ]);
+    const val = (s) => (s.status === "fulfilled" ? s.value : null);
+    const [d, t, g, o] = settled.map(val);
+
+    const row = {
+      dcf: d?.dcf ?? null,
+      stock_price: d?.stock_price ?? null,
+      dcf_date: d?.dcf_date ?? null,
+      target_high: t?.target_high ?? null,
+      target_low: t?.target_low ?? null,
+      target_consensus: t?.target_consensus ?? null,
+      target_median: t?.target_median ?? null,
+      revenue_growth: g?.revenue_growth ?? null,
+      net_income_growth: g?.net_income_growth ?? null,
+      eps_growth: g?.eps_growth ?? null,
+      fcf_growth: g?.fcf_growth ?? null,
+      op_income_growth: g?.op_income_growth ?? null,
+      owner_earnings: o?.owner_earnings ?? null,
+      owner_eps: o?.owner_eps ?? null,
+      growth_capex: o?.growth_capex ?? null,
+      estimates_json: null,
+    };
+    saveAiEnrichment(symbol, row);
+    res.json({ data: { symbol, ...row, updated_at: Date.now() } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

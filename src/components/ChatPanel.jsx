@@ -307,30 +307,17 @@ export default function ChatPanel({ chat }) {
                       <div className="flex gap-2">
                         <button
                           onClick={() => {
-                            const rec = msg.recommendation;
-                            if (rec && chat.applyRecommendation) {
-                              chat.applyRecommendation(rec);
+                            if (msg.recommendation && chat.applyRecommendation) {
+                              chat.applyRecommendation(msg.recommendation);
                             }
-                            if (chat.dismissRecommendation) {
-                              const liveIdx = chat.messages.findIndex(m => m === msg);
-                              if (liveIdx !== -1) {
-                                chat.dismissRecommendation(liveIdx);
-                              }
-                            }
+                            chat.dismissRecommendation?.(i);
                           }}
                           className="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors"
                         >
                           Apply filters
                         </button>
                         <button
-                          onClick={() => {
-                            if (chat.dismissRecommendation) {
-                              const liveIdx = chat.messages.findIndex(m => m === msg);
-                              if (liveIdx !== -1) {
-                                chat.dismissRecommendation(liveIdx);
-                              }
-                            }
-                          }}
+                          onClick={() => chat.dismissRecommendation?.(i)}
                           className="px-3 py-1.5 text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
                         >
                           Don't apply

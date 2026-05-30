@@ -198,8 +198,9 @@ function applyFilters(all, f, pins) {
     const v = f[key];
     if (v == null || v === "") return null;
     if (typeof v === "object") return v;
-    // Legacy: treat grossMin as ">= value"
-    return { op: ">=", value: Number(v) };
+    // Legacy flat number → operator. Default operator follows the key suffix so
+    // a bare "peMax": 20 means "<= 20" (not ">= 20"); "roicMin": 15 means ">= 15".
+    return { op: key.endsWith("Max") ? "<=" : ">=", value: Number(v) };
   }
   const sectorSet = f.sectors?.length ? new Set(f.sectors) : null;
   const industrySet = f.industries?.length ? new Set(f.industries) : null;
@@ -262,10 +263,11 @@ function applyFilters(all, f, pins) {
     if (!numericMatch(p(r.eps_growth), getNumCond(f, "epsGrowthMin"))) return false;
     if (!numericMatch(p(r.fcf_growth), getNumCond(f, "fcfGrowthMin"))) return false;
     if (!numericMatch(p(r.op_income_growth), getNumCond(f, "opIncGrowthMin"))) return false;
-    if (g("r40Min") != null) {
+    const r40Cond = getNumCond(f, "r40Min");
+    if (r40Cond) {
       const margin = r.ebitda_margin ?? r.fcf_margin;
       if (r.revenue_growth == null || margin == null) return false;
-      if ((r.revenue_growth + margin) * 100 < g("r40Min")) return false;
+      if (!numericMatch((r.revenue_growth + margin) * 100, r40Cond)) return false;
     }
     if (!numericMatch(r.pe, getNumCond(f, "peMax"))) return false;
     if (!numericMatch(r.pb, getNumCond(f, "pbMax"))) return false;
@@ -279,13 +281,10 @@ function applyFilters(all, f, pins) {
     if (!numericMatch(r.current_ratio, getNumCond(f, "crMin"))) return false;
     if (!numericMatch(r.debt_equity, getNumCond(f, "deMax"))) return false;
     if (!numericMatch(p(r.div_yield), getNumCond(f, "divMin"))) return false;
-    if (
-      g("payMax") != null &&
-      r.payout != null &&
-      isFinite(r.payout) &&
-      r.payout * 100 > g("payMax")
-    )
-      return false;
+    const payCond = getNumCond(f, "payMax");
+    if (payCond && r.payout != null && isFinite(r.payout)) {
+      if (!numericMatch(r.payout * 100, payCond)) return false;
+    }
     // Beta - support both old min/max and new flexible operator format
     const betaCond = f.beta;
     if (betaCond && typeof betaCond === "object") {
@@ -476,27 +475,6 @@ export function useScreener(currentUser) {
         }
         currentAbortRef.current = null;
       });
-  }
-
-  // Simple retry wrapper for fetch. Useful for transient network hiccups
-  // that happen during hard page refreshes.
-  async function fetchWithRetry(url, options = {}, retries = 3, baseDelay = 220) {
-    let lastError;
-    for (let attempt = 0; attempt < retries; attempt++) {
-      try {
-        const res = await fetch(url, options);
-        // We still let the caller decide what to do with !res.ok,
-        // but we at least retry on actual network failures.
-        return res;
-      } catch (e) {
-        lastError = e;
-        if (attempt < retries - 1) {
-          const delay = baseDelay * Math.pow(1.6, attempt) + Math.random() * 80;
-          await new Promise((r) => setTimeout(r, delay));
-        }
-      }
-    }
-    throw lastError;
   }
 
   async function loadStocks(forceRefresh = false, silent = false) {

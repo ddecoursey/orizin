@@ -14,6 +14,7 @@ export function useStockDetail(symbol) {
   const [rsi, setRsi] = useState({ sym: null, value: [] });
   const [ratings, setRatings] = useState({ sym: null, value: null });
   const [grades, setGrades] = useState({ sym: null, value: [] });
+  const [ai, setAi] = useState({ sym: null, value: null });
 
   useEffect(() => {
     if (!symbol) return;
@@ -23,6 +24,9 @@ export function useStockDetail(symbol) {
 
     getJson(`/api/stocks/profile/${symbol}`).then((d) => {
       if (!cancelled) setProfile({ sym: symbol, value: d?.profile || null });
+    });
+    getJson(`/api/stocks/ai/${symbol}`).then((d) => {
+      if (!cancelled) setAi({ sym: symbol, value: d?.data || null });
     });
     getJson(`/api/stocks/sparkline/${symbol}?days=365`).then((d) => {
       if (!cancelled) setPoints({ sym: symbol, value: d?.prices || [] });
@@ -52,9 +56,11 @@ export function useStockDetail(symbol) {
     rsi: forSym(rsi, []),
     ratings: forSym(ratings, null),
     grades: forSym(grades, []),
+    aiData: forSym(ai, null),
     loadingProfile: !!symbol && profile.sym !== symbol,
     loadingChart: !!symbol && points.sym !== symbol,
     loadingRatings: !!symbol && ratings.sym !== symbol,
     loadingGrades: !!symbol && grades.sym !== symbol,
+    loadingAi: !!symbol && ai.sym !== symbol,
   };
 }

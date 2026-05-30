@@ -191,7 +191,10 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     const filtersToApply = rec.filters || rec.recommendFilters || rec.applyFilters;
 
     if (filtersToApply) {
-      applyFiltersFromAI({ ...filters, ...filtersToApply });
+      // Ori emits flat keys (roicMin: 15, mcapMin: 2); translate them into the
+      // shape the current screener + Sidebar use so the filter both narrows the
+      // results and shows up in the filter inputs.
+      applyFiltersFromAI({ ...filters, ...normalizeRecToFilters(filtersToApply) });
     }
     // weights from recommendations are ignored by design
   };
@@ -215,6 +218,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         profile: detail.profile,
         ratings: detail.ratings,
         grades: detail.grades,
+        aiData: detail.aiData,
         latestRsi: detail.rsi?.length ? detail.rsi[detail.rsi.length - 1].rsi : null,
         performance: pricePerformance(detail.points),
         rsiTrend: rsiTrend(detail.rsi),
@@ -233,10 +237,6 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     activeScreener: activeScreenerName,
     pinnedStocks,
   });
-
-  // Expose functions for the chat panel
-  chat.applyRecommendation = applyRecommendation;
-  chat.dismissRecommendation = chat.dismissRecommendation; // already returned from hook, re-exposing for clarity
 
   // Bump this when the user does a Force Re-gather so the table can also
   // force-refresh its sparklines from the server (which will hit FMP).
@@ -449,10 +449,12 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             rsi={detail.rsi}
             ratings={detail.ratings}
             grades={detail.grades}
+            aiData={detail.aiData}
             loadingProfile={detail.loadingProfile}
             loadingChart={detail.loadingChart}
             loadingRatings={detail.loadingRatings}
             loadingGrades={detail.loadingGrades}
+            loadingAi={detail.loadingAi}
           />
         )}
 
@@ -493,6 +495,80 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       )}
     </div>
   );
+}
+
+// Ori may express a filter many ways — flat number (roicMin: 15), operator
+// object (peMax: {op:'<', value:25}), or a base metric name (roic, pe). This
+// translates any of those into the exact keys + shapes the screener + Sidebar
+// read, so a recommendation is never silently dropped. mcap/price/beta live on
+// a single base key (range-capable); every other numeric metric lives on its
+// Min/Max key as { op, value }.
+const REC_PASSTHROUGH = new Set(["sectors", "industries", "universe", "search", "pinnedOnly", "rule40Only"]);
+const REC_RANGES = { mcap: ["mcapMin", "mcapMax"], price: ["priceMin", "priceMax"], beta: ["betaMin", "betaMax"] };
+const REC_RANGE_FLAT = new Set(["mcapMin", "mcapMax", "priceMin", "priceMax", "betaMin", "betaMax"]);
+// Base metric names → canonical Min/Max key the screener reads.
+const REC_BASE_TO_KEY = {
+  roic: "roicMin", roe: "roeMin", roa: "roaMin",
+  gross: "grossMin", grossmargin: "grossMin",
+  op: "opMin", opmargin: "opMin", operatingmargin: "opMin",
+  net: "netMin", netmargin: "netMin",
+  ebitda: "ebitdaMin", ebitdamargin: "ebitdaMin",
+  fcfmargin: "fcfMargMin",
+  revenuegrowth: "revGrowthMin", revgrowth: "revGrowthMin",
+  epsgrowth: "epsGrowthMin", fcfgrowth: "fcfGrowthMin",
+  opincomegrowth: "opIncGrowthMin", opincgrowth: "opIncGrowthMin",
+  pe: "peMax", pb: "pbMax", ps: "psMax",
+  evebitda: "evEbMax", evsales: "evSMax", evgp: "evGpMax",
+  fcf: "fcfMin", fcfyield: "fcfMin",
+  earningsyield: "earningsYieldMin",
+  nd: "ndMax", netdebtebitda: "ndMax",
+  cr: "crMin", currentratio: "crMin",
+  de: "deMax", debtequity: "deMax", debttoequity: "deMax",
+  div: "divMin", divyield: "divMin", dividend: "divMin",
+  pay: "payMax", payout: "payMax",
+  vol: "volMin", volume: "volMin",
+  r40: "r40Min", ruleof40: "r40Min",
+};
+
+function recNum(v) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function recCanonicalKey(k) {
+  if (REC_PASSTHROUGH.has(k) || k === "mcap" || k === "price" || k === "beta") return k;
+  if (k.endsWith("Min") || k.endsWith("Max")) return k;
+  return REC_BASE_TO_KEY[k.toLowerCase()] || null;
+}
+
+function normalizeRecToFilters(flat) {
+  if (!flat || typeof flat !== "object") return {};
+  const out = {};
+
+  // Fold min/max pairs for the range-capable base keys.
+  for (const [base, [minK, maxK]] of Object.entries(REC_RANGES)) {
+    const minV = recNum(flat[minK]);
+    const maxV = recNum(flat[maxK]);
+    if (minV != null && maxV != null) out[base] = { op: "between", min: minV, max: maxV };
+    else if (minV != null) out[base] = { op: ">=", value: minV };
+    else if (maxV != null) out[base] = { op: "<=", value: maxV };
+  }
+
+  for (const [k, v] of Object.entries(flat)) {
+    if (v == null || v === "" || REC_RANGE_FLAT.has(k)) continue; // ranges handled above
+    const kc = recCanonicalKey(k);
+    if (!kc) continue;
+    if (REC_PASSTHROUGH.has(kc) || Array.isArray(v)) { out[kc] = v; continue; }
+    if (kc === "mcap" || kc === "price" || kc === "beta") {
+      out[kc] = typeof v === "object" ? v : { op: ">=", value: recNum(v) };
+      continue;
+    }
+    if (typeof v === "object") { out[kc] = v; continue; } // operator object passthrough
+    const n = recNum(v);
+    if (n != null) out[kc] = { op: kc.endsWith("Max") ? "<=" : ">=", value: n };
+  }
+  return out;
 }
 
 // Price % change over ~N trading days back from the latest close, plus the

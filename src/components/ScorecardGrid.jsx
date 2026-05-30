@@ -1,6 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { fmt } from '../lib/format.js';
 import { SECTOR_COLORS } from '../lib/scoring.js';
+
+// Cards aren't virtualized (unlike the table), so cap how many DOM nodes we
+// render. The card view is a "browse the best" surface — showing the top N by
+// score keeps it smooth on phones/tablets where it's now the default view.
+const CARD_CAP = 300;
 
 function StatRow({ label, value, type }) {
   const f = fmt(value, type);
@@ -137,18 +142,32 @@ function Scorecard({ r, index, onSelectStock }) {
 const MemoizedScorecard = React.memo(Scorecard);
 
 export default function ScorecardGrid({ rows, onSelectStock }) {
-  const sorted = [...rows].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => (b.score || 0) - (a.score || 0)),
+    [rows],
+  );
+  const shown = sorted.length > CARD_CAP ? sorted.slice(0, CARD_CAP) : sorted;
+
+  if (sorted.length === 0) {
+    return (
+      <div className="flex flex-col items-center py-16 text-gray-500">
+        <span className="text-3xl mb-3">📊</span>
+        <p className="font-medium text-gray-400">No results</p>
+        <p className="text-xs mt-1">Loosen your filters or wait for metrics to finish loading.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-3 grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3">
-      {sorted.map((r, i) => (
-        <MemoizedScorecard key={r.symbol} r={r} index={i} onSelectStock={onSelectStock} />
-      ))}
-      {sorted.length === 0 && (
-        <div className="col-span-full flex flex-col items-center py-16 text-gray-500">
-          <span className="text-3xl mb-3">📊</span>
-          <p className="font-medium text-gray-400">No results</p>
-          <p className="text-xs mt-1">Loosen your filters or wait for metrics to finish loading.</p>
+    <div className="p-3">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3">
+        {shown.map((r, i) => (
+          <MemoizedScorecard key={r.symbol} r={r} index={i} onSelectStock={onSelectStock} />
+        ))}
+      </div>
+      {sorted.length > CARD_CAP && (
+        <div className="text-center text-xs text-gray-500 py-4">
+          Showing the top {CARD_CAP} of {sorted.length} by Orizen Score — narrow your filters to surface more specific names.
         </div>
       )}
     </div>
