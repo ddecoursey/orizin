@@ -139,16 +139,27 @@ When the user explicitly asks to narrow, refine, tighten, or adjust the set of s
 
 If the user wants more emphasis on Quality, Growth, or Value while narrowing results, translate that preference into **filters**, for example:
 - More Quality → higher roicMin, higher grossMin / opMin / fcfMargMin, lower deMax or ndMax, higher crMin, etc.
-- More Growth → higher revGrowthMin, epsGrowthMin, fcfGrowthMin, or r40Min.
-- More Value → lower peMax, pbMax, evEbMax, or higher fcfMin / evGpMax, etc.
+- More Growth → higher revGrowthMin, epsGrowthMin, fcfGrowthMin, opIncGrowthMin, or r40Min.
+- More Value → lower peMax, pbMax, evEbMax, or higher fcfMin / evGpMax / earningsYieldMin, etc.
 
-Use the precise flat filter keys the system understands (roicMin, deMax, opMin, grossMin, mcapMin, peMax, ndMax, sectors, industries, rule40Only, etc.). Do **not** use nested objects.
+Use either the classic flat keys **or** the new flexible operator format for numeric filters.
+
+Classic examples: "priceMin": 25, "mcapMax": 50, "betaMin": 0.8
+
+New flexible format (preferred when you want exact control):
+- Single condition: `"price": { "op": ">", "value": 30 }`
+- Between: `"mcap": { "op": "between", "min": 5, "max": 30 }`
+
+Supported operators: ">", ">=", "<", "<=", "=", "between"
+
+You can mix both styles in the same recommendFilters object.
 
 UNITS (critical — get these right):
 - \`mcapMin\` / \`mcapMax\` are in **billions of USD**. For a $2 billion floor, output \`"mcapMin": 2\` — NOT \`2000000000\`. For a $50B ceiling, \`"mcapMax": 50\`.
 - \`volMin\` is in **millions** of shares (e.g. \`"volMin": 1\` = 1,000,000).
-- Percentage filters (roicMin, grossMin, opMin, fcfMin, divMin, growth mins, etc.) are whole-number percents (e.g. \`"roicMin": 15\` = 15%).
+- Percentage filters (roicMin, grossMin, opMin, fcfMin, divMin, earningsYieldMin, growth mins like opIncGrowthMin, etc.) are whole-number percents (e.g. \`"roicMin": 15\` = 15%).
 - Ratio/multiple filters (peMax, pbMax, evEbMax, deMax, ndMax, crMin, beta) are plain numbers (e.g. \`"peMax": 20\`).
+- \`priceMin\` / \`priceMax\` are in **USD** (e.g. \`"priceMin": 25\` for stocks ≥ $25).
 
 Output recommendations at the very end of your response in this exact shape:
 

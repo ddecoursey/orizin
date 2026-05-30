@@ -135,6 +135,10 @@ export const DEFAULT_FILTERS = {
   payMax: "",
   betaMin: "",
   betaMax: "",
+  priceMin: "",
+  priceMax: "",
+  earningsYieldMin: "",
+  opIncGrowthMin: "",
   sectors: [],
   industries: [],
   search: "",
@@ -152,12 +156,51 @@ function normalizeUniverse(f = {}) {
 function applyFilters(all, f, pins) {
   const g = (k, mul = 1) =>
     f[k] === "" || f[k] == null ? null : Number(f[k]) * mul;
+
+  // New flexible numeric condition checker
+  // Supports: { op: ">", value: 50 }, { op: "between", min: 10, max: 100 }, etc.
+  function numericMatch(rowVal, cond) {
+    if (!cond) return true;
+    if (rowVal == null || !isFinite(rowVal)) return true;
+
+    const { op, value, min, max } = cond;
+
+    if (op === "between" || op === "range") {
+      if (min != null && rowVal < min) return false;
+      if (max != null && rowVal > max) return false;
+      return true;
+    }
+
+    if (value == null || !isFinite(value)) return true;
+
+    switch (op) {
+      case ">":  return rowVal > value;
+      case ">=": return rowVal >= value;
+      case "<":  return rowVal < value;
+      case "<=": return rowVal <= value;
+      case "=":
+      case "==": return rowVal == value;
+      case "!=":
+      case "<>": return rowVal != value;
+      default:   return true;
+    }
+  }
+
   const ok = (val, op, cmp) => {
     if (cmp === null) return true;
     if (val === null || !isFinite(val)) return true;
     return op === ">=" ? val >= cmp : val <= cmp;
   };
   const p = (v) => (v == null ? null : v * 100);
+
+  // Helper: supports both legacy number (e.g. grossMin: 15) and new object style
+  function getNumCond(f, key) {
+    const v = f[key];
+    if (v == null || v === "") return null;
+    if (typeof v === "object") return v;
+    // Legacy: treat grossMin as ">= value"
+    return { op: ">=", value: Number(v) };
+  }
   const sectorSet = f.sectors?.length ? new Set(f.sectors) : null;
   const industrySet = f.industries?.length ? new Set(f.industries) : null;
   const search = (f.search || "").trim().toLowerCase();
@@ -188,37 +231,54 @@ function applyFilters(all, f, pins) {
       return false;
     if (sectorSet && !sectorSet.has(r.sector)) return false;
     if (industrySet && !industrySet.has(r.industry)) return false;
-    if (!ok(r.mcap ? r.mcap / 1e9 : null, ">=", g("mcapMin"))) return false;
-    if (g("mcapMax") != null && r.mcap != null && r.mcap / 1e9 > g("mcapMax"))
-      return false;
-    if (!ok(r.volume ? r.volume / 1e6 : null, ">=", g("volMin"))) return false;
-    if (!ok(p(r.gross_margin), ">=", g("grossMin"))) return false;
-    if (!ok(p(r.op_margin), ">=", g("opMin"))) return false;
-    if (!ok(p(r.net_margin), ">=", g("netMin"))) return false;
-    if (!ok(p(r.ebitda_margin), ">=", g("ebitdaMin"))) return false;
-    if (!ok(p(r.fcf_margin), ">=", g("fcfMargMin"))) return false;
-    if (!ok(p(r.roic), ">=", g("roicMin"))) return false;
-    if (!ok(p(r.roe), ">=", g("roeMin"))) return false;
-    if (!ok(p(r.roa), ">=", g("roaMin"))) return false;
-    if (!ok(p(r.revenue_growth), ">=", g("revGrowthMin"))) return false;
-    if (!ok(p(r.eps_growth), ">=", g("epsGrowthMin"))) return false;
-    if (!ok(p(r.fcf_growth), ">=", g("fcfGrowthMin"))) return false;
+    // Market Cap - support both old and new flexible format
+    const mcapCond = f.mcap;
+    if (mcapCond && typeof mcapCond === "object") {
+      const mcapVal = r.mcap ? r.mcap / 1e9 : null;
+      if (!numericMatch(mcapVal, mcapCond)) return false;
+    } else {
+      if (!ok(r.mcap ? r.mcap / 1e9 : null, ">=", g("mcapMin"))) return false;
+      if (g("mcapMax") != null && r.mcap != null && r.mcap / 1e9 > g("mcapMax"))
+        return false;
+    }
+    if (!numericMatch(r.volume ? r.volume / 1e6 : null, getNumCond(f, "volMin"))) return false;
+    // Price - support both old min/max and new flexible operator format
+    const priceCond = f.price;
+    if (priceCond && typeof priceCond === "object") {
+      if (!numericMatch(r.price, priceCond)) return false;
+    } else {
+      if (!ok(r.price, ">=", g("priceMin"))) return false;
+      if (!ok(r.price, "<=", g("priceMax"))) return false;
+    }
+    if (!numericMatch(p(r.gross_margin), getNumCond(f, "grossMin"))) return false;
+    if (!numericMatch(p(r.op_margin), getNumCond(f, "opMin"))) return false;
+    if (!numericMatch(p(r.net_margin), getNumCond(f, "netMin"))) return false;
+    if (!numericMatch(p(r.ebitda_margin), getNumCond(f, "ebitdaMin"))) return false;
+    if (!numericMatch(p(r.fcf_margin), getNumCond(f, "fcfMargMin"))) return false;
+    if (!numericMatch(p(r.roic), getNumCond(f, "roicMin"))) return false;
+    if (!numericMatch(p(r.roe), getNumCond(f, "roeMin"))) return false;
+    if (!numericMatch(p(r.roa), getNumCond(f, "roaMin"))) return false;
+    if (!numericMatch(p(r.revenue_growth), getNumCond(f, "revGrowthMin"))) return false;
+    if (!numericMatch(p(r.eps_growth), getNumCond(f, "epsGrowthMin"))) return false;
+    if (!numericMatch(p(r.fcf_growth), getNumCond(f, "fcfGrowthMin"))) return false;
+    if (!numericMatch(p(r.op_income_growth), getNumCond(f, "opIncGrowthMin"))) return false;
     if (g("r40Min") != null) {
       const margin = r.ebitda_margin ?? r.fcf_margin;
       if (r.revenue_growth == null || margin == null) return false;
       if ((r.revenue_growth + margin) * 100 < g("r40Min")) return false;
     }
-    if (!ok(r.pe, "<=", g("peMax"))) return false;
-    if (!ok(r.pb, "<=", g("pbMax"))) return false;
-    if (!ok(r.ps, "<=", g("psMax"))) return false;
-    if (!ok(r.ev_ebitda, "<=", g("evEbMax"))) return false;
-    if (!ok(r.ev_sales, "<=", g("evSMax"))) return false;
-    if (!ok(r.ev_gp, "<=", g("evGpMax"))) return false;
-    if (!ok(p(r.fcf_yield), ">=", g("fcfMin"))) return false;
-    if (!ok(r.net_debt_ebitda, "<=", g("ndMax"))) return false;
-    if (!ok(r.current_ratio, ">=", g("crMin"))) return false;
-    if (!ok(r.debt_equity, "<=", g("deMax"))) return false;
-    if (!ok(p(r.div_yield), ">=", g("divMin"))) return false;
+    if (!numericMatch(r.pe, getNumCond(f, "peMax"))) return false;
+    if (!numericMatch(r.pb, getNumCond(f, "pbMax"))) return false;
+    if (!numericMatch(r.ps, getNumCond(f, "psMax"))) return false;
+    if (!numericMatch(r.ev_ebitda, getNumCond(f, "evEbMax"))) return false;
+    if (!numericMatch(r.ev_sales, getNumCond(f, "evSMax"))) return false;
+    if (!numericMatch(r.ev_gp, getNumCond(f, "evGpMax"))) return false;
+    if (!numericMatch(p(r.fcf_yield), getNumCond(f, "fcfMin"))) return false;
+    if (!numericMatch(p(r.earnings_yield), getNumCond(f, "earningsYieldMin"))) return false;
+    if (!numericMatch(r.net_debt_ebitda, getNumCond(f, "ndMax"))) return false;
+    if (!numericMatch(r.current_ratio, getNumCond(f, "crMin"))) return false;
+    if (!numericMatch(r.debt_equity, getNumCond(f, "deMax"))) return false;
+    if (!numericMatch(p(r.div_yield), getNumCond(f, "divMin"))) return false;
     if (
       g("payMax") != null &&
       r.payout != null &&
@@ -226,8 +286,14 @@ function applyFilters(all, f, pins) {
       r.payout * 100 > g("payMax")
     )
       return false;
-    if (!ok(r.beta, ">=", g("betaMin"))) return false;
-    if (!ok(r.beta, "<=", g("betaMax"))) return false;
+    // Beta - support both old min/max and new flexible operator format
+    const betaCond = f.beta;
+    if (betaCond && typeof betaCond === "object") {
+      if (!numericMatch(r.beta, betaCond)) return false;
+    } else {
+      if (!ok(r.beta, ">=", g("betaMin"))) return false;
+      if (!ok(r.beta, "<=", g("betaMax"))) return false;
+    }
     return true;
   });
 }

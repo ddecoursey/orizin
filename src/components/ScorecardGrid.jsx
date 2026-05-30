@@ -82,9 +82,11 @@ function Scorecard({ r, index, onSelectStock }) {
         <StatRow label="Gross M"    value={r.gross_margin}  type="pct" />
         <StatRow label="Op M"       value={r.op_margin}     type="pct" />
         <StatRow label="FCF Yld"    value={r.fcf_yield}     type="pct" />
+        <StatRow label="Earn Yld"   value={r.earnings_yield} type="pct" />
         <StatRow label="Rev Gr"     value={r.revenue_growth} type="pct" />
         <StatRow label="EPS Gr"     value={r.eps_growth}     type="pct" />
         <StatRow label="FCF Gr"     value={r.fcf_growth}     type="pct" />
+        <StatRow label="Op Inc Gr"  value={r.op_income_growth} type="pct" />
         <StatRow label="ND/EBITDA"  value={r.net_debt_ebitda} type="ratio" />
         <StatRow label="Div Yld"    value={r.div_yield}     type="pct" />
       </div>

@@ -461,21 +461,16 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
 
       <Footer />
 
-      {/* Floating Ori button — slides left to clear the detail pane (w-96)
-          when it's open and chat isn't (chat would already sit on top of it). */}
+      {/* Floating Ori button — slides left to clear the detail pane (w-96) when it's open. */}
       <div
         className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
           ${detailStock && !chat.isOpen ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
-          ${chat.isOpen ? 'hidden lg:block' : 'block animate-ori-bounce'}`}
+          ${chat.isOpen ? 'hidden' : 'block animate-ori-bounce'}`}
       >
         <button
           onClick={() => chat.setIsOpen(!chat.isOpen)}
-          className={`w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-sm font-semibold transition-all
-            ${chat.isOpen
-              ? "bg-gray-700 text-gray-300 hover:bg-gray-600"
-              : "bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-white hover:brightness-110 hover:scale-105 shadow-blue-500/30"
-            }`}
-          title="Toggle Ori Chat"
+          className="w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-sm font-semibold transition-all bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-white hover:brightness-110 hover:scale-105 shadow-blue-500/30"
+          title="Open Ori Chat"
         >
           <span 
             className="text-[13px] font-semibold tracking-[1px]"

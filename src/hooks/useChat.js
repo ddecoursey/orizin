@@ -20,6 +20,8 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       op_margin: s.op_margin, net_margin: s.net_margin,
       fcf_margin: s.fcf_margin, roic: s.roic, roe: s.roe, roa: s.roa,
       revenue_growth: s.revenue_growth, eps_growth: s.eps_growth, fcf_growth: s.fcf_growth,
+      op_income_growth: s.op_income_growth,
+      earnings_yield: s.earnings_yield,
       net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
       debt_equity: s.debt_equity, div_yield: s.div_yield,
       payout: s.payout, beta: s.beta, score: s.score,
@@ -490,10 +492,16 @@ function mapNestedToFlat(nestedKey, direction) {
     evgp: 'evGpMax',
     fcfyield: 'fcfMin',
     divyield: 'divMin',
+    earningsyield: 'earningsYieldMin',
+    earnings_yield: 'earningsYieldMin',
+    opincome: 'opIncGrowthMin',
+    opincomegrowth: 'opIncGrowthMin',
+    operatingincomegrowth: 'opIncGrowthMin',
     beta: direction === 'min' ? 'betaMin' : 'betaMax',
     mcap: direction === 'min' ? 'mcapMin' : 'mcapMax',
     marketcap: direction === 'min' ? 'mcapMin' : 'mcapMax',
     volume: 'volMin',
+    price: direction === 'min' ? 'priceMin' : 'priceMax',
   };
 
   return map[k] || null;

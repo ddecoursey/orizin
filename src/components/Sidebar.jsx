@@ -1,6 +1,108 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { DEFAULT_FILTERS } from '../hooks/useScreener.js';
 
+function FilterRow({ label, filterKey, filters, set, step = 1 }) {
+  const isMaxStyle = filterKey.endsWith('Max');
+  const defaultOp = isMaxStyle ? "<=" : ">=";
+  const current = filters[filterKey] || { op: defaultOp };
+  const isBetween = current.op === "between";
+
+  const handleOp = (op) => {
+    const next = { ...current, op };
+    if (op !== "between") {
+      delete next.min;
+      delete next.max;
+    }
+    set(filterKey, next);
+  };
+
+  const handleVal = (key, val) => {
+    const next = { ...current };
+    if (isBetween) {
+      next[key] = val;
+    } else {
+      next.value = val;
+    }
+    set(filterKey, next);
+  };
+
+  const adjust = (delta) => {
+    const next = { ...current };
+    if (isBetween) {
+      const base = Number(next.min || 0);
+      next.min = Math.max(0, base + delta);
+    } else {
+      const base = Number(next.value || 0);
+      next.value = Math.max(0, base + delta);
+    }
+    set(filterKey, next);
+  };
+
+  return (
+    <div className="flex items-center gap-2 mb-1">
+      <label className="flex-1 text-xs text-gray-400">{label}</label>
+
+      <div className="flex items-center flex-shrink-0">
+        <select
+          value={current.op || ">="}
+          onChange={(e) => handleOp(e.target.value)}
+          className="w-8 text-center text-xs bg-gray-900 border border-gray-700 rounded-l px-0.5 py-0.5 text-gray-200 focus:outline-none focus:border-blue-500"
+        >
+          <option value=">=">≥</option>
+          <option value=">">&gt;</option>
+          <option value="<=">≤</option>
+          <option value="<">&lt;</option>
+          <option value="=">=</option>
+          <option value="between">..</option>
+        </select>
+
+        <div className="flex items-center">
+          <input
+            type="number"
+            step={step}
+            value={isBetween ? current.min ?? "" : current.value ?? ""}
+            onChange={(e) => handleVal("min", e.target.value)}
+            className="w-14 px-1 py-0.5 text-xs border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+          />
+
+          {isBetween && (
+            <>
+              <span className="text-gray-500 text-[10px] px-0.5">–</span>
+              <input
+                type="number"
+                step={step}
+                value={current.max ?? ""}
+                onChange={(e) => handleVal("max", e.target.value)}
+                className="w-14 px-1 py-0.5 text-xs border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+            </>
+          )}
+
+          {/* Interval adjusters (▲ ▼) */}
+          <div className="flex flex-col border border-l-0 border-gray-700 rounded-r overflow-hidden">
+            <button
+              type="button"
+              onClick={() => adjust(step)}
+              className="px-1.5 text-[9px] leading-none min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors"
+              title={`+${step}`}
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              onClick={() => adjust(-step)}
+              className="px-1.5 text-[9px] leading-none min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors border-t border-gray-700"
+              title={`-${step}`}
+            >
+              ▼
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
   const numValue = value === '' || value == null ? '' : Number(value);
 
@@ -238,7 +340,7 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
       {/* Backdrop on tablet/phone where the expanded panel floats over the content */}
       <div className="fixed inset-0 z-30 bg-black/50 touch-none lg:hidden" onClick={onToggleCollapsed} />
       <aside className="fixed inset-y-0 left-0 z-40 w-[88vw] max-w-sm shadow-2xl
-        lg:static lg:z-auto lg:w-56 lg:max-w-none lg:shadow-none
+        lg:static lg:z-auto lg:w-72 lg:max-w-none lg:shadow-none
         shrink-0 bg-gray-900 border-r border-gray-800
         flex flex-col overflow-y-auto overflow-x-hidden">
       {/* Sticky header: title + Done (mobile) / collapse (desktop) */}
@@ -255,7 +357,7 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
           <span className="hidden lg:inline">◀</span>
         </button>
       </div>
-      <div className="p-3 flex-1">
+      <div className="p-3 sm:p-4 flex-1">
 
         {/* Pinned only */}
         <label className="flex items-center gap-2 text-xs text-gray-400 mb-1.5 cursor-pointer">
@@ -339,56 +441,110 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
         </Section>
 
         <Section title="Size" defaultOpen>
-          <NumRow label="Mkt cap ≥ $B" value={f.mcapMin} onChange={v => set('mcapMin', v)} step={1} />
-          <NumRow label="Mkt cap ≤ $B" value={f.mcapMax} onChange={v => set('mcapMax', v)} step={5} />
-          <NumRow label="Volume ≥ M"   value={f.volMin}  onChange={v => set('volMin', v)}  step={1} />
+          <FilterRow label="Mkt Cap ($B)" filterKey="mcap" filters={f} set={set} step={1} />
+
+          <FilterRow label="Volume (M)" filterKey="volMin" filters={f} set={set} step={1} />
+
+          <FilterRow label="Price ($)" filterKey="price" filters={f} set={set} step={0.5} />
         </Section>
 
         <Section title="Margins" defaultOpen>
-          <NumRow label="Gross ≥ %"      value={f.grossMin}   onChange={v => set('grossMin', v)}   step={1} />
-          <NumRow label="Operating ≥ %"  value={f.opMin}      onChange={v => set('opMin', v)}      step={1} />
-          <NumRow label="Net ≥ %"        value={f.netMin}     onChange={v => set('netMin', v)}      step={1} />
-          <NumRow label="EBITDA ≥ %"     value={f.ebitdaMin}  onChange={v => set('ebitdaMin', v)}  step={1} />
-          <NumRow label="FCF margin ≥ %" value={f.fcfMargMin} onChange={v => set('fcfMargMin', v)} step={1} />
+          <FilterRow label="Gross Margin"   filterKey="grossMin"   filters={f} set={set} step={1} />
+          <FilterRow label="Op Margin"      filterKey="opMin"      filters={f} set={set} step={1} />
+          <FilterRow label="Net Margin"     filterKey="netMin"     filters={f} set={set} step={1} />
+          <FilterRow label="EBITDA Margin"  filterKey="ebitdaMin"  filters={f} set={set} step={1} />
+          <FilterRow label="FCF Margin"     filterKey="fcfMargMin" filters={f} set={set} step={1} />
         </Section>
 
         <Section title="Returns" defaultOpen>
-          <NumRow label="ROIC ≥ %" value={f.roicMin} onChange={v => set('roicMin', v)} step={1} />
-          <NumRow label="ROE ≥ %"  value={f.roeMin}  onChange={v => set('roeMin', v)}  step={1} />
-          <NumRow label="ROA ≥ %"  value={f.roaMin}  onChange={v => set('roaMin', v)}  step={1} />
+          <FilterRow label="ROIC" filterKey="roicMin" filters={f} set={set} step={1} />
+          <FilterRow label="ROE"  filterKey="roeMin"  filters={f} set={set} step={1} />
+          <FilterRow label="ROA"  filterKey="roaMin"  filters={f} set={set} step={1} />
         </Section>
 
         <Section title="Growth" defaultOpen>
-          <NumRow label="Revenue ≥ %"  value={f.revGrowthMin} onChange={v => set('revGrowthMin', v)} step={1} />
-          <NumRow label="EPS ≥ %"      value={f.epsGrowthMin} onChange={v => set('epsGrowthMin', v)} step={1} />
-          <NumRow label="FCF ≥ %"      value={f.fcfGrowthMin} onChange={v => set('fcfGrowthMin', v)} step={1} />
-          <NumRow label="Rule of 40 ≥" value={f.r40Min}       onChange={v => set('r40Min', v)}      step={1} />
+          <FilterRow label="Revenue Growth" filterKey="revGrowthMin" filters={f} set={set} step={1} />
+          <FilterRow label="EPS Growth"     filterKey="epsGrowthMin" filters={f} set={set} step={1} />
+          <FilterRow label="FCF Growth"     filterKey="fcfGrowthMin" filters={f} set={set} step={1} />
+          <FilterRow label="Op Inc Growth"  filterKey="opIncGrowthMin" filters={f} set={set} step={1} />
+          <FilterRow label="Rule of 40"     filterKey="r40Min" filters={f} set={set} step={1} />
         </Section>
 
         <Section title="Valuation" defaultOpen>
-          <NumRow label="P/E ≤"        value={f.peMax}   onChange={v => set('peMax', v)}   step={1} />
-          <NumRow label="P/B ≤"        value={f.pbMax}   onChange={v => set('pbMax', v)}   step={0.5} />
-          <NumRow label="P/S ≤"        value={f.psMax}   onChange={v => set('psMax', v)}   step={0.5} />
-          <NumRow label="EV/EBITDA ≤"  value={f.evEbMax} onChange={v => set('evEbMax', v)} step={0.5} />
-          <NumRow label="EV/Sales ≤"   value={f.evSMax}  onChange={v => set('evSMax', v)}  step={0.2} />
-          <NumRow label="EV/GP ≤"      value={f.evGpMax} onChange={v => set('evGpMax', v)} step={0.5} />
-          <NumRow label="FCF yield ≥ %" value={f.fcfMin} onChange={v => set('fcfMin', v)} step={0.5} />
+          <FilterRow label="P/E"        filterKey="peMax"   filters={f} set={set} step={1} />
+          <FilterRow label="P/B"        filterKey="pbMax"   filters={f} set={set} step={0.5} />
+          <FilterRow label="P/S"        filterKey="psMax"   filters={f} set={set} step={0.5} />
+          <FilterRow label="EV/EBITDA"  filterKey="evEbMax" filters={f} set={set} step={0.5} />
+          <FilterRow label="EV/Sales"   filterKey="evSMax"  filters={f} set={set} step={0.2} />
+          <FilterRow label="EV/GP"      filterKey="evGpMax" filters={f} set={set} step={0.5} />
+          <FilterRow label="FCF Yield"  filterKey="fcfMin"  filters={f} set={set} step={0.5} />
+          <FilterRow label="Earn Yield" filterKey="earningsYieldMin" filters={f} set={set} step={0.5} />
         </Section>
 
         <Section title="Balance Sheet">
-          <NumRow label="ND/EBITDA ≤"     value={f.ndMax} onChange={v => set('ndMax', v)} step={0.1} />
-          <NumRow label="Current ratio ≥" value={f.crMin} onChange={v => set('crMin', v)} step={0.1} />
-          <NumRow label="D/E ≤"           value={f.deMax} onChange={v => set('deMax', v)} step={0.1} />
+          <FilterRow label="ND/EBITDA"     filterKey="ndMax" filters={f} set={set} step={0.1} />
+          <FilterRow label="Current Ratio" filterKey="crMin" filters={f} set={set} step={0.1} />
+          <FilterRow label="D/E"           filterKey="deMax" filters={f} set={set} step={0.1} />
         </Section>
 
         <Section title="Dividend">
-          <NumRow label="Yield ≥ %"  value={f.divMin} onChange={v => set('divMin', v)} step={0.25} />
-          <NumRow label="Payout ≤ %" value={f.payMax} onChange={v => set('payMax', v)} step={1} />
+          <FilterRow label="Div Yield" filterKey="divMin"  filters={f} set={set} step={0.25} />
+          <FilterRow label="Payout"    filterKey="payMax" filters={f} set={set} step={1} />
         </Section>
 
         <Section title="Risk">
-          <NumRow label="Beta ≥" value={f.betaMin} onChange={v => set('betaMin', v)} step={0.1} />
-          <NumRow label="Beta ≤" value={f.betaMax} onChange={v => set('betaMax', v)} step={0.1} />
+          {/* Beta - operator + value (compact) */}
+          <div className="flex items-center gap-2 mb-1">
+            <label className="flex-1 text-xs text-gray-400">Beta</label>
+            <div className="flex items-center gap-1 flex-shrink-0">
+              <select
+                value={f.beta?.op || ">="}
+                onChange={e => {
+                  const current = f.beta || {};
+                  set("beta", { ...current, op: e.target.value });
+                }}
+                className="w-8 text-center text-xs bg-gray-900 border border-gray-700 rounded px-0.5 py-0.5 text-gray-200 focus:outline-none focus:border-blue-500"
+              >
+                <option value=">=">≥</option>
+                <option value=">">&gt;</option>
+                <option value="<=">≤</option>
+                <option value="<">&lt;</option>
+                <option value="=">=</option>
+                <option value="between">..</option>
+              </select>
+
+              <input
+                type="number"
+                step={0.1}
+                value={f.beta?.op === "between" ? f.beta?.min ?? "" : f.beta?.value ?? ""}
+                onChange={e => {
+                  const current = f.beta || { op: ">=" };
+                  if (current.op === "between") {
+                    set("beta", { ...current, min: e.target.value });
+                  } else {
+                    set("beta", { ...current, value: e.target.value });
+                  }
+                }}
+                className="w-14 px-1 py-0.5 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+              />
+
+              {f.beta?.op === "between" && (
+                <>
+                  <span className="text-gray-500 text-[10px]">–</span>
+                  <input
+                    type="number"
+                    step={0.1}
+                    value={f.beta?.max ?? ""}
+                    onChange={e => {
+                      const current = f.beta || { op: "between" };
+                      set("beta", { ...current, max: e.target.value });
+                    }}
+                    className="w-14 px-1 py-0.5 text-xs rounded border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                  />
+                </>
+              )}
+            </div>
+          </div>
         </Section>
 
         {/* Reset */}
