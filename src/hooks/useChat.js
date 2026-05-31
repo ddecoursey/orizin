@@ -38,52 +38,68 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     const allSectors = [...new Set((filteredStocks || []).map(s => s.sector).filter(Boolean))].sort();
     const allIndustries = [...new Set((filteredStocks || []).map(s => s.industry).filter(Boolean))].sort();
 
-    // The stock the user currently has open in the detail pane (if any), with
-    // the richer data Ori can't see from the table alone (profile/ratings/grades/RSI).
-    const activeStockContext = activeStock
-      ? {
-          symbol: activeStock.symbol,
-          name: activeStock.name,
-          sector: activeStock.sector,
-          industry: activeStock.industry,
-          price: activeStock.price,
-          mcap: activeStock.mcap,
-          pe: activeStock.pe, pb: activeStock.pb, ps: activeStock.ps,
-          ev_ebitda: activeStock.ev_ebitda, ev_sales: activeStock.ev_sales, ev_gp: activeStock.ev_gp,
-          fcf_yield: activeStock.fcf_yield, gross_margin: activeStock.gross_margin,
-          op_margin: activeStock.op_margin, net_margin: activeStock.net_margin,
-          fcf_margin: activeStock.fcf_margin, roic: activeStock.roic, roe: activeStock.roe, roa: activeStock.roa,
-          revenue_growth: activeStock.revenue_growth, eps_growth: activeStock.eps_growth, fcf_growth: activeStock.fcf_growth,
-          net_debt_ebitda: activeStock.net_debt_ebitda, current_ratio: activeStock.current_ratio,
-          debt_equity: activeStock.debt_equity, div_yield: activeStock.div_yield, beta: activeStock.beta,
-          score: activeStock.score, qScore: activeStock.qScore, vScore: activeStock.vScore, gScore: activeStock.gScore,
-          latestRsi: activeStock.latestRsi,
-          profile: activeStock.profile
-            ? {
-                description: activeStock.profile.description,
-                ceo: activeStock.profile.ceo,
-                fullTimeEmployees: activeStock.profile.fullTimeEmployees,
-                website: activeStock.profile.website,
-                country: activeStock.profile.country,
-                ipoDate: activeStock.profile.ipoDate,
-                range: activeStock.profile.range,
-                exchange: activeStock.profile.exchangeFullName || activeStock.profile.exchange,
-              }
-            : null,
-          ratings: activeStock.ratings || null,
-          grades: (activeStock.grades || []).slice(0, 8),
-          performance: activeStock.performance || null,
-          rsiTrend: activeStock.rsiTrend || null,
-          // DCF fair value, analyst price targets, and owner earnings for the
-          // open stock — lets Ori speak to intrinsic value & analyst upside.
-          dcf: activeStock.aiData?.dcf ?? null,
-          targetConsensus: activeStock.aiData?.target_consensus ?? null,
-          targetHigh: activeStock.aiData?.target_high ?? null,
-          targetLow: activeStock.aiData?.target_low ?? null,
-          ownerEarnings: activeStock.aiData?.owner_earnings ?? null,
-          ownerEps: activeStock.aiData?.owner_eps ?? null,
-        }
-      : null;
+    function toContextStock(s) {
+      if (!s) return null;
+      return {
+        symbol: s.symbol,
+        name: s.name,
+        sector: s.sector,
+        industry: s.industry,
+        price: s.price,
+        mcap: s.mcap,
+        pe: s.pe, pb: s.pb, ps: s.ps,
+        ev_ebitda: s.ev_ebitda, ev_sales: s.ev_sales, ev_gp: s.ev_gp,
+        fcf_yield: s.fcf_yield, gross_margin: s.gross_margin,
+        op_margin: s.op_margin, net_margin: s.net_margin,
+        fcf_margin: s.fcf_margin, roic: s.roic, roe: s.roe, roa: s.roa,
+        revenue_growth: s.revenue_growth, eps_growth: s.eps_growth, fcf_growth: s.fcf_growth,
+        net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
+        debt_equity: s.debt_equity, div_yield: s.div_yield, beta: s.beta,
+        score: s.score, qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
+        latestRsi: s.latestRsi,
+        profile: s.profile
+          ? {
+              description: s.profile.description,
+              ceo: s.profile.ceo,
+              fullTimeEmployees: s.profile.fullTimeEmployees,
+              website: s.profile.website,
+              country: s.profile.country,
+              ipoDate: s.profile.ipoDate,
+              range: s.profile.range,
+              exchange: s.profile.exchangeFullName || s.profile.exchange,
+            }
+          : null,
+        ratings: s.ratings || null,
+        grades: (s.grades || []).slice(0, 8),
+        performance: s.performance || null,
+        rsiTrend: s.rsiTrend || null,
+        // DCF fair value, analyst price targets, and owner earnings.
+        dcf: s.aiData?.dcf ?? null,
+        targetConsensus: s.aiData?.target_consensus ?? null,
+        targetHigh: s.aiData?.target_high ?? null,
+        targetLow: s.aiData?.target_low ?? null,
+        ownerEarnings: s.aiData?.owner_earnings ?? null,
+        ownerEps: s.aiData?.owner_eps ?? null,
+        // Recent insider (Form 4) trades.
+        insider: (s.insider || []).slice(0, 10).map((t) => ({
+          date: t.transactionDate || t.filingDate,
+          name: t.reportingName,
+          role: t.typeOfOwner,
+          type: t.acquisitionOrDisposition,
+          shares: t.securitiesTransacted,
+          price: t.price,
+        })),
+        // Recent company-specific news.
+        news: (s.news || []).slice(0, 8).map((a) => ({
+          title: a.title,
+          source: a.site || a.publisher,
+          date: a.publishedDate,
+        })),
+      };
+    }
+
+    const activeStockContext = toContextStock(activeStock);
+    const focusStocksContext = (session.focusStocks || []).map(toContextStock).filter(Boolean);
 
     return {
       filters,
@@ -92,7 +108,16 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       totalFiltered: (filteredStocks || []).length,
       activeScreener: session.activeScreener || null,
       pinnedStocks: (session.pinnedStocks || []).map(compact),
+      news: (session.news || []).slice(0, 10).map((a) => ({
+        title: a.title,
+        source: a.site || a.publisher,
+        symbol: a.symbol,
+        date: a.publishedDate,
+      })),
       activeStock: activeStockContext,
+      focusStocks: focusStocksContext,
+      // User's portfolios + goals (framing context for all Ori advice)
+      portfolioGoals: session.portfolioGoals || null,
       stocks: top.map(compact),
       availableSectors: allSectors,
       availableIndustries: allIndustries,
@@ -254,6 +279,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
   }
 
   function askAboutStock(symbol) {
+    if (session?.onFocusStock) session.onFocusStock(symbol);
     setFocusSymbols([symbol]);
     setIsOpen(true);
     sendMessage(`Analyze ${symbol} — is it a good investment right now? Consider its valuation, quality metrics, and how it compares to peers in the current filtered set.`);

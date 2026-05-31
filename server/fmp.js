@@ -581,3 +581,76 @@ export async function fetchOwnerEarnings(symbol) {
     return null;
   }
 }
+
+// Latest general market news (for the footer ticker + Ori context).
+export async function fetchGeneralNews({ limit = 30 } = {}) {
+  const url = `${BASE}/news/general-latest?page=0&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 10000);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((a) => ({
+        title: a.title ?? null,
+        publisher: a.publisher ?? a.site ?? null,
+        site: a.site ?? null,
+        url: a.url ?? null,
+        image: a.image ?? null,
+        symbol: a.symbol ?? null,
+        publishedDate: a.publishedDate ?? null,
+      }))
+      .filter((a) => a.title && a.url);
+  } catch (e) {
+    console.warn(`[FMP] general-news:`, e.message);
+    return [];
+  }
+}
+
+// Latest news for a specific symbol (company news tab).
+export async function fetchStockNews(symbol, { limit = 20 } = {}) {
+  const url = `${BASE}/news/stock?symbols=${symbol}&page=0&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 10000);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((a) => ({
+        title: a.title ?? null,
+        publisher: a.publisher ?? a.site ?? null,
+        site: a.site ?? null,
+        url: a.url ?? null,
+        image: a.image ?? null,
+        symbol: a.symbol ?? null,
+        text: a.text ?? null,
+        publishedDate: a.publishedDate ?? null,
+      }))
+      .filter((a) => a.title && a.url);
+  } catch (e) {
+    console.warn(`[FMP] stock-news ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Insider trading activity for a symbol (Form 4 buys/sells by executives/directors).
+export async function fetchInsiderTrades(symbol, { limit = 40 } = {}) {
+  const url = `${BASE}/insider-trading/search?symbol=${symbol}&page=0&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 3, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map((t) => ({
+      filingDate: t.filingDate ?? null,
+      transactionDate: t.transactionDate ?? null,
+      reportingName: t.reportingName ?? null,
+      typeOfOwner: t.typeOfOwner ?? null,
+      transactionType: t.transactionType ?? null,
+      // 'A' = acquisition (buy), 'D' = disposition (sell)
+      acquisitionOrDisposition: t.acquisitionOrDisposition ?? null,
+      securitiesTransacted: n(t.securitiesTransacted),
+      price: n(t.price),
+      securitiesOwned: n(t.securitiesOwned),
+      securityName: t.securityName ?? null,
+      url: t.url ?? null,
+    }));
+  } catch (e) {
+    console.warn(`[FMP] insider-trading ${symbol}:`, e.message);
+    return [];
+  }
+}

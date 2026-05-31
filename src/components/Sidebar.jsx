@@ -569,6 +569,10 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
               onChange={e => setAddInput(e.target.value.toUpperCase())}
               onKeyDown={e => e.key === 'Enter' && handleAdd()}
               placeholder="e.g. PYPL"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="characters"
+              spellCheck={false}
               className="flex-1 min-w-0 px-2 py-1 text-xs rounded border border-gray-700
                 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500 uppercase"
             />

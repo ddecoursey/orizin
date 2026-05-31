@@ -75,6 +75,20 @@
   animation: ori-bounce 2.2s ease-in-out infinite;
 }
 
+/* Right-to-left news ticker. The inner track holds two identical copies of the
+   headline list, so translating it -50% loops seamlessly. */
+@keyframes orizen-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: orizen-marquee 240s linear infinite;
+  will-change: transform;
+}
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
 
 
 /* Pinned row sticky cells (amber in dark mode → soft warm yellow in light) */

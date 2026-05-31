@@ -51,6 +51,8 @@ export default function Header({
   isAdmin,
   onLogout,
   onManageUsers,
+  currentView = 'screener',
+  onNavigate,
 }) {
   const missing = filtered.filter((r) => !r.has_km || !r.has_rat).length;
   const isFullyEnriched = missing === 0;
@@ -65,9 +67,10 @@ export default function Header({
     if (count === 0) return;
 
     const confirmText = force
-      ? `Force re-gather financial data for all ${count} visible stock${count === 1 ? "" : "s"}?\n\n` +
-        `This will re-fetch key metrics, ratios, growth, and DCF from FMP even for already-enriched symbols.\n` +
-        `Heavy API call — can take several minutes.`
+      ? `Force re-gather ALL data for ${count} visible stock${count === 1 ? "" : "s"} from FMP?\n\n` +
+        `This refreshes the table + EVERYTHING in the company overview panels:\n` +
+        `metrics, DCF, analyst targets, profiles, insider trades, news, RSI, ratings, grades, and full price history.\n` +
+        `Heavy operation — can take 15-40+ minutes on large universes.`
       : `Gather full financial data for ${count} stock${count === 1 ? "" : "s"} from FMP?\n\n` +
         `This is a heavy API call — depending on the count it can take several minutes. ` +
         `Are you sure you want to continue?`;
@@ -114,6 +117,17 @@ export default function Header({
 
       {/* Right: Data menu + Profile menu */}
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        {/* Portfolio & Goals navigation */}
+        <button
+          onClick={() => onNavigate?.(currentView === 'portfolio-goals' ? 'screener' : 'portfolio-goals')}
+          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5
+            ${currentView === 'portfolio-goals' 
+              ? 'bg-violet-600 border-violet-500 text-white' 
+              : 'bg-gray-900 border-gray-800 text-gray-300 hover:bg-gray-800 hover:text-white'}`}
+        >
+          📊 Portfolio & Goals
+        </button>
+
         {/* Data menu (Refresh / Gather) */}
         <HeaderMenu
           width="w-64"

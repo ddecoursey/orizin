@@ -404,6 +404,102 @@ function Stat({ label, value, type }) {
   );
 }
 
+// Recent insider (Form 4) trades, with a quick buy/sell tally across the window.
+function InsiderList({ trades }) {
+  const top = trades.slice(0, 8);
+  let buys = 0, sells = 0;
+  for (const t of trades) {
+    if (t.acquisitionOrDisposition === "A") buys++;
+    else if (t.acquisitionOrDisposition === "D") sells++;
+  }
+  const fmtShares = (v) => (v == null ? "—" : Math.abs(v).toLocaleString());
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2 text-[10px]">
+        <span className="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 font-semibold">{buys} buys</span>
+        <span className="px-1.5 py-0.5 rounded bg-red-900/40 text-red-300 font-semibold">{sells} sells</span>
+        <span className="text-gray-600">in recent filings</span>
+      </div>
+      <div className="space-y-1.5">
+        {top.map((t, i) => {
+          const buy = t.acquisitionOrDisposition === "A";
+          return (
+            <div key={i} className="flex items-center gap-2 text-[11px] border-b border-gray-800/50 pb-1.5">
+              <span className="text-gray-500 font-mono w-[64px] shrink-0">{t.transactionDate || t.filingDate || "—"}</span>
+              <span className="flex-1 min-w-0">
+                <span className="text-gray-300 truncate block" title={t.reportingName || ""}>{t.reportingName || "—"}</span>
+                <span className="text-[9px] text-gray-600 truncate block">{t.typeOfOwner || ""}</span>
+              </span>
+              <span className={`px-1.5 py-0.5 rounded text-[9px] font-semibold whitespace-nowrap shrink-0 ${buy ? "bg-emerald-900/40 text-emerald-300" : "bg-red-900/40 text-red-300"}`}>
+                {buy ? "Buy" : "Sell"}
+              </span>
+              <span className="text-gray-400 font-mono w-[60px] text-right shrink-0">{fmtShares(t.securitiesTransacted)}</span>
+              <span className="text-gray-500 font-mono w-[52px] text-right shrink-0">{t.price ? fmt(t.price, "price") : "—"}</span>
+            </div>
+          );
+        })}
+      </div>
+      {trades[0]?.url && (
+        <a
+          href={trades[0].url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block mt-2 text-[10px] text-blue-400 hover:underline"
+        >
+          View latest Form 4 filing →
+        </a>
+      )}
+    </div>
+  );
+}
+
+function relDate(d) {
+  if (!d) return "";
+  const t = new Date(String(d).replace(" ", "T")).getTime();
+  if (!isFinite(t)) return "";
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 60) return `${Math.max(1, mins)}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.round(hrs / 24);
+  return days < 30 ? `${days}d ago` : new Date(t).toLocaleDateString();
+}
+
+// Latest news for the open company (News tab). Each links out to the article.
+function StockNewsList({ news }) {
+  return (
+    <div className="space-y-2.5">
+      {news.slice(0, 15).map((a, i) => (
+        <a
+          key={i}
+          href={a.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex gap-2.5 group"
+        >
+          {a.image && (
+            <img
+              src={a.image}
+              alt=""
+              className="w-14 h-14 rounded object-cover bg-gray-800 shrink-0"
+              onError={(e) => (e.currentTarget.style.display = "none")}
+            />
+          )}
+          <div className="min-w-0">
+            <div className="text-xs text-gray-200 group-hover:text-blue-300 leading-snug line-clamp-2">
+              {a.title}
+            </div>
+            <div className="text-[10px] text-gray-600 mt-0.5">
+              {a.site || a.publisher}
+              {a.publishedDate ? ` · ${relDate(a.publishedDate)}` : ""}
+            </div>
+          </div>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 // DCF fair value + analyst price targets + owner earnings for the open stock.
 // Renders nothing if none of it is available (e.g. the FMP plan doesn't expose
 // these endpoints), so it never shows an empty shell.
@@ -472,13 +568,32 @@ export default function StockDetailModal({
   ratings = null,
   grades = [],
   aiData = null,
+  insider = [],
+  news = [],
   loadingProfile = false,
   loadingChart = false,
   loadingRatings = false,
   loadingGrades = false,
   loadingAi = false,
+  loadingInsider = false,
+  loadingNews = false,
+  comparePicking = false,
+  onStartCompare = null,
+  onCancelCompare = null,
+  onPickSecond = null,
+  onCompare = null,
+  tab = null,
+  onTabChange = null,
+  scrollRef = null,
+  onScrollSync = null,
 }) {
   const symbol = symbolProp || row?.symbol;
+  const [pickInput, setPickInput] = useState("");
+  // Tab can be controlled (by the parent, to keep two compare panes in sync) or
+  // managed internally for a standalone overview.
+  const [tabInternal, setTabInternal] = useState("overview");
+  const activeTab = tab ?? tabInternal;
+  const setActiveTab = onTabChange || setTabInternal;
 
   // Close on Escape
   useEffect(() => {
@@ -547,8 +662,58 @@ export default function StockDetailModal({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-5">
-          {/* Price chart */}
+        {/* Compare controls */}
+        {onCompare ? (
+          <button
+            onClick={onCompare}
+            className="shrink-0 mx-4 mt-2 py-1.5 rounded-md text-xs font-semibold bg-blue-600/20 text-blue-300 border border-blue-800/50 hover:bg-blue-600/30 transition-colors"
+          >
+            🆚 Compare head-to-head
+          </button>
+        ) : comparePicking ? (
+          <div className="shrink-0 mx-4 mt-2 p-2 rounded-md bg-blue-950/40 border border-blue-900/60">
+            <div className="text-[10px] text-blue-300 mb-1.5">
+              Pick a second company — click another stock, or type its ticker:
+            </div>
+            <div className="flex gap-1.5">
+              <input
+                value={pickInput}
+                onChange={(e) => setPickInput(e.target.value.toUpperCase())}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && pickInput.trim()) {
+                    onPickSecond?.(pickInput.trim());
+                    setPickInput("");
+                  }
+                }}
+                placeholder="e.g. MSFT"
+                autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false}
+                className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 uppercase outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={() => { if (pickInput.trim()) { onPickSecond?.(pickInput.trim()); setPickInput(""); } }}
+                className="px-2.5 py-1 rounded text-xs font-semibold bg-blue-600 text-white hover:bg-blue-500"
+              >
+                Open
+              </button>
+              <button
+                onClick={() => { setPickInput(""); onCancelCompare?.(); }}
+                className="px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : onStartCompare ? (
+          <button
+            onClick={onStartCompare}
+            className="shrink-0 mx-4 mt-2 py-1.5 rounded-md text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors"
+          >
+            🆚 Compare with another company
+          </button>
+        ) : null}
+
+        <div ref={scrollRef} onScroll={onScrollSync} className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-5">
+          {/* Price chart — always visible */}
           <div>
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
               Price — last 12 months
@@ -560,10 +725,10 @@ export default function StockDetailModal({
             )}
           </div>
 
-          {/* Valuation & analyst targets (DCF fair value, consensus, owner earnings) */}
+          {/* Valuation & analyst targets — always visible */}
           <Valuation aiData={aiData} loading={loadingAi} price={row.price} />
 
-          {/* Ratings snapshot */}
+          {/* Ratings snapshot — always visible */}
           <div>
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
               Ratings Snapshot
@@ -577,107 +742,136 @@ export default function StockDetailModal({
             )}
           </div>
 
-          {/* Analyst grades */}
-          <div>
-            <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
-              Analyst Grades
-            </h3>
-            {loadingGrades ? (
+          {/* Tabs */}
+          <div className="flex gap-1 border-b border-gray-800 -mx-4 px-4 sticky top-0 bg-gray-900 z-[1]">
+            {[
+              ["overview", "Overview"],
+              ["grades", "Grades"],
+              ["insider", "Insider"],
+              ["news", "News"],
+            ].map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setActiveTab(id)}
+                className={`px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors ${
+                  activeTab === id
+                    ? "border-blue-500 text-gray-100"
+                    : "border-transparent text-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab content */}
+          {activeTab === "overview" && (
+            <>
+              <div>
+                <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
+                  Company Overview
+                </h3>
+                {loadingProfile ? (
+                  <div className="space-y-2">
+                    <div className="h-3 bg-gray-900 rounded animate-pulse" />
+                    <div className="h-3 bg-gray-900 rounded animate-pulse w-5/6" />
+                    <div className="h-3 bg-gray-900 rounded animate-pulse w-4/6" />
+                  </div>
+                ) : profile ? (
+                  <>
+                    {profile.description && (
+                      <p className="text-xs text-gray-400 leading-relaxed mb-3">{profile.description}</p>
+                    )}
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4">
+                      {profile.ceo && <Field label="CEO" value={profile.ceo} />}
+                      {profile.industry && <Field label="Industry" value={profile.industry} />}
+                      {profile.fullTimeEmployees && (
+                        <Field label="Employees" value={Number(profile.fullTimeEmployees).toLocaleString()} />
+                      )}
+                      {(profile.exchangeFullName || profile.exchange) && (
+                        <Field label="Exchange" value={profile.exchangeFullName || profile.exchange} />
+                      )}
+                      {(profile.city || profile.country) && (
+                        <Field
+                          label="HQ"
+                          value={[profile.city, profile.state, profile.country].filter(Boolean).join(", ")}
+                        />
+                      )}
+                      {profile.ipoDate && <Field label="IPO Date" value={profile.ipoDate} />}
+                      {profile.range && <Field label="52W Range" value={profile.range} />}
+                      {profile.website && (
+                        <Field
+                          label="Website"
+                          value={
+                            <a
+                              href={profile.website}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-400 hover:underline truncate"
+                            >
+                              {profile.website.replace(/^https?:\/\//, "")}
+                            </a>
+                          }
+                        />
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs text-gray-600">No company profile available for {symbol}.</p>
+                )}
+              </div>
+
+              <div>
+                <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
+                  Key Metrics
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-5">
+                  <Stat label="Mkt Cap" value={row.mcap} type="money" />
+                  <Stat label="P/E" value={row.pe} type="x" />
+                  <Stat label="P/B" value={row.pb} type="x" />
+                  <Stat label="EV/EBITDA" value={row.ev_ebitda} type="x" />
+                  <Stat label="EV/GP" value={row.ev_gp} type="x" />
+                  <Stat label="FCF Yld" value={row.fcf_yield} type="pct" />
+                  <Stat label="ROIC" value={row.roic} type="pct" />
+                  <Stat label="ROE" value={row.roe} type="pct" />
+                  <Stat label="Gross M" value={row.gross_margin} type="pct" />
+                  <Stat label="Op M" value={row.op_margin} type="pct" />
+                  <Stat label="Net M" value={row.net_margin} type="pct" />
+                  <Stat label="Rev Gr" value={row.revenue_growth} type="pct" />
+                  <Stat label="EPS Gr" value={row.eps_growth} type="pct" />
+                  <Stat label="ND/EBITDA" value={row.net_debt_ebitda} type="ratio" />
+                  <Stat label="Div Yld" value={row.div_yield} type="pct" />
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === "grades" &&
+            (loadingGrades ? (
               <div className="h-24 bg-gray-900/50 rounded-lg animate-pulse" />
             ) : grades.length ? (
               <GradesList grades={grades} />
             ) : (
-              <p className="text-xs text-gray-600">No recent grades for {symbol}.</p>
-            )}
-          </div>
+              <p className="text-xs text-gray-600">No recent analyst grades for {symbol}.</p>
+            ))}
 
-          {/* Company overview */}
-          <div>
-            <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
-              Company Overview
-            </h3>
-            {loadingProfile ? (
-              <div className="space-y-2">
-                <div className="h-3 bg-gray-900 rounded animate-pulse" />
-                <div className="h-3 bg-gray-900 rounded animate-pulse w-5/6" />
-                <div className="h-3 bg-gray-900 rounded animate-pulse w-4/6" />
-              </div>
-            ) : profile ? (
-              <>
-                {profile.description && (
-                  <p className="text-xs text-gray-400 leading-relaxed mb-3">
-                    {profile.description}
-                  </p>
-                )}
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4">
-                  {profile.ceo && <Field label="CEO" value={profile.ceo} />}
-                  {profile.industry && <Field label="Industry" value={profile.industry} />}
-                  {profile.fullTimeEmployees && (
-                    <Field
-                      label="Employees"
-                      value={Number(profile.fullTimeEmployees).toLocaleString()}
-                    />
-                  )}
-                  {(profile.exchangeFullName || profile.exchange) && (
-                    <Field label="Exchange" value={profile.exchangeFullName || profile.exchange} />
-                  )}
-                  {(profile.city || profile.country) && (
-                    <Field
-                      label="HQ"
-                      value={[profile.city, profile.state, profile.country]
-                        .filter(Boolean)
-                        .join(", ")}
-                    />
-                  )}
-                  {profile.ipoDate && <Field label="IPO Date" value={profile.ipoDate} />}
-                  {profile.range && <Field label="52W Range" value={profile.range} />}
-                  {profile.website && (
-                    <Field
-                      label="Website"
-                      value={
-                        <a
-                          href={profile.website}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-400 hover:underline truncate"
-                        >
-                          {profile.website.replace(/^https?:\/\//, "")}
-                        </a>
-                      }
-                    />
-                  )}
-                </div>
-              </>
+          {activeTab === "insider" &&
+            (loadingInsider ? (
+              <div className="h-24 bg-gray-900/50 rounded-lg animate-pulse" />
+            ) : insider.length ? (
+              <InsiderList trades={insider} />
             ) : (
-              <p className="text-xs text-gray-600">
-                No company profile available for {symbol}.
-              </p>
-            )}
-          </div>
+              <p className="text-xs text-gray-600">No recent insider trades for {symbol}.</p>
+            ))}
 
-          {/* Key metrics */}
-          <div>
-            <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-2">
-              Key Metrics
-            </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-5">
-              <Stat label="Mkt Cap" value={row.mcap} type="money" />
-              <Stat label="P/E" value={row.pe} type="x" />
-              <Stat label="P/B" value={row.pb} type="x" />
-              <Stat label="EV/EBITDA" value={row.ev_ebitda} type="x" />
-              <Stat label="EV/GP" value={row.ev_gp} type="x" />
-              <Stat label="FCF Yld" value={row.fcf_yield} type="pct" />
-              <Stat label="ROIC" value={row.roic} type="pct" />
-              <Stat label="ROE" value={row.roe} type="pct" />
-              <Stat label="Gross M" value={row.gross_margin} type="pct" />
-              <Stat label="Op M" value={row.op_margin} type="pct" />
-              <Stat label="Net M" value={row.net_margin} type="pct" />
-              <Stat label="Rev Gr" value={row.revenue_growth} type="pct" />
-              <Stat label="EPS Gr" value={row.eps_growth} type="pct" />
-              <Stat label="ND/EBITDA" value={row.net_debt_ebitda} type="ratio" />
-              <Stat label="Div Yld" value={row.div_yield} type="pct" />
-            </div>
-          </div>
+          {activeTab === "news" &&
+            (loadingNews ? (
+              <div className="h-24 bg-gray-900/50 rounded-lg animate-pulse" />
+            ) : news.length ? (
+              <StockNewsList news={news} />
+            ) : (
+              <p className="text-xs text-gray-600">No recent news for {symbol}.</p>
+            ))}
         </div>
       </aside>
     </>

@@ -17,7 +17,7 @@ const router = Router();
 function buildSystemPrompt(context) {
   const {
     filters, weights, stocks, focusSymbols, availableSectors, availableIndustries,
-    activeStock, today, totalFiltered, activeScreener, pinnedStocks,
+    activeStock, focusStocks, portfolioGoals, today, totalFiltered, activeScreener, pinnedStocks, news,
   } = context || {};
 
   const shown = stocks?.length || 0;
@@ -67,8 +67,74 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
     if (pinnedStocks.length > 30) prompt += `(…and ${pinnedStocks.length - 30} more pinned)\n`;
   }
 
+  if (news?.length) {
+    prompt += `\nLATEST MARKET NEWS (most recent headlines — use for macro/sentiment context; cite the source if you reference one):\n`;
+    for (const a of news.slice(0, 10)) {
+      prompt += `- ${a.symbol ? `[${a.symbol}] ` : ""}${a.title}${a.source ? ` (${a.source})` : ""}\n`;
+    }
+  }
+
   if (activeStock) {
     prompt += "\n" + buildActiveStockSection(activeStock) + "\n";
+  }
+
+  if (focusSymbols?.length) {
+    const syms = focusSymbols.join(", ");
+    if (activeStock && focusSymbols.includes(activeStock.symbol)) {
+      prompt += `FOCUS: The user explicitly asked about ${activeStock.symbol} (the currently open stock above).\n`;
+    } else {
+      prompt += `FOCUS SYMBOLS: The user clicked "Ask Ori" or is asking specifically about: ${syms}. Their basic screener data is in the STOCK DATA table. For richer context (profile, DCF, targets, insider, news, etc.) the user should open them in the overview pane.\n`;
+    }
+  }
+
+  // === USER PORTFOLIOS & GOALS (critical framing context) ===
+  if (context?.portfolioGoals) {
+    const pg = context.portfolioGoals;
+    if ((pg.portfolios?.length || pg.goals?.length)) {
+      prompt += `\n=== USER'S ACTUAL PORTFOLIOS & GOALS ===\n`;
+      prompt += `Grand total invested across all portfolios: $${(pg.grandTotal || 0).toLocaleString()}\n\n`;
+
+      if (pg.portfolios?.length) {
+        prompt += `PORTFOLIOS:\n`;
+        pg.portfolios.forEach((p, i) => {
+          const t = (p.totalInvested || 0).toLocaleString();
+          prompt += `${i + 1}. ${p.name || 'Untitled'} — Total: $${t}\n`;
+          const holdings = (p.holdings || []).map(h => {
+            const pct = h.percent != null ? h.percent.toFixed(1) + '%' : '';
+            const dol = h.dollars != null ? '$' + Math.round(h.dollars).toLocaleString() : '';
+            return `${h.ticker} ${pct}${dol ? ' (' + dol + ')' : ''}`;
+          }).join(', ');
+          if (holdings) prompt += `   Holdings: ${holdings}\n`;
+        });
+      }
+
+      if (pg.overallAllocations?.length) {
+        prompt += `\nOVERALL WEIGHTS (across all portfolios):\n`;
+        pg.overallAllocations.slice(0, 15).forEach(a => {
+          prompt += `• ${a.ticker}: ${a.overallPercent.toFixed(1)}% ($${Math.round(a.dollars).toLocaleString()})\n`;
+        });
+        if (pg.overallAllocations.length > 15) prompt += `• +${pg.overallAllocations.length - 15} smaller positions\n`;
+      }
+
+      if (pg.goals?.length) {
+        prompt += `\nUSER GOALS:\n`;
+        pg.goals.forEach((g, i) => {
+          if (g && g.trim()) prompt += `${i + 1}. ${g.trim()}\n`;
+        });
+      }
+
+      prompt += `\nIMPORTANT: Always frame recommendations in the context of the user's existing holdings, concentration risk, tax location (if inferable), and stated goals. Suggest specific buys/sells that consider overlap with current positions. Do not recommend things that would dramatically increase risk relative to their goals.\n`;
+    }
+  }
+
+  // Rich context for any additionally focused/asked-about stocks (from natural language
+  // questions, follow-ups on suggestions, etc.). These get the same full treatment.
+  if (focusStocks?.length) {
+    for (const fs of focusStocks) {
+      if (activeStock && fs.symbol === activeStock.symbol) continue; // already covered above
+      prompt += `\n=== USER ALSO FOCUSING ON / ASKED ABOUT: ${fs.symbol} (${fs.name || ""}) ===\n`;
+      prompt += buildActiveStockSection(fs) + "\n";
+    }
   }
 
   prompt += `
@@ -189,9 +255,10 @@ IMPORTANT reliability rules for this block:
   return prompt;
 }
 
-// Renders the stock the user currently has open in the detail pane, with the
-// extra data (company profile, FMP ratings, analyst grades, RSI) that isn't in
-// the screener table — so Ori can speak directly to what they're looking at.
+// Renders rich context for a stock the user has open in a detail pane or has
+// explicitly asked about / is focusing on (via button, typing in chat, follow-ups
+// on suggestions, etc.). Includes profile, ratings, grades, RSI, performance,
+// DCF, analyst targets, insider trades, and recent company news.
 function buildActiveStockSection(s) {
   const rsiNote =
     s.latestRsi == null
@@ -244,6 +311,24 @@ The user has this stock open in the company-overview panel right now. Unless the
       .map((x) => `${x.date || ""} ${x.company || ""} ${x.action || ""}${x.new_grade ? ` → ${x.new_grade}` : ""}`.trim())
       .join("; ");
     out += `\n- Recent analyst grades: ${g}`;
+  }
+
+  if (s.insider && s.insider.length) {
+    const buys = s.insider.filter((t) => t.type === "A").length;
+    const sells = s.insider.filter((t) => t.type === "D").length;
+    const recent = s.insider
+      .slice(0, 6)
+      .map((t) => `${t.date || ""} ${t.name || ""} ${t.type === "A" ? "BUY" : t.type === "D" ? "SELL" : ""} ${t.shares != null ? Math.abs(t.shares).toLocaleString() : ""}sh`.trim())
+      .join("; ");
+    out += `\n- Insider activity (recent Form 4s): ${buys} buys / ${sells} sells — ${recent}`;
+  }
+
+  if (s.news && s.news.length) {
+    const headlines = s.news
+      .slice(0, 5)
+      .map((n) => `${n.date || ""} ${n.title || ""}${n.source ? ` (${n.source})` : ""}`.trim())
+      .join(" | ");
+    out += `\n- Recent news: ${headlines}`;
   }
 
   return out;

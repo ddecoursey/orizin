@@ -3,6 +3,8 @@ import Starfield from "./components/Starfield";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
 import { useStockDetail } from "./hooks/useStockDetail.js";
+import { useNews } from "./hooks/useNews.js";
+import { usePortfolioGoals } from "./hooks/usePortfolioGoals.js";
 import Header from "./components/Header.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import TabsBar from "./components/TabsBar.jsx";
@@ -13,6 +15,8 @@ import ChatPanel from "./components/ChatPanel.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import UsersModal from "./components/UsersModal.jsx";
 import StockDetailModal from "./components/StockDetailModal.jsx";
+import CompareModal from "./components/CompareModal.jsx";
+import PortfolioGoalsPage from "./pages/PortfolioGoalsPage.jsx";
 import Footer from "./components/Footer.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 
@@ -86,7 +90,22 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     () => (typeof window !== "undefined" && window.innerWidth < 1024 ? "cards" : "table"),
   );
   const [showUsersModal, setShowUsersModal] = useState(false);
+  const [showCompare, setShowCompare] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
+  const [detailStock2, setDetailStock2] = useState(null);
+  const [pickingSecond, setPickingSecond] = useState(false);
+  // When two overviews are open we keep them on the same tab and scroll in sync.
+  const [compareTab, setCompareTab] = useState("overview");
+  const aScrollRef = useRef(null);
+  const bScrollRef = useRef(null);
+  const scrollSyncingRef = useRef(false);
+  const news = useNews();
+
+  // Portfolio & Goals (always loaded so it can be sent to Ori chat context)
+  const portfolioGoals = usePortfolioGoals();
+
+  // Main view: 'screener' | 'portfolio-goals'
+  const [currentView, setCurrentView] = useState('screener');
 
   // Track whether enough time has passed to show the full error UI.
   // This prevents a scary "Failed to load" flash on hard refresh while the
@@ -101,8 +120,14 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     () => localStorage.getItem(themeKey) || localStorage.getItem("theme") || "dark",
   );
 
-  // Toggle behavior: clicking the same stock again closes the company overview.
+  // Clicking a row opens the primary overview (clicking the same one closes it).
+  // While "picking second", the next click opens the comparison pane instead.
   const handleSelectStock = (stock) => {
+    if (pickingSecond && detailStock && stock.symbol !== detailStock.symbol) {
+      setDetailStock2(stock);
+      setPickingSecond(false);
+      return;
+    }
     setDetailStock((current) =>
       current && current.symbol === stock.symbol ? null : stock
     );
@@ -210,6 +235,56 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   // once, here, so both the overview pane AND Ori's chat context share it.
   const detail = useStockDetail(detailStock?.symbol || null);
 
+  // Optional second overview, opened side-by-side for a head-to-head compare.
+  const detailRow2 = detailStock2
+    ? filtered.find((r) => r.symbol === detailStock2.symbol) || detailStock2
+    : null;
+  const detail2 = useStockDetail(detailStock2?.symbol || null);
+
+  // Additional rich detail loads specifically for Ori chat context.
+  // These ensure that *any* way the user asks about stocks (button, typing a symbol,
+  // following up on suggestions, etc.) Ori receives the full available context
+  // (profile, DCF, targets, insider, grades, news, RSI series, performance, etc.).
+  const [chatFocusSym1, setChatFocusSym1] = useState(null);
+  const [chatFocusSym2, setChatFocusSym2] = useState(null);
+  const chatFocusDetail1 = useStockDetail(chatFocusSym1);
+  const chatFocusDetail2 = useStockDetail(chatFocusSym2);
+
+  function closeDetailA() {
+    setPickingSecond(false);
+    if (detailStock2) {
+      setDetailStock(detailStock2);
+      setDetailStock2(null);
+    } else {
+      setDetailStock(null);
+    }
+  }
+  function closeDetailB() {
+    setPickingSecond(false);
+    setDetailStock2(null);
+  }
+  function pickSecondBySymbol(sym) {
+    const s = (sym || "").trim().toUpperCase();
+    if (!s) return;
+    const row = filtered.find((r) => r.symbol === s) || stocks.find((r) => r.symbol === s);
+    if (row) {
+      setDetailStock2(row);
+      setPickingSecond(false);
+    }
+  }
+  // Mirror one compare pane's scroll position onto the other (no feedback loop).
+  function syncScroll(fromRef, toRef) {
+    if (!detailStock2 || scrollSyncingRef.current) return;
+    const from = fromRef.current;
+    const to = toRef.current;
+    if (!from || !to) return;
+    scrollSyncingRef.current = true;
+    to.scrollTop = from.scrollTop;
+    requestAnimationFrame(() => {
+      scrollSyncingRef.current = false;
+    });
+  }
+
   // Derive price performance and RSI trend for the open stock from the data we
   // already fetched for the chart — gives Ori momentum/timing context for free.
   const activeStock = detailRow
@@ -219,6 +294,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         ratings: detail.ratings,
         grades: detail.grades,
         aiData: detail.aiData,
+        insider: detail.insider,
+        news: detail.news || [],
         latestRsi: detail.rsi?.length ? detail.rsi[detail.rsi.length - 1].rsi : null,
         performance: pricePerformance(detail.points),
         rsiTrend: rsiTrend(detail.rsi),
@@ -233,14 +310,107 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     .map((sym) => filtered.find((r) => r.symbol === sym) || stocks.find((r) => r.symbol === sym))
     .filter(Boolean);
 
+  // Build rich context objects for up to two additional stocks the user is
+  // focusing on / has asked about (via button, typing symbols, or follow-ups).
+  // These get the exact same full treatment as the main activeStock.
+  const focusRow1 = chatFocusSym1
+    ? filtered.find((r) => r.symbol === chatFocusSym1) || stocks.find((r) => r.symbol === chatFocusSym1)
+    : null;
+  const focusStock1 = focusRow1
+    ? {
+        ...focusRow1,
+        profile: chatFocusDetail1.profile,
+        ratings: chatFocusDetail1.ratings,
+        grades: chatFocusDetail1.grades,
+        aiData: chatFocusDetail1.aiData,
+        insider: chatFocusDetail1.insider,
+        news: chatFocusDetail1.news || [],
+        latestRsi: chatFocusDetail1.rsi?.length ? chatFocusDetail1.rsi[chatFocusDetail1.rsi.length - 1].rsi : null,
+        performance: pricePerformance(chatFocusDetail1.points),
+        rsiTrend: rsiTrend(chatFocusDetail1.rsi),
+      }
+    : null;
+
+  const focusRow2 = chatFocusSym2
+    ? filtered.find((r) => r.symbol === chatFocusSym2) || stocks.find((r) => r.symbol === chatFocusSym2)
+    : null;
+  const focusStock2 = focusRow2
+    ? {
+        ...focusRow2,
+        profile: chatFocusDetail2.profile,
+        ratings: chatFocusDetail2.ratings,
+        grades: chatFocusDetail2.grades,
+        aiData: chatFocusDetail2.aiData,
+        insider: chatFocusDetail2.insider,
+        news: chatFocusDetail2.news || [],
+        latestRsi: chatFocusDetail2.rsi?.length ? chatFocusDetail2.rsi[chatFocusDetail2.rsi.length - 1].rsi : null,
+        performance: pricePerformance(chatFocusDetail2.points),
+        rsiTrend: rsiTrend(chatFocusDetail2.rsi),
+      }
+    : null;
+
   const chat = useChat(filtered, filters, weights, applyRecommendation, activeStock, {
     activeScreener: activeScreenerName,
     pinnedStocks,
+    news,
+    // Rich data for any stocks the user has explicitly asked about or mentioned
+    // (via "Ask Ori", typing symbols in chat, follow-ups, etc.). This ensures
+    // Ori always gets the full available context no matter the entry point.
+    focusStocks: [focusStock1, focusStock2].filter(Boolean),
+    // User's manually entered portfolios + goals — sent to Ori on every message
+    // so recommendations are framed by their actual holdings and objectives.
+    portfolioGoals: {
+      portfolios: portfolioGoals.portfolios,
+      goals: portfolioGoals.goals,
+      grandTotal: portfolioGoals.grandTotal,
+      overallAllocations: portfolioGoals.overallAllocations,
+    },
+    onFocusStock: (symbol) => {
+      const row = filtered.find((r) => r.symbol === symbol) || stocks.find((r) => r.symbol === symbol);
+      if (row) handleSelectStock(row);
+    },
   });
+
+  // Keep additional chat-focused symbols enriched with full detail data so that
+  // *any* way the user asks Ori about stocks (explicit button, typing names in chat,
+  // following up on Ori's suggestions, etc.) causes the rich context to be sent.
+  useEffect(() => {
+    const fromFocus = chat.focusSymbols || [];
+    // Also pull tickers mentioned in the most recent user message(s)
+    const recentUserMsgs = chat.messages
+      .filter((m) => m.role === "user")
+      .slice(-2)
+      .map((m) => m.content || "")
+      .join(" ");
+    const extracted = extractSymbols(recentUserMsgs, stocks);
+    const desired = [...new Set([...fromFocus, ...extracted])].slice(0, 3);
+
+    // Don't duplicate the main open detail stock (it already gets full treatment as activeStock)
+    const extras = desired.filter((s) => !detailStock || s !== detailStock.symbol).slice(0, 2);
+    setChatFocusSym1(extras[0] || null);
+    setChatFocusSym2(extras[1] || null);
+  }, [chat.focusSymbols, chat.messages, detailStock?.symbol, stocks]);
 
   // Bump this when the user does a Force Re-gather so the table can also
   // force-refresh its sparklines from the server (which will hit FMP).
   const [sparklineForceVersion, setSparklineForceVersion] = useState(0);
+
+  // Copy the on-screen tickers (top 100 by score) for pasting into another LLM.
+  const [copiedTickers, setCopiedTickers] = useState(false);
+  const copyTickers = async () => {
+    const syms = [...filtered]
+      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .slice(0, 100)
+      .map((r) => r.symbol);
+    if (!syms.length) return;
+    try {
+      await navigator.clipboard.writeText(syms.join(", "));
+      setCopiedTickers(true);
+      setTimeout(() => setCopiedTickers(false), 1600);
+    } catch {
+      /* clipboard blocked (e.g. insecure context) — ignore */
+    }
+  };
 
   return (
     <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
@@ -262,6 +432,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         isAdmin={isAdmin}
         onLogout={onLogout}
         onManageUsers={() => setShowUsersModal(true)}
+        currentView={currentView}
+        onNavigate={setCurrentView}
       />
 
       <ProgressBar progress={loadProgress} label={enrichLoading ? "Enriching…" : "Refreshing…"} onCancel={cancelOperation} />
@@ -270,172 +442,205 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       {theme === "dark" && <Starfield />}
 
       <div className="flex flex-1 overflow-hidden min-h-0">
-        <Sidebar
-          filters={filters}
-          setFilters={setFilters}
-          stocks={stocks}
-          onAddTicker={addTicker}
-          collapsed={sidebarCollapsed}
-          onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
-        />
+        {currentView === 'screener' && (
+          <Sidebar
+            filters={filters}
+            setFilters={setFilters}
+            stocks={stocks}
+            onAddTicker={addTicker}
+            collapsed={sidebarCollapsed}
+            onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
+          />
+        )}
 
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-          <TabsBar
-            tabs={tabs}
-            activeTab={activeTab}
-            onActivate={activateTab}
-            onCreate={createTab}
-            onDelete={deleteTab}
-          />
-
-          {/* Controls bar — desktop / iPad landscape (≥ lg): unchanged */}
-          <div className="hidden lg:flex flex-wrap items-center gap-3 gap-y-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
-            <div
-              className="flex items-center gap-2 flex-1 min-w-[140px] max-w-xs bg-gray-900 border border-gray-800
-              rounded-lg px-3 py-1.5"
-            >
-              <span className="text-gray-600 text-sm">⌕</span>
-              <input
-                type="text"
-                value={filters.search}
-                onChange={(e) =>
-                  setFilters({ ...filters, search: e.target.value })
-                }
-                placeholder="Search symbol or name…"
-                className="flex-1 bg-transparent text-xs text-gray-200 outline-none placeholder-gray-600"
+          {currentView === 'portfolio-goals' ? (
+            <PortfolioGoalsPage 
+              stocks={stocks} 
+              theme={theme} 
+              onSelectStock={handleSelectStock}
+              detailStock={detailStock}
+            />
+          ) : (
+            <>
+              <TabsBar
+                tabs={tabs}
+                activeTab={activeTab}
+                onActivate={activateTab}
+                onCreate={createTab}
+                onDelete={deleteTab}
               />
-            </div>
 
-            <span className="text-xs text-gray-600 whitespace-nowrap">
-              {filtered.length} / {stocks.length}
-            </span>
-
-            <div className="flex shrink-0 border border-gray-700 rounded-md overflow-hidden ml-auto">
-              {[
-                ["table", "▦ Table"],
-                ["cards", "▤ Scorecards"],
-              ].map(([v, label]) => (
-                <button
-                  key={v}
-                  onClick={() => setView(v)}
-                  className={`px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
-                    view === v
-                      ? "bg-gray-100 text-gray-900"
-                      : "bg-gray-900 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
-                  }`}
+              {/* Controls bar — desktop / iPad landscape (≥ lg) */}
+              <div className="hidden lg:flex flex-wrap items-center gap-3 gap-y-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
+                <div
+                  className="flex items-center gap-2 flex-1 min-w-[140px] max-w-xs bg-gray-900 border border-gray-800
+                  rounded-lg px-3 py-1.5"
                 >
-                  {label}
+                  <span className="text-gray-600 text-sm">⌕</span>
+                  <input
+                    type="text"
+                    value={filters.search}
+                    onChange={(e) =>
+                      setFilters({ ...filters, search: e.target.value })
+                    }
+                    placeholder="Search symbol or name…"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    className="flex-1 bg-transparent text-xs text-gray-200 outline-none placeholder-gray-600"
+                  />
+                </div>
+
+                <span className="text-xs text-gray-600 whitespace-nowrap">
+                  {filtered.length} / {stocks.length}
+                </span>
+
+                <button
+                  onClick={copyTickers}
+                  className="shrink-0 p-1.5 rounded-md bg-gray-900 border border-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+                  title="Copy the top on-screen tickers to the clipboard (to paste into another LLM)"
+                >
+                  {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
                 </button>
-              ))}
-            </div>
 
-            <WeightsPopover weights={weights} setWeights={setWeights} />
-          </div>
-
-          {/* Controls bar — compact (< lg) */}
-          <div className="flex lg:hidden flex-col gap-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
-            <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
-              <span className="text-gray-600 text-sm">⌕</span>
-              <input
-                type="text"
-                value={filters.search}
-                onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-                placeholder="Search symbol or name…"
-                className="flex-1 bg-transparent text-sm text-gray-200 outline-none placeholder-gray-600"
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setSidebarCollapsed(false)}
-                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-gray-900 border border-gray-700
-                  text-gray-300 hover:bg-gray-800 transition-colors flex items-center gap-1.5"
-              >
-                ⚙ Filters
-              </button>
-              <span className="text-xs text-gray-600 whitespace-nowrap">
-                {filtered.length} / {stocks.length}
-              </span>
-
-              <div className="ml-auto flex items-center gap-2">
-                <div className="flex border border-gray-700 rounded-md overflow-hidden">
+                <div className="flex shrink-0 border border-gray-700 rounded-md overflow-hidden ml-auto">
                   {[
-                    ["table", "▦"],
-                    ["cards", "▤"],
-                  ].map(([v, icon]) => (
+                    ["table", "▦ Table"],
+                    ["cards", "▤ Scorecards"],
+                  ].map(([v, label]) => (
                     <button
                       key={v}
                       onClick={() => setView(v)}
-                      title={v === "table" ? "Table" : "Scorecards"}
-                      className={`px-3 py-1.5 text-sm font-semibold transition-colors ${
+                      className={`px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
                         view === v
                           ? "bg-gray-100 text-gray-900"
                           : "bg-gray-900 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
                       }`}
                     >
-                      {icon}
+                      {label}
                     </button>
                   ))}
                 </div>
+
                 <WeightsPopover weights={weights} setWeights={setWeights} />
               </div>
-            </div>
-          </div>
 
-          {/* Main content */}
-          {status.type === "loading" && stocks.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center gap-4 text-gray-500">
-              <span className="text-4xl">📊</span>
-              <p className="text-sm font-medium text-gray-400">
-                Loading market data…
-              </p>
-              <div className="w-56 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                <div className="h-full bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse w-1/3" />
+              {/* Controls bar — compact (< lg) */}
+              <div className="flex lg:hidden flex-col gap-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
+                <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+                  <span className="text-gray-600 text-sm">⌕</span>
+                  <input
+                    type="text"
+                    value={filters.search}
+                    onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                    placeholder="Search symbol or name…"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
+                    className="flex-1 bg-transparent text-sm text-gray-200 outline-none placeholder-gray-600"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setSidebarCollapsed(false)}
+                    className="px-3 py-1.5 rounded-md text-xs font-semibold bg-gray-900 border border-gray-700
+                      text-gray-300 hover:bg-gray-800 transition-colors flex items-center gap-1.5"
+                  >
+                    ⚙ Filters
+                  </button>
+                  <button
+                    onClick={copyTickers}
+                    title="Copy on-screen tickers"
+                    className="p-2 rounded-md bg-gray-900 border border-gray-700 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+                  >
+                    {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
+                  </button>
+                  <span className="text-xs text-gray-600 whitespace-nowrap">
+                    {filtered.length} / {stocks.length}
+                  </span>
+
+                  <div className="ml-auto flex items-center gap-2">
+                    <div className="flex border border-gray-700 rounded-md overflow-hidden">
+                      {[
+                        ["table", "▦"],
+                        ["cards", "▤"],
+                      ].map(([v, icon]) => (
+                        <button
+                          key={v}
+                          onClick={() => setView(v)}
+                          title={v === "table" ? "Table" : "Scorecards"}
+                          className={`px-3 py-1.5 text-sm font-semibold transition-colors ${
+                            view === v
+                              ? "bg-gray-100 text-gray-900"
+                              : "bg-gray-900 text-gray-500 hover:text-gray-300 hover:bg-gray-800"
+                          }`}
+                        >
+                          {icon}
+                        </button>
+                      ))}
+                    </div>
+                    <WeightsPopover weights={weights} setWeights={setWeights} />
+                  </div>
+                </div>
               </div>
-              <p className="text-xs">{status.msg}</p>
-            </div>
-          ) : status.type === "error" ? (
-            // On the very first load (especially after hard refresh), be gentler.
-            // The hook already has a delay + auto-retry. Only show the full failure
-            // UI after the initial grace period.
-            !showFullErrorUI ? (
-              <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-gray-500">
-                <span className="text-2xl">📡</span>
-                <p className="text-xs">Connecting to data source…</p>
-              </div>
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
-                <span className="text-3xl">⚠️</span>
-                <h3 className="text-sm font-semibold text-red-400">
-                  Failed to load data
-                </h3>
-                <p className="text-xs text-gray-500 text-center max-w-sm">
-                  {status.msg}
-                </p>
-                <button
-                  onClick={() => loadStocks()}
-                  className="px-4 py-2 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors"
-                >
-                  Retry
-                </button>
-              </div>
-            )
-          ) : view === "table" ? (
-            <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
-              <StockTable
-                rows={filtered}
-                pins={pins}
-                onTogglePin={togglePin}
-                onAskAI={chat.askAboutStock}
-                onSelectStock={handleSelectStock}
-                enrichLoading={enrichLoading}
-                sparklineForceVersion={sparklineForceVersion}
-              />
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
-              <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} />
-            </div>
+
+              {/* Main content */}
+              {status.type === "loading" && stocks.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-4 text-gray-500">
+                  <span className="text-4xl">📊</span>
+                  <p className="text-sm font-medium text-gray-400">
+                    Loading market data…
+                  </p>
+                  <div className="w-56 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-gradient-to-r from-blue-500 to-violet-500 rounded-full animate-pulse w-1/3" />
+                  </div>
+                  <p className="text-xs">{status.msg}</p>
+                </div>
+              ) : status.type === "error" ? (
+                !showFullErrorUI ? (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-gray-500">
+                    <span className="text-2xl">📡</span>
+                    <p className="text-xs">Connecting to data source…</p>
+                  </div>
+                ) : (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
+                    <span className="text-3xl">⚠️</span>
+                    <h3 className="text-sm font-semibold text-red-400">
+                      Failed to load data
+                    </h3>
+                    <p className="text-xs text-gray-500 text-center max-w-sm">
+                      {status.msg}
+                    </p>
+                    <button
+                      onClick={() => loadStocks()}
+                      className="px-4 py-2 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                )
+              ) : view === "table" ? (
+                <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
+                  <StockTable
+                    rows={filtered}
+                    pins={pins}
+                    onTogglePin={togglePin}
+                    onAskAI={chat.askAboutStock}
+                    onSelectStock={handleSelectStock}
+                    enrichLoading={enrichLoading}
+                    sparklineForceVersion={sparklineForceVersion}
+                  />
+                </div>
+              ) : (
+                <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
+                  <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} />
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -443,30 +648,71 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
           <StockDetailModal
             row={detailRow}
             symbol={detailStock?.symbol}
-            onClose={() => setDetailStock(null)}
+            onClose={closeDetailA}
             profile={detail.profile}
             points={detail.points}
             rsi={detail.rsi}
             ratings={detail.ratings}
             grades={detail.grades}
             aiData={detail.aiData}
+            insider={detail.insider}
+            news={detail.news}
             loadingProfile={detail.loadingProfile}
             loadingChart={detail.loadingChart}
             loadingRatings={detail.loadingRatings}
             loadingGrades={detail.loadingGrades}
             loadingAi={detail.loadingAi}
+            loadingInsider={detail.loadingInsider}
+            loadingNews={detail.loadingNews}
+            comparePicking={pickingSecond}
+            onStartCompare={!detailStock2 ? () => setPickingSecond(true) : null}
+            onCancelCompare={() => setPickingSecond(false)}
+            onPickSecond={pickSecondBySymbol}
+            onCompare={detailStock2 ? () => setShowCompare(true) : null}
+            tab={detailStock2 ? compareTab : null}
+            onTabChange={detailStock2 ? setCompareTab : null}
+            scrollRef={aScrollRef}
+            onScrollSync={() => syncScroll(aScrollRef, bScrollRef)}
+          />
+        )}
+
+        {detailRow2 && (
+          <StockDetailModal
+            row={detailRow2}
+            symbol={detailStock2?.symbol}
+            onClose={closeDetailB}
+            profile={detail2.profile}
+            points={detail2.points}
+            rsi={detail2.rsi}
+            ratings={detail2.ratings}
+            grades={detail2.grades}
+            aiData={detail2.aiData}
+            insider={detail2.insider}
+            news={detail2.news}
+            loadingProfile={detail2.loadingProfile}
+            loadingChart={detail2.loadingChart}
+            loadingRatings={detail2.loadingRatings}
+            loadingGrades={detail2.loadingGrades}
+            loadingAi={detail2.loadingAi}
+            loadingInsider={detail2.loadingInsider}
+            loadingNews={detail2.loadingNews}
+            onCompare={() => setShowCompare(true)}
+            tab={compareTab}
+            onTabChange={setCompareTab}
+            scrollRef={bScrollRef}
+            onScrollSync={() => syncScroll(bScrollRef, aScrollRef)}
           />
         )}
 
         {chat.isOpen && <ChatPanel chat={chat} />}
       </div>
 
-      <Footer />
+      <Footer news={news} />
 
       {/* Floating Ori button — slides left to clear the detail pane (w-96) when it's open. */}
       <div
         className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
-          ${detailStock && !chat.isOpen ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
+          ${chat.isOpen ? 'right-6' : detailStock2 ? 'right-6 lg:right-[49.5rem]' : detailStock ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
           ${chat.isOpen ? 'hidden' : 'block animate-ori-bounce'}`}
       >
         <button
@@ -491,6 +737,24 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
           onClose={() => setShowUsersModal(false)}
           currentUser={currentUser}
           isAdmin={isAdmin}
+        />
+      )}
+
+      {showCompare && (
+        <CompareModal
+          rows={filtered}
+          universe={stocks}
+          pins={[...pins]}
+          initialA={detailStock?.symbol}
+          initialB={detailStock2?.symbol}
+          onClose={() => setShowCompare(false)}
+          onAskOri={(a, b) => {
+            setShowCompare(false);
+            chat.setIsOpen(true);
+            chat.sendMessage(
+              `Compare ${a} and ${b} head-to-head given my current Q/V/G weights — valuation, quality, growth, balance sheet, and which is the better buy right now and why.`,
+            );
+          }}
         />
       )}
     </div>
@@ -569,6 +833,33 @@ function normalizeRecToFilters(flat) {
     if (n != null) out[kc] = { op: kc.endsWith("Max") ? "<=" : ">=", value: n };
   }
   return out;
+}
+
+function ClipboardIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+// Extract likely stock tickers (1-5 uppercase letters) from text, filtered to
+// symbols that exist in the current universe. Used to auto-enrich context for
+// Ori when the user types natural language questions about specific stocks.
+function extractSymbols(text, knownStocks = []) {
+  if (!text) return [];
+  const candidates = String(text).toUpperCase().match(/\b([A-Z]{1,5})\b/g) || [];
+  const known = new Set(knownStocks.map((s) => s.symbol));
+  return [...new Set(candidates.filter((c) => known.has(c)))];
 }
 
 // Price % change over ~N trading days back from the latest close, plus the
@@ -671,4 +962,3 @@ function PopoverWeightRow({ label, value, onChange }) {
     </div>
   );
 }
-

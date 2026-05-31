@@ -75,6 +75,9 @@ import {
   fetchRSI,
   fetchRatingsSnapshot,
   fetchGrades,
+  fetchGeneralNews,
+  fetchInsiderTrades,
+  fetchStockNews,
 } from "../fmp.js";
 // We dynamically fetch up to 8000 symbols via company-screener with scope-aware filters + 500M mkt cap floor.
 // Supports: 'us' (country=US), 'us-listed' (NYSE,NASDAQ,AMEX incl. ADRs like TSM), 'global' (no geo filter).
@@ -87,9 +90,11 @@ const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 // Only meaningful results are cached (non-null object / non-empty array), so a
 // transient failure isn't pinned for the whole TTL.
 const detailCache = new Map(); // key -> { at, data }
-async function cachedDetail(key, ttlMs, fn) {
-  const hit = detailCache.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+async function cachedDetail(key, ttlMs, fn, force = false) {
+  if (!force) {
+    const hit = detailCache.get(key);
+    if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+  }
   const data = await fn();
   const useful = Array.isArray(data) ? data.length > 0 : data != null;
   if (useful) detailCache.set(key, { at: Date.now(), data });
@@ -328,48 +333,45 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
       cursor = 0,
       lastEmit = 0;
 
-    // Reduced workers + strict pacing for 100 stocks/min target on 300 rpm plan.
-    const POOL = 5;
+    // Pacing tuned for FMP 300 rpm plan.
+    // On force we now also refresh rich panel data (~10-12 FMP calls per symbol),
+    // so we pace on *requests*, not stocks. This prevents stalls on large universes.
+    const POOL = 4;
 
     // Enrichment-specific fetch options: 1 retry max, then move on.
     // Shorter timeout so one slow/broken symbol doesn't gum up a worker.
     const ENRICH_OPTS = { maxRetries: 1, timeoutMs: 9500 };
 
-    // === All 4 rate limit improvements applied ===
-    // A. Robust serialized stock pacer (no race between workers)
-    // B. Reduced to 5 workers
-    // C. 429-aware temporary extra backoff
-    // D. Growth moved out of the main hot path (separate lighter phase)
+    // Request-level pacing (safer when a "stock" now does many calls on force: km+rat+spark+ai+profile+insider+news+rsi+ratings+grades+full history).
+    // Target ~270 requests/min safe under FMP's 300 rpm limit.
+    const REQUESTS_PER_MINUTE = 270;
+    const MIN_MS_PER_REQUEST = Math.floor(60000 / REQUESTS_PER_MINUTE);
 
-    const STOCKS_PER_MINUTE = 100;
-    const MIN_MS_PER_STOCK = Math.floor(60000 / STOCKS_PER_MINUTE); // ~600ms
-
-    let nextStockSlot = 0;
+    let nextRequestSlot = 0;
     let extraBackoffUntil = 0;
 
-    // Call this when we hit rate limits to temporarily slow down
+    // Only call on real rate limit signals. Much gentler than before.
     function recordRateLimitHit() {
-      extraBackoffUntil = Date.now() + 2000; // extra 2s penalty on next stock
+      extraBackoffUntil = Date.now() + 800; // short penalty
     }
 
-    async function claimNextStockSlot() {
-      const target = Math.max(nextStockSlot, extraBackoffUntil);
+    async function claimNextRequestSlot() {
+      const target = Math.max(nextRequestSlot, extraBackoffUntil);
       const now = Date.now();
       if (now >= target) {
-        nextStockSlot = now + MIN_MS_PER_STOCK;
+        nextRequestSlot = now + MIN_MS_PER_REQUEST;
         return;
       }
 
-      // Tell the UI we're rate-limited and waiting
       if (extraBackoffUntil > now) {
-        send({ 
-          type: "status", 
-          message: "Rate limited — queuing (waiting for API limit to reset)..." 
+        send({
+          type: "status",
+          message: "Rate limited — queuing (waiting for API limit to reset)..."
         });
       }
 
       await new Promise(r => setTimeout(r, target - now));
-      nextStockSlot = Date.now() + MIN_MS_PER_STOCK;
+      nextRequestSlot = Date.now() + MIN_MS_PER_REQUEST;
     }
 
     await Promise.all(
@@ -377,8 +379,8 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
         while (true) {
           if (cancelled) return; // Stop as soon as client disconnects / hits Stop
 
-          // A + C: Claim next stock slot with robust serialized pacer + 429 backoff
-          await claimNextStockSlot();
+          // Claim a request slot (we now do many more calls per symbol on force)
+          await claimNextRequestSlot();
 
           const idx = cursor++;
           if (idx >= targets.length) return;
@@ -401,15 +403,17 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
               ]);
 
               if (kmResult.status === "fulfilled") km = kmResult.value;
-              else { 
-                recordRateLimitHit();
-                console.warn(`[Enrich] key-metrics no data / rate limited for ${symbol}`);
+              else {
+                const errMsg = kmResult.reason?.message || '';
+                if (errMsg.includes('429') || errMsg.includes('Too Many')) recordRateLimitHit();
+                console.warn(`[Enrich] key-metrics failed for ${symbol}: ${errMsg}`);
               }
 
               if (ratResult.status === "fulfilled") rat = ratResult.value;
-              else { 
-                recordRateLimitHit();
-                console.warn(`[Enrich] ratios no data / rate limited for ${symbol}`);
+              else {
+                const errMsg = ratResult.reason?.message || '';
+                if (errMsg.includes('429') || errMsg.includes('Too Many')) recordRateLimitHit();
+                console.warn(`[Enrich] ratios failed for ${symbol}: ${errMsg}`);
               }
             }
 
@@ -426,8 +430,7 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
               delete km._haveEv;
               saveKm(symbol, km);
             } else if (needKm) {
-              recordRateLimitHit();
-              console.warn(`[Enrich] No key-metrics returned for ${symbol} (likely rate limited)`);
+              console.warn(`[Enrich] No key-metrics returned for ${symbol}`);
             }
 
             if (rat) {
@@ -436,8 +439,7 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
                 rat.ev_gp = updated.ev_sales / rat.gross_margin;
               saveRat(symbol, rat);
             } else if (needRat) {
-              recordRateLimitHit();
-              console.warn(`[Enrich] No ratios returned for ${symbol} (likely rate limited)`);
+              console.warn(`[Enrich] No ratios returned for ${symbol}`);
             }
 
             if (cancelled) return;
@@ -454,6 +456,116 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
                 }
               } catch (e) {
                 console.warn(`[Enrich] Sparkline fetch failed for ${symbol}:`, e.message);
+              }
+            }
+
+            // === FORCE: also refresh rich per-symbol data for the company overview panel ===
+            // This makes "Force Re-gather All" actually pull the latest from FMP for
+            // profile, DCF + analyst targets, insider, news, RSI, ratings, grades, and 365d history.
+            if (force) {
+              try {
+                // AI valuation (DCF, targets, owner earnings) — bypass 24h SQLite cache
+                const settled = await Promise.allSettled([
+                  fetchDCF(symbol),
+                  fetchPriceTarget(symbol),
+                  fetchFinancialGrowth(symbol),
+                  fetchOwnerEarnings(symbol),
+                ]);
+                const val = (s) => (s.status === "fulfilled" ? s.value : null);
+                const [d, t, g, o] = settled.map(val);
+
+                const aiRow = {
+                  dcf: d?.dcf ?? null,
+                  stock_price: d?.stock_price ?? null,
+                  dcf_date: d?.dcf_date ?? null,
+                  target_high: t?.target_high ?? null,
+                  target_low: t?.target_low ?? null,
+                  target_consensus: t?.target_consensus ?? null,
+                  target_median: t?.target_median ?? null,
+                  revenue_growth: g?.revenue_growth ?? null,
+                  net_income_growth: g?.net_income_growth ?? null,
+                  eps_growth: g?.eps_growth ?? null,
+                  fcf_growth: g?.fcf_growth ?? null,
+                  op_income_growth: g?.op_income_growth ?? null,
+                  owner_earnings: o?.owner_earnings ?? null,
+                  owner_eps: o?.owner_eps ?? null,
+                  growth_capex: o?.growth_capex ?? null,
+                  estimates_json: null,
+                };
+                saveAiEnrichment(symbol, aiRow);
+              } catch (e) {
+                console.warn(`[Enrich][force] AI data failed for ${symbol}:`, e.message);
+              }
+
+              // Profile (description, CEO, employees, etc.)
+              try {
+                const prof = await fetchProfile(symbol);
+                if (prof) {
+                  // Update in-memory detail cache so the panel sees it immediately
+                  detailCache.set(`profile:${symbol}`, { at: Date.now(), data: prof });
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] Profile failed for ${symbol}:`, e.message);
+              }
+
+              // Insider trades
+              try {
+                const trades = await fetchInsiderTrades(symbol, { limit: 40 });
+                if (Array.isArray(trades)) {
+                  detailCache.set(`insider:${symbol}`, { at: Date.now(), data: trades });
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] Insider failed for ${symbol}:`, e.message);
+              }
+
+              // Company news
+              try {
+                const nws = await fetchStockNews(symbol, { limit: 20 });
+                if (Array.isArray(nws)) {
+                  detailCache.set(`stocknews:${symbol}`, { at: Date.now(), data: nws });
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] News failed for ${symbol}:`, e.message);
+              }
+
+              // RSI (10)
+              try {
+                const rsiData = await fetchRSI(symbol, { periodLength: 10 });
+                if (Array.isArray(rsiData)) {
+                  detailCache.set(`rsi:${symbol}:10`, { at: Date.now(), data: rsiData });
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] RSI failed for ${symbol}:`, e.message);
+              }
+
+              // Ratings
+              try {
+                const ratSnap = await fetchRatingsSnapshot(symbol);
+                if (ratSnap) {
+                  detailCache.set(`ratings:${symbol}`, { at: Date.now(), data: ratSnap });
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] Ratings failed for ${symbol}:`, e.message);
+              }
+
+              // Analyst grades
+              try {
+                const gr = await fetchGrades(symbol);
+                if (Array.isArray(gr)) {
+                  detailCache.set(`grades:${symbol}`, { at: Date.now(), data: gr });
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] Grades failed for ${symbol}:`, e.message);
+              }
+
+              // 365-day sparkline (full history for the detail chart)
+              try {
+                const fullSpark = await fetchHistoricalPricesLight(symbol, 365);
+                if (fullSpark && fullSpark.length > 0) {
+                  saveSparkline(symbol, 365, fullSpark);
+                }
+              } catch (e) {
+                console.warn(`[Enrich][force] 365d sparkline failed for ${symbol}:`, e.message);
               }
             }
 
@@ -612,8 +724,9 @@ router.get("/stocks/rsi/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const periodLength = parseInt(req.query.periodLength) || 10;
   try {
+    const force = req.query.force === '1' || req.query.force === 'true';
     const rsi = await cachedDetail(`rsi:${symbol}:${periodLength}`, 6 * 60 * 60 * 1000, () =>
-      fetchRSI(symbol, { periodLength }),
+      fetchRSI(symbol, { periodLength }), force
     );
     res.json({ symbol, periodLength, rsi });
   } catch (e) {
@@ -626,8 +739,9 @@ router.get("/stocks/rsi/:symbol", async (req, res) => {
 router.get("/stocks/ratings/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
+    const force = req.query.force === '1' || req.query.force === 'true';
     const ratings = await cachedDetail(`ratings:${symbol}`, 6 * 60 * 60 * 1000, () =>
-      fetchRatingsSnapshot(symbol),
+      fetchRatingsSnapshot(symbol), force
     );
     if (!ratings) return res.status(404).json({ error: "No ratings available" });
     res.json({ ratings });
@@ -641,8 +755,9 @@ router.get("/stocks/ratings/:symbol", async (req, res) => {
 router.get("/stocks/grades/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
+    const force = req.query.force === '1' || req.query.force === 'true';
     const grades = await cachedDetail(`grades:${symbol}`, 6 * 60 * 60 * 1000, () =>
-      fetchGrades(symbol),
+      fetchGrades(symbol), force
     );
     res.json({ symbol, grades });
   } catch (e) {
@@ -655,12 +770,59 @@ router.get("/stocks/grades/:symbol", async (req, res) => {
 // for the detail overview modal.
 router.get("/stocks/profile/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
+  const force = req.query.force === '1' || req.query.force === 'true';
   try {
     const profile = await cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () =>
-      fetchProfile(symbol),
+      fetchProfile(symbol), force
     );
     if (!profile) return res.status(404).json({ error: "Profile not found" });
     res.json({ profile });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/insider/:symbol ────────────────────────────────────────
+// Recent insider trading activity (Form 4 buys/sells). Cached 6h like the
+// other per-symbol detail lookups.
+router.get("/stocks/insider/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const trades = await cachedDetail(`insider:${symbol}`, 6 * 60 * 60 * 1000, () =>
+      fetchInsiderTrades(symbol, { limit: 40 }), force
+    );
+    res.json({ symbol, trades });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/news/:symbol ───────────────────────────────────────────
+// Latest news for a single company (the News tab in the overview). Cached 30m.
+router.get("/stocks/news/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const news = await cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () =>
+      fetchStockNews(symbol, { limit: 20 }), force
+    );
+    res.json({ symbol, news });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/news ──────────────────────────────────────────────────────────
+// Latest general market news for the footer ticker + Ori context. Cached 10m.
+router.get("/news", async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 30, 60);
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const news = await cachedDetail(`news:general:${limit}`, 10 * 60 * 1000, () =>
+      fetchGeneralNews({ limit }), force
+    );
+    res.json({ news });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -674,8 +836,9 @@ router.get("/stocks/profile/:symbol", async (req, res) => {
 router.get("/stocks/ai/:symbol", aiDetailLimiter, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
+    const force = req.query.force === '1' || req.query.force === 'true';
     const cached = getAiEnrichment(symbol);
-    if (cached && Date.now() - cached.updated_at < 24 * 60 * 60 * 1000) {
+    if (!force && cached && Date.now() - cached.updated_at < 24 * 60 * 60 * 1000) {
       return res.json({ data: cached });
     }
 

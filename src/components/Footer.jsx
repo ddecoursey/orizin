@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 // Slim app footer: trademark, contact, donation, and social links.
 const CONTACT_EMAIL = "dl.decour@gmail.com";
@@ -11,7 +11,69 @@ const SOCIALS = [
   { name: "LinkedIn", href: "#", icon: LinkedInIcon },
 ];
 
-export default function Footer() {
+// Auto-scrolling strip of the latest market headlines. Each is clickable and
+// opens the source article in a new tab. Pauses on hover.
+function NewsTicker({ news }) {
+  const [hidden, setHidden] = useState(() => {
+    try { return localStorage.getItem("newsTickerHidden") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("newsTickerHidden", hidden ? "1" : "0"); } catch { /* ignore */ }
+  }, [hidden]);
+
+  if (!news?.length) return null;
+
+  if (hidden) {
+    return (
+      <button
+        onClick={() => setHidden(false)}
+        className="shrink-0 w-full flex items-center justify-center gap-1 py-0.5 text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-300 bg-gray-950/90 border-t border-gray-800 transition-colors"
+        title="Show trending news"
+      >
+        ▴ Trending
+      </button>
+    );
+  }
+
+  const items = news.slice(0, 24);
+  const renderRow = (tag) =>
+    items.map((a, i) => (
+      <a
+        key={`${tag}-${i}`}
+        href={a.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-1.5 px-4 text-[11px] text-gray-400 hover:text-blue-300 transition-colors"
+      >
+        <span className="text-amber-400/70 text-[8px]">●</span>
+        {a.symbol && <span className="font-semibold text-gray-300">{a.symbol}</span>}
+        <span className="truncate max-w-[460px]">{a.title}</span>
+        <span className="text-gray-600">· {a.site || a.publisher}</span>
+      </a>
+    ));
+  return (
+    <div className="shrink-0 flex items-stretch border-t border-gray-800 bg-gray-950/90 overflow-hidden">
+      <span className="shrink-0 z-10 flex items-center px-2.5 text-[9px] font-bold uppercase tracking-wider text-amber-300 bg-gray-900 border-r border-gray-800">
+        Trending
+      </span>
+      <div className="overflow-hidden flex-1">
+        <div className="inline-flex whitespace-nowrap animate-marquee py-1">
+          {renderRow("a")}
+          {renderRow("b")}
+        </div>
+      </div>
+      <button
+        onClick={() => setHidden(true)}
+        title="Hide trending news"
+        className="shrink-0 px-2 text-gray-600 hover:text-gray-300 border-l border-gray-800 text-sm leading-none"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+export default function Footer({ news = [] }) {
   const year = new Date().getFullYear();
   const [donateOpen, setDonateOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
@@ -28,7 +90,9 @@ export default function Footer() {
   };
 
   return (
-    <footer className="shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500">
+    <>
+      <NewsTicker news={news} />
+      <footer className="shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500">
       <span className="whitespace-nowrap">
         © {year} <span className="font-semibold text-gray-400">Orizen</span>™<span className="hidden lg:inline"> · All rights reserved</span>
       </span>
@@ -123,7 +187,8 @@ export default function Footer() {
           </a>
         ))}
       </div>
-    </footer>
+      </footer>
+    </>
   );
 }
 
