@@ -12,27 +12,18 @@ import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
 import * as db from './db.js';
+import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 
-// Simple in-memory error logger for debugging
-const errorLog = [];
-const MAX_ERRORS = 200;
+// Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
+import { logError, getErrors } from './logger.js';
+export { logError, getErrors };
 
-export function logError(message, details = {}) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    message,
-    ...details,
-  };
-  errorLog.unshift(entry);
-  if (errorLog.length > MAX_ERRORS) {
-    errorLog.pop();
-  }
-  console.error(`[DEBUG ERROR] ${message}`, details);
-}
+// Admin require (self-contained in auth.js to prevent circular deps with routes)
+import { requireAdmin } from './auth.js';
+export { requireAdmin };
 
-export function getErrors(limit = 100) {
-  return errorLog.slice(0, limit);
-}
+// For admin kill-all of fetches (aborts in-flight FMP calls)
+import * as fmp from './fmp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -68,27 +59,6 @@ const loginLimiter = rateLimit({
     trustProxy: false, // We intentionally set trust proxy for Railway
   },
 });
-
-// Admin-only middleware
-export function requireAdmin(req, res, next) {
-  try {
-    // Prefer DB users
-    const user = db.getUserByUsername(req.userId);
-    if (user && user.is_admin) {
-      return next();
-    }
-
-    // Legacy fallback: when using AUTH_PASSWORD and no DB users yet,
-    // treat the authenticated user as admin.
-    const hasUsersNow = (db.userCount?.() ?? 0) > 0;
-    if (!hasUsersNow && req.userId && AUTH_PASSWORD) {
-      return next();
-    }
-  } catch (e) {
-    console.error('[auth] requireAdmin error:', e);
-  }
-  return res.status(403).json({ error: 'Admin access required' });
-}
 
 // Cookie-session auth — production-safe version
 //
@@ -450,6 +420,41 @@ app.get('/api/debug/fmp-ping', requireAdmin, async (req, res) => {
   res.json({ key_set: !!key, results });
 });
 
+// ── Admin Enrichment Job Control (background continuous updater) ──────────
+app.get('/api/debug/enrichment', requireAdmin, (req, res) => {
+  res.json(enrichmentManager.getStatus());
+});
+
+app.post('/api/debug/enrichment', requireAdmin, (req, res) => {
+  const { action, rpm } = req.body || {};
+  let changed = false;
+  if (action === 'start') {
+    enrichmentManager.start();
+    changed = true;
+  } else if (action === 'stop') {
+    enrichmentManager.stop();
+    changed = true;
+  } else if (action === 'kill' || action === 'abort' || action === 'stop-all' || action === 'kill-all') {
+    // Kill background + abort all in-flight FMP fetches (universe refresh, user gathers, etc.)
+    enrichmentManager.stop();
+    try { fmp.abortAllOngoingFetches?.(); } catch {}
+    changed = true;
+  }
+  if (typeof rpm === 'number' && rpm > 0) {
+    enrichmentManager.setRpm(rpm);
+    changed = true;
+  }
+  res.json({ ok: true, status: enrichmentManager.getStatus() });
+});
+
+// Final guard for all /api/*: always return JSON, never the SPA HTML or default "Cannot POST" page.
+// This prevents client-side .json() crashes ("Unexpected token '<'") when a route is missing
+// (e.g. after editing server code without restart in dev) or for any unknown API path.
+// In dev this turns missing-route cases into clean HTTP 404 JSON instead of confusing parse fails.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'API route not found', method: req.method, path: req.path });
+});
+
 // Serve built React app in production
 const distPath = path.join(__dirname, '../dist');
 app.use(express.static(distPath));
@@ -481,6 +486,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
         : 'DISABLED — set AUTH_PASSWORD or AUTH_USERS_JSON to enable'
     }`,
   );
+
+  // Start the always-on low-rate background enrichment job (if not disabled)
+  startBackgroundEnrichmentIfEnabled();
 });
 
 // Graceful shutdown (important for clean Ctrl+C and stopping long-running enrich)

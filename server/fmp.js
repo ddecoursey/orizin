@@ -1,7 +1,7 @@
 // Use Node 22's built-in fetch (undici). node-fetch v3 emits an 'error'
 // on its response PassThrough when aborted, which crashes the process if
 // nothing listens — native fetch propagates AbortError cleanly.
-import { logError } from "./index.js";
+import { logError } from "./logger.js";
 
 const BASE = "https://financialmodelingprep.com/stable";
 const KEY = () => process.env.FMP_API_KEY || "";
@@ -26,6 +26,39 @@ function n(v) {
   if (v === null || v === undefined || v === "") return null;
   const x = Number(v);
   return isFinite(x) ? x : null;
+}
+
+// ── Global abort controller for admin "kill all / stop all fetches" ────────
+// Allows the debug admin page to abort in-flight FMP calls across background
+// enrichment, universe refresh, and user-triggered gathers.
+let _masterAbort = new AbortController();
+
+export function abortAllOngoingFetches() {
+  try {
+    _masterAbort.abort(new DOMException('Admin kill-all', 'AbortError'));
+  } catch {}
+  _masterAbort = new AbortController();
+  console.log('[FMP] Admin kill-all: aborted all ongoing fetches (and background stopped via caller).');
+}
+
+function getMasterSignal() {
+  return _masterAbort.signal;
+}
+
+function combineSignals(...sigs) {
+  const signals = sigs.filter(Boolean);
+  if (signals.length === 0) return undefined;
+  if (signals.length === 1) return signals[0];
+  const c = new AbortController();
+  const doAbort = (reason) => { if (!c.signal.aborted) c.abort(reason); };
+  for (const s of signals) {
+    if (s.aborted) {
+      doAbort(s.reason);
+      return c.signal;
+    }
+    s.addEventListener('abort', () => doAbort(s.reason), { once: true });
+  }
+  return c.signal;
 }
 
 // ── Build stock row directly from company-screener response ────────────────
@@ -60,11 +93,14 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
 
     // node-fetch v3 removed the `timeout` option, so use AbortController.
     // Without this, a non-responding FMP endpoint would hang the request forever.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Also combine with master global abort so admin "kill all" can cancel in-flight work.
+    const timeoutController = new AbortController();
+    const timer = setTimeout(() => timeoutController.abort(), timeoutMs);
+    const masterSig = getMasterSignal();
+    const fetchSignal = combineSignals(timeoutController.signal, masterSig);
     const requestStarted = Date.now();
     try {
-      const res = await fetch(url, { signal: controller.signal });
+      const res = await fetch(url, { signal: fetchSignal });
 
       let responseData = null;
       if (res.ok) {
@@ -182,14 +218,15 @@ export async function fetchScreenerStocks({
 // ── Stable list endpoints (preferred for complete universe: all stocks + all ETFs, no mcap floor) ─
 export async function fetchStockListStable() {
   const url = `${BASE}/stock-list?apikey=${KEY()}`;
-  await rateGate();
-  const res = await fetch(url, { timeout: 120000 });
-  let data = {};
-  try { data = await res.json(); } catch {}
-  if (!res.ok || data["Error Message"]) {
-    const msg = data["Error Message"] || `FMP ${res.status}`;
-    console.warn("[FMP] stable/stock-list failed:", msg);
-    throw new Error(msg);
+  // Use fetchWithRetry for built-in rateGate, 429 backoff, proper abort timeouts, and logging.
+  // Bulk list endpoints can transiently 429/ fail under dev load (bg job + sparklines); retries make
+  // Universe Refresh reliable instead of immediately falling back to the old 8k screener.
+  const data = await fetchWithRetry(url, 3, 60000);
+  if (!data) {
+    throw new Error("FMP stock-list: exhausted retries (no data)");
+  }
+  if (data && data["Error Message"]) {
+    throw new Error(data["Error Message"]);
   }
   if (!Array.isArray(data)) {
     console.warn("[FMP] stable/stock-list unexpected non-array response");
@@ -202,14 +239,12 @@ export async function fetchStockListStable() {
 
 export async function fetchETFListStable() {
   const url = `${BASE}/etf-list?apikey=${KEY()}`;
-  await rateGate();
-  const res = await fetch(url, { timeout: 120000 });
-  let data = {};
-  try { data = await res.json(); } catch {}
-  if (!res.ok || data["Error Message"]) {
-    const msg = data["Error Message"] || `FMP ${res.status}`;
-    console.warn("[FMP] stable/etf-list failed:", msg);
-    throw new Error(msg);
+  const data = await fetchWithRetry(url, 3, 60000);
+  if (!data) {
+    throw new Error("FMP etf-list: exhausted retries (no data)");
+  }
+  if (data && data["Error Message"]) {
+    throw new Error(data["Error Message"]);
   }
   if (!Array.isArray(data)) {
     console.warn("[FMP] stable/etf-list unexpected non-array response");
@@ -254,10 +289,9 @@ export async function fetchStockList() {
   // Last-resort fallback (old /stock/list)
   const url = `${BASE}/stock/list?apikey=${KEY()}`;
   try {
-    await rateGate();
-    const res = await fetch(url, { timeout: 30000 });
-    if (!res.ok) throw new Error(`FMP ${res.status}`);
-    const data = await res.json();
+    // Use fetchWithRetry so it respects rateGate, retries, and global admin abort signal.
+    const data = await fetchWithRetry(url, 2, 30000);
+    if (!data) throw new Error('FMP stock/list: no data');
     if (!Array.isArray(data)) return null;
     const cand = data
       .filter((s) => s.symbol && s.type === "stock")
@@ -365,7 +399,8 @@ export async function fetchProfiles(
 // ── Fetch full universe rows using stable lists (for refresh) ──────────────
 // Tries BOTH stock-list and etf-list (under /stable base), merges unique symbols.
 // Returns basic rows with symbol+name (no expensive per-symbol profiles to avoid
-// rate limits; price/mcap/etc will be empty until other enrichment).
+// rate limits). price/mcap/sector/industry etc. are populated later by gather
+// (force path) and the continuous background job.
 export async function fetchUniverseRows(onProgress) {
   const listItems = await fetchFullUniverseList();
   if (!listItems.length) return [];

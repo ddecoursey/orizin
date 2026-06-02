@@ -173,10 +173,11 @@ export default function Header({
 
       {/* Right: Data menu + Profile menu */}
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {/* Data menu (Refresh / Gather) */}
-        <HeaderMenu
-          width="w-64"
-          button={(open, toggle) => (
+        {/* Data menu (Refresh / Gather) — admin only: normal users cannot trigger universe or data refreshes from FMP */}
+        {isAdmin && (
+          <HeaderMenu
+            width="w-64"
+            button={(open, toggle) => (
             <button
               onClick={toggle}
               className={`px-1.5 py-1 text-xs transition-colors flex items-center gap-1.5 bg-transparent
@@ -227,6 +228,7 @@ export default function Header({
             </>
           )}
         </HeaderMenu>
+        )}
 
         {/* Profile menu (account / theme / logout) */}
         <HeaderMenu

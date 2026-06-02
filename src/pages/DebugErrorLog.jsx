@@ -8,6 +8,11 @@ export default function DebugErrorLog() {
   // 'checking' → calling /api/auth/me, 'allowed' → admin, 'denied' → not admin
   const [access, setAccess] = useState('checking');
 
+  // Enrichment background job monitor
+  const [enrichStatus, setEnrichStatus] = useState(null);
+  const [enrichLoading, setEnrichLoading] = useState(false);
+  const [rpmInput, setRpmInput] = useState('150');
+
   useEffect(() => {
     document.title = 'Debug • Orizen';
   }, []);
@@ -36,6 +41,62 @@ export default function DebugErrorLog() {
     }
   };
 
+  const fetchEnrichment = async () => {
+    try {
+      const res = await fetch('/api/debug/enrichment');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('text/html')) {
+        throw new Error('received HTML (dev proxy or stale server issue?)');
+      }
+      const data = await res.json();
+      setEnrichStatus(data);
+      if (data && typeof data.targetRpm === 'number') {
+        setRpmInput(String(data.targetRpm));
+      }
+    } catch (e) {
+      console.error('Failed to fetch enrichment status', e);
+    }
+  };
+
+  const controlEnrichment = async (action, rpm = null) => {
+    setEnrichLoading(true);
+    try {
+      const body = { action };
+      if (rpm != null) body.rpm = rpm;
+      const res = await fetch('/api/debug/enrichment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('text/html') || ct.includes('text/plain')) {
+          throw new Error(`HTTP ${res.status} (got HTML; in dev: restart "npm run dev-server" + ensure vite proxies /api to :3001)`);
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setEnrichStatus(data.status || data);
+    } catch (e) {
+      console.error('Enrichment control failed', e);
+      alert('Control failed: ' + (e.message || e));
+    } finally {
+      setEnrichLoading(false);
+      // refresh immediately
+      fetchEnrichment();
+    }
+  };
+
+  const applyRpm = () => {
+    const rpm = parseInt(rpmInput, 10);
+    if (isNaN(rpm) || rpm < 20 || rpm > 250) {
+      alert('RPM must be between 20 and 250');
+      return;
+    }
+    controlEnrichment(null, rpm);
+  };
+
   const clearErrors = async () => {
     // Simple client-side clear (we can enhance later with a backend clear endpoint)
     setErrors([]);
@@ -44,7 +105,11 @@ export default function DebugErrorLog() {
   useEffect(() => {
     if (access !== 'allowed') return;
     fetchErrors();
-    const interval = setInterval(fetchErrors, 3000); // auto-refresh every 3s
+    fetchEnrichment();
+    const interval = setInterval(() => {
+      fetchErrors();
+      fetchEnrichment();
+    }, 4000); // poll both
     return () => clearInterval(interval);
   }, [access]);
 
@@ -101,6 +166,150 @@ export default function DebugErrorLog() {
           </div>
         </div>
 
+        {/* Enrichment Background Job Dashboard */}
+        <div className="mb-8 bg-gray-900 border border-gray-800 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-xl font-semibold flex items-center gap-2">
+                🔄 Background Enrichment
+                <span className={`text-xs px-2 py-0.5 rounded ${enrichStatus?.running ? 'bg-emerald-900 text-emerald-300' : 'bg-gray-700 text-gray-400'}`}>
+                  {enrichStatus?.running ? 'RUNNING' : 'STOPPED'}
+                </span>
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Continuous low-rate updater for the ~38k universe. Keeps metrics fresh without long user-triggered jobs.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => controlEnrichment(enrichStatus?.running ? 'stop' : 'start')}
+                disabled={enrichLoading}
+                className={`px-3 py-1.5 text-sm rounded border ${enrichStatus?.running ? 'border-red-700 hover:bg-red-900/30' : 'border-emerald-700 hover:bg-emerald-900/30'} disabled:opacity-50`}
+              >
+                {enrichLoading ? '...' : enrichStatus?.running ? 'Stop Job' : 'Start Job'}
+              </button>
+              <div className="flex items-center gap-1 text-sm">
+                <input
+                  type="number"
+                  value={rpmInput}
+                  onChange={(e) => setRpmInput(e.target.value)}
+                  className="w-16 bg-gray-950 border border-gray-700 rounded px-2 py-1 text-xs"
+                  min={20}
+                  max={250}
+                />
+                <button
+                  onClick={applyRpm}
+                  disabled={enrichLoading}
+                  className="px-2 py-1 text-xs rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                >
+                  Set RPM
+                </button>
+              </div>
+              <button
+                onClick={() => {
+                  if (window.confirm('Kill ALL ongoing FMP fetches (universe refresh, gathers, background, AI etc) and stop the background job?')) {
+                    controlEnrichment('kill');
+                  }
+                }}
+                disabled={enrichLoading}
+                className="px-3 py-1.5 text-sm rounded border border-red-800 hover:bg-red-900/40 text-red-300 disabled:opacity-50"
+                title="Emergency stop: aborts in-flight FMP calls + stops background enrichment. Normal users cannot trigger refreshes."
+              >
+                🛑 Kill All &amp; Stop Fetches
+              </button>
+            </div>
+          </div>
+
+          {enrichStatus ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                <div className="text-gray-400 text-xs">Target / Actual Pace</div>
+                <div className="text-2xl font-semibold tabular-nums mt-1">
+                  {enrichStatus.targetRpm} rpm
+                </div>
+                <div className="text-xs text-gray-500 mt-1">~{Math.round(enrichStatus.targetRpm / 2)} symbols/min (km+rat)</div>
+              </div>
+
+              <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                <div className="text-gray-400 text-xs">Session Stats</div>
+                <div className="flex gap-6 mt-1">
+                  <div>
+                    <span className="text-emerald-400 text-2xl font-semibold tabular-nums">{enrichStatus.processed}</span>
+                    <div className="text-xs text-gray-500">processed</div>
+                  </div>
+                  <div>
+                    <span className="text-red-400 text-2xl font-semibold tabular-nums">{enrichStatus.errors}</span>
+                    <div className="text-xs text-gray-500">errors</div>
+                  </div>
+                </div>
+                <div className="text-xs mt-2 text-gray-500">
+                  Missing in DB: <span className="font-mono text-gray-300">{enrichStatus.missingCount}</span>
+                </div>
+              </div>
+
+              <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                <div className="text-gray-400 text-xs">Last Activity</div>
+                <div className="mt-1 font-mono text-sm truncate">
+                  {enrichStatus.lastSymbol ? enrichStatus.lastSymbol : '—'}
+                </div>
+                <div className="text-xs text-gray-500">
+                  {enrichStatus.lastUpdate ? new Date(enrichStatus.lastUpdate).toLocaleTimeString() : 'never'}
+                </div>
+                <div className="mt-2 text-[10px] text-gray-500">
+                  Concurrency: {enrichStatus.concurrency} workers
+                </div>
+              </div>
+
+              {/* Simple activity + error graph */}
+              <div className="md:col-span-3 bg-gray-950 border border-gray-800 rounded p-3">
+                <div className="text-xs text-gray-400 mb-2">Recent Activity (last {Math.min(15, enrichStatus.recent?.length || 0)})</div>
+                {enrichStatus.recent && enrichStatus.recent.length > 0 ? (
+                  <div className="flex flex-wrap gap-1">
+                    {enrichStatus.recent.slice(0, 15).map((a, i) => (
+                      <div
+                        key={i}
+                        title={`${new Date(a.ts).toLocaleTimeString()} • ${a.symbol} • ${a.status}${a.message ? ': ' + a.message : ''}`}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono border ${a.status === 'ok' ? 'border-emerald-800 bg-emerald-900/20 text-emerald-300' : 'border-red-800 bg-red-900/20 text-red-300'}`}
+                      >
+                        {a.symbol}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500">No recent activity yet.</div>
+                )}
+
+                {/* Tiny bar "graph" for error rate in recent window */}
+                <div className="mt-3">
+                  <div className="text-[10px] text-gray-500 mb-1">Error vs OK in recent window</div>
+                  <div className="h-2 bg-gray-800 rounded overflow-hidden flex">
+                    {(() => {
+                      const rec = enrichStatus.recent || [];
+                      const errs = rec.filter(r => r.status === 'err').length;
+                      const oks = rec.length - errs;
+                      const total = Math.max(rec.length, 1);
+                      const errPct = Math.round((errs / total) * 100);
+                      const okPct = 100 - errPct;
+                      return (
+                        <>
+                          <div className="bg-emerald-600 h-2" style={{ width: `${okPct}%` }} title={`${oks} ok`} />
+                          <div className="bg-red-600 h-2" style={{ width: `${errPct}%` }} title={`${errs} errors`} />
+                        </>
+                      );
+                    })()}
+                  </div>
+                  <div className="text-[10px] text-gray-500 mt-0.5 flex justify-between">
+                    <span>OKs dominate = healthy</span>
+                    <span>High red = investigate rate limits / keys</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-gray-500 text-sm">Loading enrichment status...</div>
+          )}
+        </div>
+
         {fetchError ? (
           <div className="bg-red-950 border border-red-800 rounded-lg p-6">
             <p className="text-red-400 font-medium">Could not load error logs</p>
@@ -153,7 +362,7 @@ export default function DebugErrorLog() {
         )}
 
         <div className="mt-6 text-xs text-gray-500">
-          This page is only for debugging. Errors are stored in memory on the backend (last 200).
+          This page is only for debugging. Errors in memory (last 200). Background enrichment runs continuously at low RPM to keep the large universe fresh.
         </div>
       </div>
     </div>

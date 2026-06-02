@@ -22,12 +22,16 @@ import {
   saveSparkline,
   pruneBelowMarketCap,
 } from "../db.js";
-import { logError } from "../index.js";
+import { logError } from "../logger.js";
+import { requireAdmin } from "../auth.js";
 
 // Rate limiters for expensive operations (per user or IP)
+// Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
+// constant "too many" blocks while the background job + UI activity is also using quota.
+const isProd = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
 const refreshLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
+  windowMs: isProd ? 60 * 60 * 1000 : 5 * 60 * 1000,
+  max: isProd ? 5 : 100,
   message: { error: 'Too many refresh requests. Please wait before refreshing again.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -36,8 +40,8 @@ const refreshLimiter = rateLimit({
 });
 
 const enrichLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3,
+  windowMs: isProd ? 60 * 60 * 1000 : 10 * 60 * 1000,
+  max: isProd ? 3 : 30,
   message: { error: 'Too many enrichment requests. Please wait before gathering data again.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -133,6 +137,7 @@ async function getUniverse(force = false) {
 
 // Get universe rows using stable stock-list + etf-list (for refresh).
 // Fetches both, merges for full global stocks+ETFs (no floor). Returns basic rows (symbol+name).
+// Basics like price/mcap/sector are backfilled by enrich (force) and background job.
 // Scope-aware cache + filtering. Client mcap etc still apply to view. Screener as fallback on error.
 async function getUniverseRows(force = false, scope = "global", { minMarketCap = 0 } = {}) {
   const s = ["us", "us-listed", "global"].includes(scope) ? scope : "global";
@@ -225,7 +230,8 @@ router.get("/stocks", (req, res) => {
 });
 
 // ── POST /api/stocks/refresh ───────────────────────────────────────────────
-router.post("/stocks/refresh", refreshLimiter, async (req, res) => {
+// Only admins may trigger universe/data refreshes from FMP.
+router.post("/stocks/refresh", refreshLimiter, requireAdmin, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -334,7 +340,8 @@ router.post("/stocks/refresh", refreshLimiter, async (req, res) => {
 
 // ── POST /api/stocks/enrich ───────────────────────────────────────────────
 // Combined: fetches key-metrics-ttm + ratios-ttm per symbol in one pass
-router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
+// Only admins may trigger data gathers/enriches.
+router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -429,6 +436,23 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
           const row = getStock(symbol);
           try {
             if (cancelled) return;
+
+            // Ensure basic profile fields are populated (price, mcap, sector, industry etc.)
+            // This fixes missing data for symbols added via the list-based universe
+            // (which only provides symbol+name for perf reasons). Gather will now also
+            // backfill basics for any symbol it touches (in addition to the force path).
+            const currentRow = getStock(symbol);
+            const needsBasic = !currentRow?.price || !currentRow?.mcap || !currentRow?.sector || currentRow?.sector === '—';
+            if (needsBasic) {
+              try {
+                const prof = await fetchProfile(symbol, ENRICH_OPTS);
+                if (prof) {
+                  saveScreenerBatch([profileToRow(prof)]);
+                }
+              } catch (e) {
+                console.warn(`[Enrich] Profile backfill failed for ${symbol}:`, e.message);
+              }
+            }
 
             // ── Parallelize the two most important calls per symbol ─────────
             const needKm = !row?.has_km;
@@ -544,6 +568,10 @@ router.post("/stocks/enrich", enrichLimiter, async (req, res) => {
                 if (prof) {
                   // Update in-memory detail cache so the panel sees it immediately
                   detailCache.set(`profile:${symbol}`, { at: Date.now(), data: prof });
+                  // Also persist basic fields (price, mcap, sector, industry, exchange, country)
+                  // to the main stocks table so the screener shows them (was broken after switching
+                  // to list-based universe which only provides symbol+name).
+                  saveScreenerBatch([profileToRow(prof)]);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] Profile failed for ${symbol}:`, e.message);
@@ -668,7 +696,8 @@ router.post("/stocks/deep-enrich", (req, res, next) => {
 
 // ── POST /api/stocks/ai-enrich ────────────────────────────────────────────
 // On-demand: fetches DCF + analyst targets + growth + estimates + owner earnings
-router.post("/stocks/ai-enrich", enrichLimiter, async (req, res) => {
+// Only admins may trigger (heavy) data enrichment.
+router.post("/stocks/ai-enrich", enrichLimiter, requireAdmin, async (req, res) => {
   const { symbols } = req.body;
   if (!symbols?.length)
     return res.status(400).json({ error: "symbols required" });

@@ -343,6 +343,16 @@ export function getMissingEnrich() {
   return db.prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0').all().map(r => r.symbol);
 }
 
+export function getOldestSymbols(limit = 50) {
+  // Prefer symbols that haven't been touched in a while (for background maintenance)
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks ORDER BY updated_at ASC NULLS FIRST, symbol ASC LIMIT ?`
+    )
+    .all(limit)
+    .map((r) => r.symbol);
+}
+
 const applyDcf = db.prepare(`
   UPDATE stocks SET
     dcf        = @dcf,
