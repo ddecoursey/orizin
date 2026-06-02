@@ -36,7 +36,7 @@ export function useStockDetail(symbol) {
     getJson(`/api/stocks/news/${symbol}`).then((d) => {
       if (!cancelled) setNews({ sym: symbol, value: d?.news || [] });
     });
-    getJson(`/api/stocks/sparkline/${symbol}?days=365`).then((d) => {
+    getJson(`/api/stocks/sparkline/${symbol}?days=1825`).then((d) => {
       if (!cancelled) setPoints({ sym: symbol, value: d?.prices || [] });
     });
     getJson(`/api/stocks/rsi/${symbol}?periodLength=10`).then((d) => {

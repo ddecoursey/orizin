@@ -18,6 +18,7 @@ function buildSystemPrompt(context) {
   const {
     filters, weights, stocks, focusSymbols, availableSectors, availableIndustries,
     activeStock, focusStocks, portfolioGoals, today, totalFiltered, activeScreener, pinnedStocks, news,
+    view,
   } = context || {};
 
   const shown = stocks?.length || 0;
@@ -193,6 +194,28 @@ This is their current explicit preference and "lens" for looking at stocks. You 
 
 When discussing whether something is "attractive", "interesting", or "worth owning", always do so through the user's current weight distribution. If their weights are extreme (e.g. 80 G / 10 V / 10 Q), your analysis should feel like it is coming from a growth investor's perspective.
 `;
+
+if (view === 'portfolio-goals') {
+  prompt += `
+=== CURRENT MODE: PORTFOLIO & GOALS ===
+
+The user is currently on their **Portfolio & Goals** page (not the screener). Shift your focus accordingly:
+- Center your analysis on the user's ACTUAL portfolios, holdings, allocations, concentration, diversification, risk, and stated goals (provided above under "USER'S ACTUAL PORTFOLIOS & GOALS").
+- When they ask things like "what do you think of my portfolio?", think through it holistically: position sizing, sector/factor concentration, overlap between holdings, balance vs. their stated goals and risk tolerance, what's working and what's a liability, and where they're over- or under-exposed.
+- Critique and reason about their existing positions first. Only suggest new names when it directly serves rebalancing, filling a gap, or reducing a concentration/risk problem in THEIR portfolio.
+- Do NOT push a list of screener picks here unless asked. This is a "review and reason about what I own / where I'm going" surface, not a discovery surface.
+- You may still reference the screened universe and the Orizen Scores as supporting evidence, but the portfolio and goals are the subject.
+`;
+} else {
+  prompt += `
+=== CURRENT MODE: SCREENER ===
+
+The user is currently on the **Screener** page. Your job here is to surface and recommend stocks from the filtered universe that **complement their existing portfolio and goals**:
+- Lean into discovery: highlight attractive names in view, explain why they fit the user's Q/V/G lens, and how they'd add to (rather than duplicate) what they already own.
+- Always cross-reference the user's ACTUAL portfolios & goals above so recommendations reduce overlap/concentration and move them toward their objectives — never suggest names that simply double down on an already-crowded position or that conflict with their risk goals.
+- When they ask to narrow/refine the set, propose concrete filter changes (per the rules below) and ask to apply them.
+`;
+}
 
 prompt += `
 === SCREENER RECOMMENDATIONS (FILTERS ONLY) ===

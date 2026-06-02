@@ -48,7 +48,7 @@ function SubChip({ label, value, colors, title }) {
   );
 }
 
-function Scorecard({ r, index, onSelectStock }) {
+function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
   const sc = r.score != null ? Math.round(r.score * 100) : null;
   const scoreColor = sc >= 70 ? '#10b981' : sc >= 45 ? '#f59e0b' : '#ef4444';
   const sec = SECTOR_COLORS[r.sector] || { bg: '#1e293b', fg: '#94a3b8' };
@@ -56,21 +56,35 @@ function Scorecard({ r, index, onSelectStock }) {
   return (
     <div
       onClick={() => onSelectStock?.(r)}
-      className={`bg-gray-900 border border-gray-800 rounded-xl p-3.5
+      className={`bg-gray-900 border rounded-xl p-3.5
         hover:border-gray-600 hover:shadow-lg hover:shadow-black/40 transition-all
+        ${pinned ? 'border-amber-800/60 bg-amber-950/10' : 'border-gray-800'}
         ${onSelectStock ? 'cursor-pointer' : ''}`}
       style={{ borderTop: `3px solid ${sec.bg}` }}
     >
       <div className="flex justify-between items-start mb-1">
         <div>
           <span className="text-[9px] font-bold text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded mr-1">
-            #{index + 1}
+            #{rank}
           </span>
           <span className="font-black text-gray-100 text-base">{r.symbol}</span>
         </div>
-        <span className="text-2xl font-black" style={{ color: scoreColor }}>
-          {sc ?? '—'}
-        </span>
+        <div className="flex items-center gap-2">
+          {onTogglePin && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
+              title={pinned ? 'Unpin' : 'Pin to favorites'}
+              className={`text-lg leading-none transition-colors ${
+                pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
+              }`}
+            >
+              {pinned ? '★' : '☆'}
+            </button>
+          )}
+          <span className="text-2xl font-black" style={{ color: scoreColor }}>
+            {sc ?? '—'}
+          </span>
+        </div>
       </div>
       <div className="text-[10px] text-gray-500 mb-3 flex items-center gap-2">
         <span className="truncate">{r.name}</span>
@@ -141,10 +155,16 @@ function Scorecard({ r, index, onSelectStock }) {
 
 const MemoizedScorecard = React.memo(Scorecard);
 
-export default function ScorecardGrid({ rows, onSelectStock }) {
+export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }) {
+  // Pinned favorites are floated to the top (then ordered by score), so they
+  // stay visible regardless of the score sort — same behavior as the table view.
   const sorted = useMemo(
-    () => [...rows].sort((a, b) => (b.score || 0) - (a.score || 0)),
-    [rows],
+    () => [...rows].sort((a, b) => {
+      const ap = pins?.has(a.symbol), bp = pins?.has(b.symbol);
+      if (ap !== bp) return ap ? -1 : 1;
+      return (b.score || 0) - (a.score || 0);
+    }),
+    [rows, pins],
   );
   const shown = sorted.length > CARD_CAP ? sorted.slice(0, CARD_CAP) : sorted;
 
@@ -162,7 +182,14 @@ export default function ScorecardGrid({ rows, onSelectStock }) {
     <div className="p-3">
       <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3">
         {shown.map((r, i) => (
-          <MemoizedScorecard key={r.symbol} r={r} index={i} onSelectStock={onSelectStock} />
+          <MemoizedScorecard
+            key={r.symbol}
+            r={r}
+            index={i}
+            onSelectStock={onSelectStock}
+            pinned={pins?.has(r.symbol)}
+            onTogglePin={onTogglePin}
+          />
         ))}
       </div>
       {sorted.length > CARD_CAP && (

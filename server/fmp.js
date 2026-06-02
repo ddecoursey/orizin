@@ -605,6 +605,26 @@ export async function fetchGeneralNews({ limit = 30 } = {}) {
   }
 }
 
+// Intraday 5-minute price series for the "1D" chart timeframe.
+// Returns [{ date, price }] oldest→newest (most-recent session).
+export async function fetchIntraday(symbol) {
+  const url = `${BASE}/historical-chart/5min?symbol=${symbol}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 10000);
+    if (!Array.isArray(data)) return [];
+    const sorted = [...data].sort((a, b) => new Date(a.date) - new Date(b.date));
+    // Keep only the most recent trading day present in the series.
+    const lastDay = sorted.length ? String(sorted[sorted.length - 1].date).slice(0, 10) : null;
+    const recent = lastDay ? sorted.filter((d) => String(d.date).slice(0, 10) === lastDay) : sorted;
+    return recent
+      .map((d) => ({ date: d.date, price: n(d.close ?? d.price) }))
+      .filter((d) => d.price != null);
+  } catch (e) {
+    console.warn(`[FMP] intraday ${symbol}:`, e.message);
+    return [];
+  }
+}
+
 // Latest news for a specific symbol (company news tab).
 export async function fetchStockNews(symbol, { limit = 20 } = {}) {
   const url = `${BASE}/news/stock?symbols=${symbol}&page=0&limit=${limit}&apikey=${KEY()}`;

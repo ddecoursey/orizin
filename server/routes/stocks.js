@@ -78,6 +78,7 @@ import {
   fetchGeneralNews,
   fetchInsiderTrades,
   fetchStockNews,
+  fetchIntraday,
 } from "../fmp.js";
 // We dynamically fetch up to 8000 symbols via company-screener with scope-aware filters + 500M mkt cap floor.
 // Supports: 'us' (country=US), 'us-listed' (NYSE,NASDAQ,AMEX incl. ADRs like TSM), 'global' (no geo filter).
@@ -793,6 +794,20 @@ router.get("/stocks/insider/:symbol", async (req, res) => {
       fetchInsiderTrades(symbol, { limit: 40 }), force
     );
     res.json({ symbol, trades });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/intraday/:symbol ───────────────────────────────────────
+// Intraday 5-min price series for the chart's "1D" timeframe. Cached ~5m.
+router.get("/stocks/intraday/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const prices = await cachedDetail(`intraday:${symbol}`, 5 * 60 * 1000, () =>
+      fetchIntraday(symbol),
+    );
+    res.json({ symbol, prices });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

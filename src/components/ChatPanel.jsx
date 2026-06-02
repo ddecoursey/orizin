@@ -87,11 +87,19 @@ export default function ChatPanel({ chat }) {
   // Shell-style history: index into prior user messages, null = current draft.
   const [histIdx, setHistIdx] = useState(null);
   const messagesEndRef = useRef(null);
+  const lastMsgRef = useRef(null);
+  const prevLenRef = useRef(0);
   const inputRef = useRef(null);
 
+  // When a new message is added (the user sends and Ori's reply begins), scroll
+  // so the START of the latest message is at the top — the user reads Ori's
+  // answer from the beginning instead of being yanked to the bottom each token.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chat.messages]);
+    if (chat.messages.length > prevLenRef.current) {
+      lastMsgRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    prevLenRef.current = chat.messages.length;
+  }, [chat.messages.length]);
 
   useEffect(() => {
     if (chat.isOpen) inputRef.current?.focus();
@@ -278,7 +286,8 @@ export default function ChatPanel({ chat }) {
         {chat.messages.map((msg, i) => (
           <div
             key={i}
-            className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            ref={i === chat.messages.length - 1 ? lastMsgRef : null}
+            className={`flex scroll-mt-2 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div
               className={`max-w-[90%] rounded-lg px-3 py-2 ${

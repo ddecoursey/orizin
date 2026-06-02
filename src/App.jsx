@@ -120,6 +120,15 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     () => localStorage.getItem(themeKey) || localStorage.getItem("theme") || "dark",
   );
 
+  // Global search → always open the chosen stock's overview (never toggle-close),
+  // and make sure we're on the screener view so the panel is visible.
+  const handleSearchSelect = (stock) => {
+    if (!stock) return;
+    setCurrentView("screener");
+    setPickingSecond(false);
+    setDetailStock(stock);
+  };
+
   // Clicking a row opens the primary overview (clicking the same one closes it).
   // While "picking second", the next click opens the comparison pane instead.
   const handleSelectStock = (stock) => {
@@ -350,6 +359,9 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     : null;
 
   const chat = useChat(filtered, filters, weights, applyRecommendation, activeStock, {
+    // Which main view the user is on ('screener' | 'portfolio-goals') so Ori can
+    // shift its focus: portfolio analysis vs. screener recommendations.
+    view: currentView,
     activeScreener: activeScreenerName,
     pinnedStocks,
     news,
@@ -434,6 +446,13 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         onManageUsers={() => setShowUsersModal(true)}
         currentView={currentView}
         onNavigate={setCurrentView}
+        stocks={stocks}
+        onSearchSelect={handleSearchSelect}
+        portfolioSummary={{
+          grandTotal: portfolioGoals.grandTotal,
+          portfolioCount: portfolioGoals.portfolios?.length || 0,
+          goalCount: portfolioGoals.goals?.length || 0,
+        }}
       />
 
       <ProgressBar progress={loadProgress} label={enrichLoading ? "Enriching…" : "Refreshing…"} onCancel={cancelOperation} />
@@ -637,7 +656,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
-                  <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} />
+                  <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} pins={pins} onTogglePin={togglePin} />
                 </div>
               )}
             </>

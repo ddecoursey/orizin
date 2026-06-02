@@ -104,6 +104,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     return {
       filters,
       weights,
+      view: session.view || 'screener',
       today: new Date().toISOString().slice(0, 10),
       totalFiltered: (filteredStocks || []).length,
       activeScreener: session.activeScreener || null,

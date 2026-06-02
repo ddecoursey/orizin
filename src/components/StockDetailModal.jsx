@@ -1,20 +1,26 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 
 const shortDate = (d) => {
   if (!d) return "";
-  const [, m, day] = d.split("-");
+  const s = String(d);
+  if (s.includes(" ")) return (s.split(" ")[1] || "").slice(0, 5); // intraday → HH:MM
+  const [, m, day] = s.split("-");
   return `${m}/${day}`;
 };
+
+const TIMEFRAMES = ["1D", "1W", "1M", "YTD", "1Y", "5Y"];
 
 // Interactive price chart with an RSI(10) subpanel, grid lines, and a
 // shared hover crosshair + tooltip. Rendered in real pixel coords (measured
 // from the container) so text stays crisp and hover math is exact.
-function PriceChart({ points, rsi }) {
+function PriceChart({ points: allPoints, rsi, symbol }) {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   const [hover, setHover] = useState(null); // hovered point index
+  const [timeframe, setTimeframe] = useState("1Y");
+  const [intraday, setIntraday] = useState({ sym: null, data: null, loading: false });
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -26,16 +32,68 @@ function PriceChart({ points, rsi }) {
     return () => ro.disconnect();
   }, []);
 
-  if (!points || points.length < 2) {
-    return (
-      <div
-        className="flex items-center justify-center bg-gray-900/50 rounded-lg text-xs text-gray-600"
-        style={{ height: 294 }}
-      >
-        No price history available
-      </div>
-    );
-  }
+  // Fetch the intraday series eagerly whenever the symbol changes. We need to
+  // know *up front* whether intraday data exists so we can decide whether to
+  // even render the "1D" button — fetching lazily on the first 1D click meant
+  // the user could land on a blank "1D" while it loaded (or when it's simply
+  // unavailable for that symbol). The server caches this ~5m so it's cheap.
+  useEffect(() => {
+    if (!symbol) { setIntraday({ sym: null, data: null, loading: false }); return; }
+    let cancelled = false;
+    setIntraday({ sym: symbol, data: null, loading: true });
+    fetch(`/api/stocks/intraday/${symbol}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) setIntraday({ sym: symbol, data: d?.prices || [], loading: false }); })
+      .catch(() => { if (!cancelled) setIntraday({ sym: symbol, data: [], loading: false }); });
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  const intradayMode = timeframe === "1D";
+
+  // The series to display for the selected timeframe (daily history is sliced
+  // client-side; 1D uses the lazily-fetched intraday series).
+  const points = useMemo(() => {
+    if (intradayMode) return intraday.sym === symbol ? (intraday.data || []) : [];
+    const all = allPoints || [];
+    if (!all.length) return [];
+    if (timeframe === "5Y") return all;
+    if (timeframe === "YTD") {
+      const jan1 = `${new Date().getFullYear()}-01-01`;
+      const ytd = all.filter((p) => p.date >= jan1);
+      return ytd.length >= 2 ? ytd : all.slice(-2);
+    }
+    const days = { "1W": 7, "1M": 31, "1Y": 365 }[timeframe] || 365;
+    return all.slice(-Math.max(2, Math.round((days * 5) / 7))); // trading-day approx
+  }, [allPoints, intraday, intradayMode, symbol, timeframe]);
+
+  const ready = (points?.length || 0) >= 2;
+  const intradayLoading = intradayMode && intraday.loading;
+
+  // If 1D turned out to be unavailable for this symbol, omit the button and
+  // fall back to a daily timeframe.
+  const intradayUnavailable =
+    intraday.sym === symbol && !intraday.loading && Array.isArray(intraday.data) && intraday.data.length < 2;
+  useEffect(() => {
+    if (intradayMode && intradayUnavailable) setTimeframe("1Y");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intradayMode, intradayUnavailable]);
+
+  const shownTimeframes = intradayUnavailable ? TIMEFRAMES.filter((t) => t !== "1D") : TIMEFRAMES;
+  const TimeframeBar = (
+    <div className="flex gap-1 mb-2">
+      {shownTimeframes.map((tf) => (
+        <button
+          key={tf}
+          onClick={() => setTimeframe(tf)}
+          className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+            timeframe === tf ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700"
+          }`}
+        >
+          {tf}
+        </button>
+      ))}
+    </div>
+  );
 
   // Layout (pixel coords)
   const H = 294;
@@ -53,7 +111,7 @@ function PriceChart({ points, rsi }) {
   // Align RSI to price points by date
   const rsiMap = new Map((rsi || []).map((d) => [d.date, d.rsi]));
   const rsiVals = points.map((p) => (rsiMap.has(p.date) ? rsiMap.get(p.date) : null));
-  const hasRsi = rsiVals.some((v) => v != null);
+  const hasRsi = !intradayMode && rsiVals.some((v) => v != null);
 
   const xAt = (i) => (n === 1 ? 0 : (i / (n - 1)) * w);
   const yPrice = (v) => PRICE_TOP + PRICE_H - ((v - pMin) / pRange) * PRICE_H;
@@ -108,15 +166,20 @@ function PriceChart({ points, rsi }) {
 
   return (
     <div>
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-xs text-gray-500">
-          {shortDate(points[0].date)} → {shortDate(points[points.length - 1].date)}
-        </span>
-        <span
-          className={`text-xs font-semibold font-mono ${up ? "text-emerald-400" : "text-red-400"}`}
-        >
-          {up ? "▲" : "▼"} {Math.abs(changePct).toFixed(1)}% over period
-        </span>
+      {TimeframeBar}
+      <div className="flex items-baseline justify-between mb-2 h-4">
+        {ready && (
+          <>
+            <span className="text-xs text-gray-500">
+              {shortDate(points[0].date)} → {shortDate(points[points.length - 1].date)}
+            </span>
+            <span
+              className={`text-xs font-semibold font-mono ${up ? "text-emerald-400" : "text-red-400"}`}
+            >
+              {up ? "▲" : "▼"} {Math.abs(changePct).toFixed(1)}% over period
+            </span>
+          </>
+        )}
       </div>
 
       <div
@@ -129,7 +192,16 @@ function PriceChart({ points, rsi }) {
         onTouchMove={onTouch}
         onTouchEnd={() => setHover(null)}
       >
-        {w > 0 && (
+        {!ready && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            {intradayLoading ? (
+              <div className="w-full h-full bg-gray-900/50 rounded-lg animate-pulse" />
+            ) : (
+              <span className="text-xs text-gray-600">No price history available{intradayMode ? " (intraday)" : ""}</span>
+            )}
+          </div>
+        )}
+        {ready && w > 0 && (
           <svg width={w} height={H} className="block">
             <defs>
               <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
@@ -264,10 +336,12 @@ function PriceChart({ points, rsi }) {
         )}
       </div>
 
-      <div className="flex justify-between text-[10px] text-gray-500 font-mono mt-1">
-        <span>Low {fmt(pMin, "price")}</span>
-        <span>High {fmt(pMax, "price")}</span>
-      </div>
+      {ready && (
+        <div className="flex justify-between text-[10px] text-gray-500 font-mono mt-1">
+          <span>Low {fmt(pMin, "price")}</span>
+          <span>High {fmt(pMax, "price")}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -721,7 +795,7 @@ export default function StockDetailModal({
             {loadingChart ? (
               <div className="h-[294px] bg-gray-900/50 rounded-lg animate-pulse" />
             ) : (
-              <PriceChart points={points} rsi={rsi} />
+              <PriceChart points={points} rsi={rsi} symbol={symbol} />
             )}
           </div>
 

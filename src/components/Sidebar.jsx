@@ -47,6 +47,7 @@ function FilterRow({ label, filterKey, filters, set, step = 1 }) {
           value={current.op || ">="}
           onChange={(e) => handleOp(e.target.value)}
           className="w-9 shrink-0 appearance-none text-center text-sm leading-none bg-gray-900 border border-gray-700 rounded-l px-0 py-0.5 text-gray-200 focus:outline-none focus:border-blue-500"
+          style={{ textAlignLast: "center", textAlign: "center" }}
         >
           <option value=">=">≥</option>
           <option value=">">&gt;</option>
