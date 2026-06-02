@@ -1,6 +1,11 @@
 import { useState, useEffect } from "react";
 
-export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
+// `mode` controls which surface this modal shows:
+//   'account' → personal Account Settings (change your password)
+//   'users'   → admin User Management (add/remove users, grant admin)
+export default function UsersModal({ onClose, currentUser, isAdmin = false, mode = 'account' }) {
+  const showUsers = mode === 'users' && isAdmin;
+  const showAccount = mode === 'account';
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -30,8 +35,10 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
   }
 
   useEffect(() => {
-    loadUsers();
-  }, []);
+    if (showUsers) loadUsers();
+    else setLoading(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showUsers]);
 
   async function addUser() {
     if (!newUsername || !newPassword) return;
@@ -127,7 +134,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
         onClick={e => e.stopPropagation()}
       >
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-semibold">User Management</h2>
+          <h2 className="text-lg font-semibold">{showUsers ? "User Management" : "Account Settings"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
         </div>
 
@@ -136,7 +143,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
         )}
 
         {/* Admin-only section: Add user + User list */}
-        {isAdmin && (
+        {showUsers && (
           <>
             {/* Add new user */}
             <div className="mb-6">
@@ -216,6 +223,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
         )}
 
         {/* Change own password */}
+        {showAccount && (
         <div>
           <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Change Your Password</div>
           <div className="space-y-2">
@@ -242,6 +250,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false }) {
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

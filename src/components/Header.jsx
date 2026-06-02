@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from "react";
 import OrizenLogo from "./OrizenLogo.jsx";
-import GlobalSearch from "./GlobalSearch.jsx";
 
 // Dropdown that opens on hover (fluid) and also on click (so touch works).
 // Closing is handled by mouse-leave (with a small delay so crossing the gap to
@@ -58,6 +57,21 @@ function MenuItem({ onClick, disabled, children, className = "" }) {
   );
 }
 
+// Top-level page navigation link. Active page is highlighted.
+function NavButton({ active, onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2.5 py-1 text-xs rounded-md transition-colors whitespace-nowrap
+        ${active
+          ? "text-white bg-gray-800 font-semibold"
+          : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/60"}`}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function Header({
   status,
   filtered,
@@ -71,6 +85,7 @@ export default function Header({
   isAdmin,
   onLogout,
   onManageUsers,
+  onAccountSettings,
   currentView = 'screener',
   onNavigate,
   stocks = [],
@@ -141,51 +156,22 @@ export default function Header({
         {status.type !== "ready" && <span className="hidden sm:inline truncate max-w-[220px]">{status.msg}</span>}
       </div>
 
-      {/* Global search — find & open any stock at any time */}
-      <GlobalSearch stocks={stocks} onSelect={onSearchSelect} />
+      {/* Top-level page navigation */}
+      <nav className="flex items-center gap-1 border-l border-gray-800 pl-3 shrink-0">
+        <NavButton active={currentView === 'screener'} onClick={() => onNavigate?.('screener')}>
+          Screener
+        </NavButton>
+        <NavButton active={currentView === 'deep-research'} onClick={() => onNavigate?.('deep-research')}>
+          <span className="hidden sm:inline">Deep Research</span>
+          <span className="sm:hidden">Research</span>
+        </NavButton>
+        <NavButton active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
+          Portfolio
+        </NavButton>
+      </nav>
 
-      {/* Right: Portfolio & Goals + Data menu + Profile menu */}
+      {/* Right: Data menu + Profile menu */}
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
-        {/* Portfolio & Goals menu */}
-        <HeaderMenu
-          width="w-60"
-          button={(open, toggle) => (
-            <button
-              onClick={toggle}
-              className={`px-1.5 py-1 text-xs transition-colors flex items-center gap-1.5 bg-transparent
-                ${currentView === 'portfolio-goals'
-                  ? 'text-violet-300'
-                  : open ? 'text-gray-200' : 'text-gray-400 hover:text-gray-200'}`}
-            >
-              <span className="hidden md:inline">Portfolio &amp; Goals</span>
-              <span className="md:hidden">Portfolio</span>
-              <span className="text-[10px] opacity-60">▾</span>
-            </button>
-          )}
-        >
-          {(close) => (
-            <>
-              <div className="px-3 py-2 border-b border-gray-800">
-                <div className="text-[10px] uppercase tracking-wider text-gray-500">Total invested</div>
-                <div className="text-sm font-bold text-gray-100">
-                  ${Math.round(portfolioSummary?.grandTotal || 0).toLocaleString()}
-                </div>
-                <div className="text-[10px] text-gray-500 mt-0.5">
-                  {portfolioSummary?.portfolioCount || 0} portfolio{(portfolioSummary?.portfolioCount || 0) === 1 ? "" : "s"} · {portfolioSummary?.goalCount || 0} goal{(portfolioSummary?.goalCount || 0) === 1 ? "" : "s"}
-                </div>
-              </div>
-              <MenuItem onClick={() => { close(); onNavigate?.('portfolio-goals'); }}>
-                📊  Open Portfolio &amp; Goals
-              </MenuItem>
-              {currentView === 'portfolio-goals' && (
-                <MenuItem onClick={() => { close(); onNavigate?.('screener'); }}>
-                  ←  Back to screener
-                </MenuItem>
-              )}
-            </>
-          )}
-        </HeaderMenu>
-
         {/* Data menu (Refresh / Gather) */}
         <HeaderMenu
           width="w-64"
@@ -272,9 +258,15 @@ export default function Header({
                 {theme === "dark" ? "☀  Light mode" : "☾  Dark mode"}
               </MenuItem>
 
-              {onManageUsers && (
-                <MenuItem onClick={() => { close(); onManageUsers(); }}>
+              {onAccountSettings && (
+                <MenuItem onClick={() => { close(); onAccountSettings(); }}>
                   ⚙  Account settings
+                </MenuItem>
+              )}
+
+              {isAdmin && onManageUsers && (
+                <MenuItem onClick={() => { close(); onManageUsers(); }}>
+                  👥  User management
                 </MenuItem>
               )}
 

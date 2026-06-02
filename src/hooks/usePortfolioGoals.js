@@ -21,6 +21,7 @@ function normalizeHolding(holding, totalInvested) {
 export function usePortfolioGoals() {
   const [portfolios, setPortfolios] = useState([]);
   const [goals, setGoals] = useState([]);
+  const [theses, setTheses] = useState([]);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
@@ -29,15 +30,17 @@ export function usePortfolioGoals() {
       if (!mounted) return;
       if (Array.isArray(settings.portfolios)) setPortfolios(settings.portfolios);
       if (Array.isArray(settings.goals)) setGoals(settings.goals);
+      if (Array.isArray(settings.theses)) setTheses(settings.theses);
       setHydrated(true);
     }).catch(() => { setHydrated(true); });
     return () => { mounted = false; };
   }, []);
 
-  const persist = useCallback((nextPortfolios, nextGoals) => {
+  const persist = useCallback((nextPortfolios, nextGoals, nextTheses) => {
     const payload = {};
     if (nextPortfolios !== undefined) payload.portfolios = nextPortfolios;
     if (nextGoals !== undefined) payload.goals = nextGoals;
+    if (nextTheses !== undefined) payload.theses = nextTheses;
     patchUserSettings(payload);
   }, []);
 
@@ -105,9 +108,13 @@ export function usePortfolioGoals() {
     setPortfolios(next); persist(next, undefined);
   }, [portfolios, persist]);
 
-  const addGoal = useCallback((text = '') => { const next = [...goals, text || '']; setGoals(next); persist(undefined, next); }, [goals, persist]);
-  const updateGoal = useCallback((index, text) => { const next = goals.map((g, i) => (i === index ? text : g)); setGoals(next); persist(undefined, next); }, [goals, persist]);
-  const deleteGoal = useCallback((index) => { const next = goals.filter((_, i) => i !== index); setGoals(next); persist(undefined, next); }, [goals, persist]);
+  const addGoal = useCallback((text = '') => { const next = [...goals, text || '']; setGoals(next); persist(undefined, next, undefined); }, [goals, persist]);
+  const updateGoal = useCallback((index, text) => { const next = goals.map((g, i) => (i === index ? text : g)); setGoals(next); persist(undefined, next, undefined); }, [goals, persist]);
+  const deleteGoal = useCallback((index) => { const next = goals.filter((_, i) => i !== index); setGoals(next); persist(undefined, next, undefined); }, [goals, persist]);
+
+  const addThesis = useCallback((text = '') => { const next = [...theses, text || '']; setTheses(next); persist(undefined, undefined, next); }, [theses, persist]);
+  const updateThesis = useCallback((index, text) => { const next = theses.map((t, i) => (i === index ? text : t)); setTheses(next); persist(undefined, undefined, next); }, [theses, persist]);
+  const deleteThesis = useCallback((index) => { const next = theses.filter((_, i) => i !== index); setTheses(next); persist(undefined, undefined, next); }, [theses, persist]);
 
   const { grandTotal, overallAllocations } = useMemo(() => {
     const total = portfolios.reduce((sum, p) => sum + (Number(p.totalInvested) || 0), 0);
@@ -141,5 +148,5 @@ export function usePortfolioGoals() {
     return { grandTotal: Math.round(total * 100) / 100, overallAllocations: allocations };
   }, [portfolios]);
 
-  return { portfolios, goals, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, grandTotal, overallAllocations };
+  return { portfolios, goals, theses, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, addThesis, updateThesis, deleteThesis, grandTotal, overallAllocations };
 }

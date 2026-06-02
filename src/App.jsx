@@ -17,6 +17,7 @@ import UsersModal from "./components/UsersModal.jsx";
 import StockDetailModal from "./components/StockDetailModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
 import PortfolioGoalsPage from "./pages/PortfolioGoalsPage.jsx";
+import DeepResearchPage from "./components/DeepResearchPage.jsx";
 import Footer from "./components/Footer.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 
@@ -90,12 +91,16 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     () => (typeof window !== "undefined" && window.innerWidth < 1024 ? "cards" : "table"),
   );
   const [showUsersModal, setShowUsersModal] = useState(false);
+  // 'account' (personal settings) | 'users' (admin user management)
+  const [usersModalMode, setUsersModalMode] = useState('account');
   const [showCompare, setShowCompare] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
   const [detailStock2, setDetailStock2] = useState(null);
   const [pickingSecond, setPickingSecond] = useState(false);
   // When two overviews are open we keep them on the same tab and scroll in sync.
   const [compareTab, setCompareTab] = useState("overview");
+  // Shared chart timeframe so the two compare panes move together.
+  const [compareTimeframe, setCompareTimeframe] = useState("1Y");
   const aScrollRef = useRef(null);
   const bScrollRef = useRef(null);
   const scrollSyncingRef = useRef(false);
@@ -104,8 +109,22 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   // Portfolio & Goals (always loaded so it can be sent to Ori chat context)
   const portfolioGoals = usePortfolioGoals();
 
-  // Main view: 'screener' | 'portfolio-goals'
+  // Main view: 'screener' | 'portfolio-goals' | 'deep-research'
   const [currentView, setCurrentView] = useState('screener');
+  // Symbol currently open in the Deep Research page (single-stock focus).
+  const [researchSymbol, setResearchSymbol] = useState(null);
+
+  // Open the comprehensive Deep Research page for a single symbol. Used by the
+  // overview sidebar button, global search, and Ori's "enter deep research" flow.
+  const openDeepResearch = (symbol) => {
+    if (!symbol) return;
+    setResearchSymbol(typeof symbol === "string" ? symbol : symbol.symbol);
+    setPickingSecond(false);
+    // Close the quick-overview panes so Deep Research owns the full width.
+    setDetailStock(null);
+    setDetailStock2(null);
+    setCurrentView("deep-research");
+  };
 
   // Track whether enough time has passed to show the full error UI.
   // This prevents a scary "Failed to load" flash on hard refresh while the
@@ -120,13 +139,11 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     () => localStorage.getItem(themeKey) || localStorage.getItem("theme") || "dark",
   );
 
-  // Global search → always open the chosen stock's overview (never toggle-close),
-  // and make sure we're on the screener view so the panel is visible.
+  // Global search → open the chosen stock directly in the Deep Research page
+  // (the dedicated single-stock research surface).
   const handleSearchSelect = (stock) => {
     if (!stock) return;
-    setCurrentView("screener");
-    setPickingSecond(false);
-    setDetailStock(stock);
+    openDeepResearch(stock.symbol);
   };
 
   // Clicking a row opens the primary overview (clicking the same one closes it).
@@ -259,6 +276,19 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   const chatFocusDetail1 = useStockDetail(chatFocusSym1);
   const chatFocusDetail2 = useStockDetail(chatFocusSym2);
 
+  // On the Deep Research page, fetch the on-screen stock's full detail so Ori
+  // can dig into everything the user is looking at (profile, DCF, targets,
+  // insider, news, RSI, grades, performance) without an extra click.
+  const researchRow =
+    currentView === "deep-research" && researchSymbol
+      ? filtered.find((r) => r.symbol === researchSymbol) ||
+        stocks.find((r) => r.symbol === researchSymbol) ||
+        { symbol: researchSymbol }
+      : null;
+  const researchDetail = useStockDetail(
+    currentView === "deep-research" ? researchSymbol : null,
+  );
+
   function closeDetailA() {
     setPickingSecond(false);
     if (detailStock2) {
@@ -311,6 +341,23 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       }
     : null;
 
+  // The on-screen Deep Research stock, with full detail, framed exactly like
+  // activeStock so Ori treats it as the thing the user is currently studying.
+  const researchStock = researchRow
+    ? {
+        ...researchRow,
+        profile: researchDetail.profile,
+        ratings: researchDetail.ratings,
+        grades: researchDetail.grades,
+        aiData: researchDetail.aiData,
+        insider: researchDetail.insider,
+        news: researchDetail.news || [],
+        latestRsi: researchDetail.rsi?.length ? researchDetail.rsi[researchDetail.rsi.length - 1].rsi : null,
+        performance: pricePerformance(researchDetail.points),
+        rsiTrend: rsiTrend(researchDetail.rsi),
+      }
+    : null;
+
   // What the user is actively working with: their pinned watchlist and the
   // screener (tab) they're in. Pinned rows pull from the filtered set first
   // (so they carry live scores), falling back to the full universe.
@@ -358,7 +405,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       }
     : null;
 
-  const chat = useChat(filtered, filters, weights, applyRecommendation, activeStock, {
+  const chat = useChat(filtered, filters, weights, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
     // Which main view the user is on ('screener' | 'portfolio-goals') so Ori can
     // shift its focus: portfolio analysis vs. screener recommendations.
     view: currentView,
@@ -374,6 +421,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     portfolioGoals: {
       portfolios: portfolioGoals.portfolios,
       goals: portfolioGoals.goals,
+      theses: portfolioGoals.theses,
       grandTotal: portfolioGoals.grandTotal,
       overallAllocations: portfolioGoals.overallAllocations,
     },
@@ -381,6 +429,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       const row = filtered.find((r) => r.symbol === symbol) || stocks.find((r) => r.symbol === symbol);
       if (row) handleSelectStock(row);
     },
+    // Ori can transition the user into the Deep Research page (with confirmation).
+    onEnterDeepResearch: (symbol) => openDeepResearch(symbol),
   });
 
   // Keep additional chat-focused symbols enriched with full detail data so that
@@ -443,7 +493,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         currentUser={currentUser}
         isAdmin={isAdmin}
         onLogout={onLogout}
-        onManageUsers={() => setShowUsersModal(true)}
+        onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
+        onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}
         currentView={currentView}
         onNavigate={setCurrentView}
         stocks={stocks}
@@ -473,10 +524,28 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         )}
 
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
-          {currentView === 'portfolio-goals' ? (
-            <PortfolioGoalsPage 
-              stocks={stocks} 
-              theme={theme} 
+          {currentView === 'deep-research' ? (
+            <DeepResearchPage
+              symbol={researchSymbol}
+              stocks={stocks}
+              onSelectSymbol={(sym) => openDeepResearch(sym)}
+              row={
+                researchSymbol
+                  ? filtered.find((r) => r.symbol === researchSymbol) ||
+                    stocks.find((r) => r.symbol === researchSymbol) ||
+                    { symbol: researchSymbol }
+                  : null
+              }
+              onBack={() => setCurrentView('screener')}
+              onAskOri={(sym) => {
+                chat.setIsOpen(true);
+                chat.askAboutStock(sym);
+              }}
+            />
+          ) : currentView === 'portfolio-goals' ? (
+            <PortfolioGoalsPage
+              stocks={stocks}
+              theme={theme}
               onSelectStock={handleSelectStock}
               detailStock={detailStock}
             />
@@ -668,6 +737,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             row={detailRow}
             symbol={detailStock?.symbol}
             onClose={closeDetailA}
+            onDeepResearch={() => openDeepResearch(detailStock?.symbol)}
             profile={detail.profile}
             points={detail.points}
             rsi={detail.rsi}
@@ -675,14 +745,12 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             grades={detail.grades}
             aiData={detail.aiData}
             insider={detail.insider}
-            news={detail.news}
             loadingProfile={detail.loadingProfile}
             loadingChart={detail.loadingChart}
             loadingRatings={detail.loadingRatings}
             loadingGrades={detail.loadingGrades}
             loadingAi={detail.loadingAi}
             loadingInsider={detail.loadingInsider}
-            loadingNews={detail.loadingNews}
             comparePicking={pickingSecond}
             onStartCompare={!detailStock2 ? () => setPickingSecond(true) : null}
             onCancelCompare={() => setPickingSecond(false)}
@@ -690,6 +758,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             onCompare={detailStock2 ? () => setShowCompare(true) : null}
             tab={detailStock2 ? compareTab : null}
             onTabChange={detailStock2 ? setCompareTab : null}
+            timeframe={detailStock2 ? compareTimeframe : null}
+            onTimeframeChange={detailStock2 ? setCompareTimeframe : null}
             scrollRef={aScrollRef}
             onScrollSync={() => syncScroll(aScrollRef, bScrollRef)}
           />
@@ -707,17 +777,17 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
             grades={detail2.grades}
             aiData={detail2.aiData}
             insider={detail2.insider}
-            news={detail2.news}
             loadingProfile={detail2.loadingProfile}
             loadingChart={detail2.loadingChart}
             loadingRatings={detail2.loadingRatings}
             loadingGrades={detail2.loadingGrades}
             loadingAi={detail2.loadingAi}
             loadingInsider={detail2.loadingInsider}
-            loadingNews={detail2.loadingNews}
             onCompare={() => setShowCompare(true)}
             tab={compareTab}
             onTabChange={setCompareTab}
+            timeframe={compareTimeframe}
+            onTimeframeChange={setCompareTimeframe}
             scrollRef={bScrollRef}
             onScrollSync={() => syncScroll(bScrollRef, aScrollRef)}
           />
@@ -756,6 +826,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
           onClose={() => setShowUsersModal(false)}
           currentUser={currentUser}
           isAdmin={isAdmin}
+          mode={usersModalMode}
         />
       )}
 

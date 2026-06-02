@@ -80,7 +80,45 @@ function Markdown({ text }) {
   );
 }
 
+// Empty-state copy + starter prompts tailored to the page Ori is open on.
+function pageHints(view, symbol) {
+  if (view === "deep-research") {
+    const s = symbol || "this stock";
+    return {
+      tagline: "Digs into the stock on screen — valuation, quality, risks, news.",
+      suggestions: [
+        `Walk me through ${s}'s bull and bear case`,
+        `What do the numbers say about ${s}'s valuation?`,
+        `What are the key risks for ${s} right now?`,
+        `Does ${s} fit my goals and theses?`,
+      ],
+    };
+  }
+  if (view === "portfolio-goals") {
+    return {
+      tagline: "Helps with your goals, theses, and improving your portfolio.",
+      suggestions: [
+        "What do you think of my portfolio?",
+        "Where am I over-concentrated, and how do I diversify?",
+        "Does my portfolio match my goals and theses?",
+        "What should I trim or add, and why?",
+      ],
+    };
+  }
+  // screener (default)
+  return {
+    tagline: "Suggests filters. Never touches your Q/V/G weights. Always asks first.",
+    suggestions: [
+      "What looks interesting here given my current weights?",
+      "Narrow to higher growth companies",
+      "Narrow to high-quality compounders",
+      "Which of these best complement my portfolio?",
+    ],
+  };
+}
+
 export default function ChatPanel({ chat }) {
+  const hints = pageHints(chat.view, chat.activeSymbol);
   const [input, setInput] = useState("");
   const [showRecall, setShowRecall] = useState(false);
   const [sessions, setSessions] = useState([]);
@@ -259,15 +297,10 @@ export default function ChatPanel({ chat }) {
               Ori — Stock Analyst
             </p>
             <p className="text-[10px] text-gray-600 max-w-[260px] mx-auto leading-snug">
-              Suggests filters. Never touches your Q/V/G weights. Always asks first.
+              {hints.tagline}
             </p>
             <div className="mt-3 lg:mt-4 flex flex-col gap-1">
-              {[
-                "What looks interesting here given my current weights?",
-                "Narrow to higher growth companies",
-                "Narrow to high-quality compounders",
-                "Is the open stock attractive under my weights?",
-              ].map((q) => (
+              {hints.suggestions.map((q) => (
                 <button
                   key={q}
                   onClick={() => {
@@ -301,6 +334,18 @@ export default function ChatPanel({ chat }) {
               ) : msg.content ? (
                 <>
                   <Markdown text={msg.content} />
+
+                  {/* Confirmation UI for Ori's offer to open Deep Research */}
+                  {msg.deepResearch && (
+                    <div className="mt-3 pt-3 border-t border-gray-700 flex items-center gap-2">
+                      <button
+                        onClick={() => chat.enterDeepResearch?.(msg.deepResearch)}
+                        className="px-3 py-1.5 text-xs font-semibold rounded bg-gradient-to-br from-blue-600 to-violet-600 text-white hover:brightness-110 transition-all"
+                      >
+                        🔬 Open Deep Research — {msg.deepResearch}
+                      </button>
+                    </div>
+                  )}
 
                   {/* Confirmation UI for Ori's screener recommendations */}
                   {msg.recommendation && msg.recommendation.filters && (

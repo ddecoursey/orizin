@@ -15,11 +15,15 @@ const TIMEFRAMES = ["1D", "1W", "1M", "YTD", "1Y", "5Y"];
 // Interactive price chart with an RSI(10) subpanel, grid lines, and a
 // shared hover crosshair + tooltip. Rendered in real pixel coords (measured
 // from the container) so text stays crisp and hover math is exact.
-function PriceChart({ points: allPoints, rsi, symbol }) {
+export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timeframe: timeframeProp = null, onTimeframeChange = null }) {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   const [hover, setHover] = useState(null); // hovered point index
-  const [timeframe, setTimeframe] = useState("1Y");
+  // Timeframe can be controlled by the parent (so two compare panes stay in
+  // sync) or managed internally for a standalone chart.
+  const [timeframeInternal, setTimeframeInternal] = useState("1Y");
+  const timeframe = timeframeProp ?? timeframeInternal;
+  const setTimeframe = onTimeframeChange || setTimeframeInternal;
   const [intraday, setIntraday] = useState({ sym: null, data: null, loading: false });
 
   useEffect(() => {
@@ -96,11 +100,15 @@ function PriceChart({ points: allPoints, rsi, symbol }) {
   );
 
   // Layout (pixel coords)
-  const H = 294;
+  // Layout scales with the requested height so the chart can be rendered large
+  // (Deep Research page) or compact (overview pane) from the same component.
+  const H = height;
   const PRICE_TOP = 8;
-  const PRICE_H = 166;
-  const RSI_TOP = 212;
-  const RSI_H = 64;
+  const LABEL_H = 18;                                  // bottom date-label strip
+  const RSI_H = Math.round((H - PRICE_TOP - LABEL_H) * 0.22);
+  const GAP = Math.round(H * 0.07);                    // gap between price + RSI
+  const RSI_TOP = H - LABEL_H - RSI_H;
+  const PRICE_H = RSI_TOP - GAP - PRICE_TOP;
   const n = points.length;
 
   const prices = points.map((p) => p.price);
@@ -539,8 +547,8 @@ function relDate(d) {
   return days < 30 ? `${days}d ago` : new Date(t).toLocaleDateString();
 }
 
-// Latest news for the open company (News tab). Each links out to the article.
-function StockNewsList({ news }) {
+// Latest news for a company. Each links out to the article. Used by Deep Research.
+export function StockNewsList({ news }) {
   return (
     <div className="space-y-2.5">
       {news.slice(0, 15).map((a, i) => (
@@ -643,21 +651,22 @@ export default function StockDetailModal({
   grades = [],
   aiData = null,
   insider = [],
-  news = [],
   loadingProfile = false,
   loadingChart = false,
   loadingRatings = false,
   loadingGrades = false,
   loadingAi = false,
   loadingInsider = false,
-  loadingNews = false,
   comparePicking = false,
   onStartCompare = null,
   onCancelCompare = null,
   onPickSecond = null,
   onCompare = null,
+  onDeepResearch = null,
   tab = null,
   onTabChange = null,
+  timeframe = null,
+  onTimeframeChange = null,
   scrollRef = null,
   onScrollSync = null,
 }) {
@@ -736,15 +745,37 @@ export default function StockDetailModal({
           </div>
         </div>
 
-        {/* Compare controls */}
-        {onCompare ? (
-          <button
-            onClick={onCompare}
-            className="shrink-0 mx-4 mt-2 py-1.5 rounded-md text-xs font-semibold bg-blue-600/20 text-blue-300 border border-blue-800/50 hover:bg-blue-600/30 transition-colors"
-          >
-            🆚 Compare head-to-head
-          </button>
-        ) : comparePicking ? (
+        {/* Action buttons — Deep Research + Compare, compact and side by side */}
+        {(onDeepResearch || onCompare || (onStartCompare && !comparePicking)) && (
+          <div className="shrink-0 mx-4 mt-2 flex gap-2">
+            {onDeepResearch && (
+              <button
+                onClick={onDeepResearch}
+                className="flex-1 py-1 rounded-md text-[11px] font-semibold bg-gradient-to-br from-blue-600/25 to-violet-600/25 text-violet-200 border border-violet-800/50 hover:brightness-125 transition-all"
+              >
+                🔬 Deep Research
+              </button>
+            )}
+            {onCompare ? (
+              <button
+                onClick={onCompare}
+                className="flex-1 py-1 rounded-md text-[11px] font-semibold bg-blue-600/20 text-blue-300 border border-blue-800/50 hover:bg-blue-600/30 transition-colors"
+              >
+                🆚 Compare
+              </button>
+            ) : onStartCompare && !comparePicking ? (
+              <button
+                onClick={onStartCompare}
+                className="flex-1 py-1 rounded-md text-[11px] font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors"
+              >
+                🆚 Compare
+              </button>
+            ) : null}
+          </div>
+        )}
+
+        {/* Compare picking — full-width ticker input */}
+        {comparePicking && (
           <div className="shrink-0 mx-4 mt-2 p-2 rounded-md bg-blue-950/40 border border-blue-900/60">
             <div className="text-[10px] text-blue-300 mb-1.5">
               Pick a second company — click another stock, or type its ticker:
@@ -777,14 +808,7 @@ export default function StockDetailModal({
               </button>
             </div>
           </div>
-        ) : onStartCompare ? (
-          <button
-            onClick={onStartCompare}
-            className="shrink-0 mx-4 mt-2 py-1.5 rounded-md text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors"
-          >
-            🆚 Compare with another company
-          </button>
-        ) : null}
+        )}
 
         <div ref={scrollRef} onScroll={onScrollSync} className="flex-1 overflow-y-auto overscroll-contain p-4 space-y-5">
           {/* Price chart — always visible */}
@@ -795,7 +819,7 @@ export default function StockDetailModal({
             {loadingChart ? (
               <div className="h-[294px] bg-gray-900/50 rounded-lg animate-pulse" />
             ) : (
-              <PriceChart points={points} rsi={rsi} symbol={symbol} />
+              <PriceChart points={points} rsi={rsi} symbol={symbol} timeframe={timeframe} onTimeframeChange={onTimeframeChange} />
             )}
           </div>
 
@@ -822,7 +846,6 @@ export default function StockDetailModal({
               ["overview", "Overview"],
               ["grades", "Grades"],
               ["insider", "Insider"],
-              ["news", "News"],
             ].map(([id, label]) => (
               <button
                 key={id}
@@ -936,15 +959,6 @@ export default function StockDetailModal({
               <InsiderList trades={insider} />
             ) : (
               <p className="text-xs text-gray-600">No recent insider trades for {symbol}.</p>
-            ))}
-
-          {activeTab === "news" &&
-            (loadingNews ? (
-              <div className="h-24 bg-gray-900/50 rounded-lg animate-pulse" />
-            ) : news.length ? (
-              <StockNewsList news={news} />
-            ) : (
-              <p className="text-xs text-gray-600">No recent news for {symbol}.</p>
             ))}
         </div>
       </aside>

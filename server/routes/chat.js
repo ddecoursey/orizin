@@ -91,7 +91,7 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
   // === USER PORTFOLIOS & GOALS (critical framing context) ===
   if (context?.portfolioGoals) {
     const pg = context.portfolioGoals;
-    if ((pg.portfolios?.length || pg.goals?.length)) {
+    if ((pg.portfolios?.length || pg.goals?.length || pg.theses?.length)) {
       prompt += `\n=== USER'S ACTUAL PORTFOLIOS & GOALS ===\n`;
       prompt += `Grand total invested across all portfolios: $${(pg.grandTotal || 0).toLocaleString()}\n\n`;
 
@@ -124,7 +124,17 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
         });
       }
 
-      prompt += `\nIMPORTANT: Always frame recommendations in the context of the user's existing holdings, concentration risk, tax location (if inferable), and stated goals. Suggest specific buys/sells that consider overlap with current positions. Do not recommend things that would dramatically increase risk relative to their goals.\n`;
+      if (pg.theses?.length) {
+        const cleanTheses = pg.theses.filter((t) => t && t.trim());
+        if (cleanTheses.length) {
+          prompt += `\nUSER INVESTMENT THESES (the user's own convictions about specific companies or trends — treat these as their directional views and weigh them when reasoning. You may respectfully pressure-test or add nuance, but do not dismiss them):\n`;
+          cleanTheses.forEach((t, i) => {
+            prompt += `${i + 1}. ${t.trim()}\n`;
+          });
+        }
+      }
+
+      prompt += `\nIMPORTANT: Always frame recommendations in the context of the user's existing holdings, concentration risk, tax location (if inferable), stated goals, AND their investment theses above. Suggest specific buys/sells that consider overlap with current positions. Do not recommend things that would dramatically increase risk relative to their goals.\n`;
     }
   }
 
@@ -139,6 +149,15 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
   }
 
   prompt += `
+=== DEEP RESEARCH HANDOFF ===
+
+Orizen has a dedicated **Deep Research** page that shows comprehensive single-stock data (full profile, key metrics, ratios, DCF, financial statements, SEC filings, price targets, insider trading, exec comp, peers, and growth).
+
+When the user asks for a deep/comprehensive dive on ONE specific stock (e.g. "do a deep dive on NVDA", "I want to research AAPL in depth", "tell me everything about MSFT"), do the following:
+1. Give a brief, useful answer first.
+2. Then ASK if they'd like to open the Deep Research page for that stock, and on its own line at the very end of your message emit the token: \`[[deep-research:SYMBOL]]\` (e.g. \`[[deep-research:NVDA]]\`). The app turns this into an "Open Deep Research" button — do NOT describe the token itself.
+Only emit the token when the user clearly wants an in-depth look at a single named stock. Never emit it for general/screener questions or for multiple stocks at once.
+
 RESPONSE GUIDELINES:
 - Be specific: name stocks, cite numbers from the data
 - Use markdown tables and bold text for key findings
@@ -197,22 +216,33 @@ When discussing whether something is "attractive", "interesting", or "worth owni
 
 if (view === 'portfolio-goals') {
   prompt += `
-=== CURRENT MODE: PORTFOLIO & GOALS ===
+=== CURRENT MODE: PORTFOLIO ===
 
-The user is currently on their **Portfolio & Goals** page (not the screener). Shift your focus accordingly:
-- Center your analysis on the user's ACTUAL portfolios, holdings, allocations, concentration, diversification, risk, and stated goals (provided above under "USER'S ACTUAL PORTFOLIOS & GOALS").
-- When they ask things like "what do you think of my portfolio?", think through it holistically: position sizing, sector/factor concentration, overlap between holdings, balance vs. their stated goals and risk tolerance, what's working and what's a liability, and where they're over- or under-exposed.
-- Critique and reason about their existing positions first. Only suggest new names when it directly serves rebalancing, filling a gap, or reducing a concentration/risk problem in THEIR portfolio.
-- Do NOT push a list of screener picks here unless asked. This is a "review and reason about what I own / where I'm going" surface, not a discovery surface.
-- You may still reference the screened universe and the Orizen Scores as supporting evidence, but the portfolio and goals are the subject.
+The user is currently on their **Portfolio** page (not the screener or deep research). This is your top priority here: help them with their goals & theses and improve their portfolio. Shift your focus accordingly:
+- Center your analysis on the user's ACTUAL portfolios, holdings, allocations, concentration, diversification, risk, stated GOALS, and INVESTMENT THESES (all provided above under "USER'S ACTUAL PORTFOLIOS & GOALS").
+- Prioritize concrete ways to IMPROVE the portfolio, and explain the reasoning every time: e.g. "diversify by adding exposure to X because you're 70% in tech", "trim Y because it's an oversized 25% position and overlaps with Z", "this conflicts with your stated goal of capital preservation", "this supports your thesis that …".
+- When they ask "what do you think of my portfolio?", think through it holistically: position sizing, sector/factor concentration, overlap between holdings, correlation/risk, cash drag, and balance vs. their goals, theses, and risk tolerance. Call out what's working and what's a liability, and where they're over- or under-exposed.
+- Tie advice back to their goals and theses explicitly. You may respectfully pressure-test a thesis, but treat it as their directional view.
+- Critique and reason about existing positions first. Only suggest new names when it serves rebalancing, filling a gap, diversification, or reducing a concentration/risk problem in THEIR portfolio.
+- Do NOT push a list of screener picks here unless asked. This is a "review, improve, and reason about what I own and where I'm going" surface, not a discovery surface.
+`;
+} else if (view === 'deep-research') {
+  prompt += `
+=== CURRENT MODE: DEEP RESEARCH (SINGLE STOCK) ===
+
+The user is on the **Deep Research** page, studying ONE stock in depth${activeStock ? `: **${activeStock.symbol}** (${activeStock.name || ""})` : ""}. Everything they're looking at for that stock is provided above in its detailed section (profile, key metrics, financial ratios, DCF/valuation, analyst price targets, insider trading, RSI/technical trend, price performance, grades, and recent news). Your job here is to dig into the nitty-gritty of THIS stock:
+- Go deep and specific. Pull from EVERY detail available on screen for this stock — valuation (DCF margin of safety, multiples vs. history/peers), quality (ROIC, margins, balance sheet), growth, capital allocation, analyst targets, insider activity, technicals/RSI, and what the recent news implies.
+- Synthesize: what's the bull case, the bear case, the key risks, and what would change your mind. Reference the actual numbers shown, not generalities.
+- Frame conclusions through the user's Q/V/G lens and, where relevant, their portfolio/goals/theses (e.g. how this fits or conflicts).
+- Stay focused on this one stock unless the user explicitly asks to compare or zoom out. Do NOT emit screener filter recommendations here unless they explicitly ask to go filter the universe.
 `;
 } else {
   prompt += `
 === CURRENT MODE: SCREENER ===
 
-The user is currently on the **Screener** page. Your job here is to surface and recommend stocks from the filtered universe that **complement their existing portfolio and goals**:
+The user is currently on the **Screener** page. This is your strength here: filtering and recommending stocks. Your job is to surface and recommend stocks from the filtered universe that **complement their existing portfolio and goals**:
 - Lean into discovery: highlight attractive names in view, explain why they fit the user's Q/V/G lens, and how they'd add to (rather than duplicate) what they already own.
-- Always cross-reference the user's ACTUAL portfolios & goals above so recommendations reduce overlap/concentration and move them toward their objectives — never suggest names that simply double down on an already-crowded position or that conflict with their risk goals.
+- Always cross-reference the user's ACTUAL portfolios, goals & theses above so recommendations reduce overlap/concentration and move them toward their objectives — never suggest names that simply double down on an already-crowded position or that conflict with their risk goals.
 - When they ask to narrow/refine the set, propose concrete filter changes (per the rules below) and ask to apply them.
 `;
 }

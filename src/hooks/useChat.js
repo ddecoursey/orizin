@@ -237,6 +237,26 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
                     });
                   }
                 }
+                // Ori may offer to open the full Deep Research page for a single
+                // stock via an inline token, e.g. [[deep-research:AAPL]]. We strip
+                // the token from the visible text and attach the symbol so the
+                // ChatPanel can render an "Open Deep Research" confirm button.
+                const drMatch = accumulated.match(/\[\[deep-research:\s*([A-Za-z0-9.\-]+)\s*\]\]/i);
+                if (drMatch) {
+                  const drSym = drMatch[1].toUpperCase();
+                  setMessages(prev => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last?.role === 'assistant') {
+                      next[next.length - 1] = {
+                        ...last,
+                        content: (last.content || '').replace(drMatch[0], '').trimEnd(),
+                        deepResearch: drSym,
+                      };
+                    }
+                    return next;
+                  });
+                }
               } else if (evt.type === 'error') {
                 setError(evt.message);
                 setIsStreaming(false);
@@ -375,8 +395,12 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     sessionId, focusSymbols, setFocusSymbols,
     sendMessage, askAboutStock, clearChat,
     applyRecommendation, dismissRecommendation,
+    enterDeepResearch: (sym) => session.onEnterDeepResearch?.(sym),
     listSessions, loadSession, deleteSession,
     stockCount: filteredStocks?.length || 0,
+    // Surfaced so the chat UI can tailor itself to the current page.
+    view: session.view || 'screener',
+    activeSymbol: activeStock?.symbol || null,
   };
 }
 

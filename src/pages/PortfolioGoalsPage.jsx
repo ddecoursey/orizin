@@ -60,9 +60,12 @@ function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
 }
 
 export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSelectStock, detailStock }) {
-  const { portfolios, goals, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, grandTotal, overallAllocations } = usePortfolioGoals();
+  const { portfolios, goals, theses, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, addThesis, updateThesis, deleteThesis, grandTotal, overallAllocations } = usePortfolioGoals();
   const [goalsVisible, setGoalsVisible] = useState(() => { const saved = localStorage.getItem('portfolio_goals_visible'); return saved !== null ? saved === 'true' : true; });
   const [allocationLimit, setAllocationLimit] = useState(10);
+  // Collapse the heavy holdings editor by default for a cleaner page — the
+  // Combined Allocation + portfolio chips stay visible; expand to edit.
+  const [editorOpen, setEditorOpen] = useState(false);
   const toggleGoals = () => { setGoalsVisible(v => { const next = !v; localStorage.setItem('portfolio_goals_visible', String(next)); return next; }); };
   const availableSymbols = React.useMemo(() => { const set = new Set((stocks || []).map((r) => r.symbol).filter(Boolean)); return [...set].sort(); }, [stocks]);
   const [selectedId, setSelectedId] = useState(null);
@@ -84,10 +87,10 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">
       <div className="flex items-center justify-between border-b border-gray-800 px-6 py-4 shrink-0 bg-gray-950/95 backdrop-blur">
-        <div><h1 className="text-xl font-semibold tracking-tight">Portfolio & Goals</h1><p className="text-xs text-gray-500 mt-0.5">Your holdings and goals are sent to Ori automatically. Changes save as you type.</p></div>
+        <div><h1 className="text-xl font-semibold tracking-tight">Portfolio</h1><p className="text-xs text-gray-500 mt-0.5">Your holdings, goals and theses are sent to Ori automatically. Changes save as you type.</p></div>
         <div className="flex items-center gap-6">
           <button onClick={toggleGoals} className="text-xs px-3 py-1.5 rounded-lg border border-gray-800 bg-gray-900/50 hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-2">
-            {goalsVisible ? 'Hide Goals' : 'Show Goals'} <span className="opacity-50">{goalsVisible ? '→' : '←'}</span>
+            {goalsVisible ? 'Hide Goals & Theses' : 'Show Goals & Theses'} <span className="opacity-50">{goalsVisible ? '→' : '←'}</span>
           </button>
           <div className="text-right"><div className="text-[10px] uppercase tracking-widest text-gray-500">Total Portfolio Value</div><div className="text-2xl font-semibold tabular-nums text-emerald-400">{formatMoney(grandTotal)}</div></div>
         </div>
@@ -119,12 +122,30 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
             {portfolios.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {portfolios.map((p) => (
-                  <button key={p.id} onClick={() => setSelectedId(p.id)} className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all flex items-center gap-2 ${selectedId === p.id ? 'bg-gray-800 border-gray-600 text-white' : 'bg-gray-900 border-gray-800 hover:bg-gray-800 text-gray-300'}`}>{p.name}<span className="text-[10px] text-gray-500 tabular-nums">{formatMoney(p.totalInvested)}</span></button>
+                  <button key={p.id} onClick={() => { setSelectedId(p.id); setEditorOpen(true); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all flex items-center gap-2 ${selectedId === p.id ? 'bg-gray-800 border-gray-600 text-white' : 'bg-gray-900 border-gray-800 hover:bg-gray-800 text-gray-300'}`}>{p.name}<span className="text-[10px] text-gray-500 tabular-nums">{formatMoney(p.totalInvested)}</span></button>
                 ))}
               </div>
             )}
             {selectedPortfolio ? (
               <div className="rounded-2xl border border-gray-800 bg-gray-900 p-5">
+                <button
+                  onClick={() => setEditorOpen(o => !o)}
+                  className="w-full flex items-center justify-between gap-3 text-left group"
+                >
+                  <div className="flex items-baseline gap-3 min-w-0">
+                    <span className="text-base font-semibold text-gray-100 truncate">{selectedPortfolio.name || 'Untitled'}</span>
+                    <span className="text-xs text-gray-500 tabular-nums shrink-0">
+                      {formatMoney(selectedPortfolio.totalInvested)} · {(selectedPortfolio.holdings || []).filter(h => h.ticker).length} holding{(selectedPortfolio.holdings || []).filter(h => h.ticker).length === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <span className="text-xs text-gray-400 group-hover:text-gray-200 shrink-0 flex items-center gap-1">
+                    {editorOpen ? 'Collapse' : 'Edit'}
+                    <span className={`transition-transform ${editorOpen ? 'rotate-180' : ''}`}>▾</span>
+                  </span>
+                </button>
+
+                {editorOpen && (
+                <div className="mt-5">
                 <div className="flex flex-wrap items-end gap-4 mb-5">
                   <div className="flex-1 min-w-[200px]"><div className="text-xs text-gray-400 mb-1">Portfolio Name</div><input type="text" value={selectedPortfolio.name} onChange={(e) => renamePortfolio(selectedPortfolio.id, e.target.value)} className="w-full bg-gray-950 border border-gray-700 rounded-lg px-3 py-2 text-lg font-semibold focus:outline-none focus:border-blue-500 text-gray-100" /></div>
                   <div className="w-52"><div className="text-xs text-gray-400 mb-1">Total Invested</div><div className="relative"><span className="absolute left-3 top-2.5 text-gray-500">$</span><input type="number" value={selectedPortfolio.totalInvested || ''} onChange={(e) => handleTotalChange(e.target.value)} className="w-full bg-gray-950 border border-gray-700 rounded-lg pl-6 pr-3 py-2 font-medium focus:outline-none focus:border-blue-500 tabular-nums text-gray-100" /></div></div>
@@ -170,6 +191,8 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
                     </table>
                   </div>
                 </div>
+                </div>
+                )}
               </div>
             ) : <div className="text-center py-12 text-gray-400">Create your first portfolio.</div>}
           </div>
@@ -177,17 +200,41 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
         {goalsVisible && (
           <div className="w-full lg:w-96 xl:w-[420px] flex flex-col border-t lg:border-t-0 lg:border-l border-gray-800 bg-gray-900/30 min-h-0 shrink-0 animate-in slide-in-from-right duration-300">
             <div className="px-5 pt-4 pb-3 border-b border-gray-800 shrink-0">
-              <div className="flex items-center justify-between"><div className="text-sm font-semibold text-gray-300">Investment Goals</div><button onClick={() => addGoal('')} className="text-xs px-2.5 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white font-medium">+ Add</button></div>
+              <div className="text-sm font-semibold text-gray-300">Goals &amp; Theses</div>
               <p className="text-[10px] text-gray-500 mt-1 leading-snug">Sent to Ori automatically for context.</p>
             </div>
-            <div className="flex-1 overflow-auto p-5 space-y-2">
-              {goals.length === 0 && <div className="text-gray-500 text-sm py-2">No goals yet.</div>}
-              {goals.map((goal, index) => (
-                <div key={index} className="flex gap-2 group">
-                  <input type="text" value={goal} onChange={(e) => updateGoal(index, e.target.value)} placeholder="e.g. Retire in 2035..." className="flex-1 bg-gray-950 border border-gray-700 focus:border-violet-500 rounded-lg px-3 py-2 text-sm text-gray-100" />
-                  <button onClick={() => deleteGoal(index)} className="opacity-30 group-hover:opacity-100 text-red-400 hover:text-red-300 px-1 text-xl leading-none self-center">×</button>
+            <div className="flex-1 overflow-auto p-5 space-y-6">
+              {/* Investment Goals */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Investment Goals</div>
+                  <button onClick={() => addGoal('')} className="text-xs px-2.5 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white font-medium">+ Add</button>
                 </div>
-              ))}
+                <p className="text-[10px] text-gray-500 leading-snug">What you want your investing to achieve (e.g. timelines, income, risk).</p>
+                {goals.length === 0 && <div className="text-gray-500 text-sm py-2">No goals yet.</div>}
+                {goals.map((goal, index) => (
+                  <div key={index} className="flex gap-2 group">
+                    <input type="text" value={goal} onChange={(e) => updateGoal(index, e.target.value)} placeholder="e.g. Retire in 2035..." className="flex-1 bg-gray-950 border border-gray-700 focus:border-violet-500 rounded-lg px-3 py-2 text-sm text-gray-100" />
+                    <button onClick={() => deleteGoal(index)} className="opacity-30 group-hover:opacity-100 text-red-400 hover:text-red-300 px-1 text-xl leading-none self-center">×</button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Investment Theses */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Investment Theses</div>
+                  <button onClick={() => addThesis('')} className="text-xs px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium">+ Add</button>
+                </div>
+                <p className="text-[10px] text-gray-500 leading-snug">Convictions about specific companies or trends that steer Ori's thinking (e.g. "HOOD will grow as younger investors mature", "TSLA has a 10-yr edge from robotaxi + humanoids + space data centers").</p>
+                {theses.length === 0 && <div className="text-gray-500 text-sm py-2">No theses yet.</div>}
+                {theses.map((thesis, index) => (
+                  <div key={index} className="flex gap-2 group">
+                    <textarea value={thesis} onChange={(e) => updateThesis(index, e.target.value)} rows={3} placeholder="e.g. I believe Robinhood will keep growing as the younger generation grows into investors..." className="flex-1 bg-gray-950 border border-gray-700 focus:border-blue-500 rounded-lg px-3 py-2 text-sm text-gray-100 resize-y leading-snug" />
+                    <button onClick={() => deleteThesis(index)} className="opacity-30 group-hover:opacity-100 text-red-400 hover:text-red-300 px-1 text-xl leading-none self-start mt-1">×</button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
