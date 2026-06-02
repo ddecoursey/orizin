@@ -134,14 +134,14 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
   return null;
 }
 
-// ── Fetch stocks via company-screener (preferred for 5k limit) ─────────────
+// ── Fetch stocks via company-screener (preferred for ~8k limit) ────────────
 export async function fetchScreenerStocks({
   minMarketCap = 0,
   limit = 8000,
   country = null,           // e.g. "US" for US-headquartered
   exchange = null,          // e.g. "NYSE,NASDAQ,AMEX" for US-listed (incl ADRs)
   isActivelyTrading = true,
-  includeEtfsAndFunds = false,
+  includeEtfsAndFunds = false,  // set true to also pull ETFs/funds (e.g. SPY, QQQ). Many lack full fundamentals.
 } = {}) {
   const params = new URLSearchParams({ limit: String(limit), apikey: KEY() });
   if (minMarketCap > 0) params.set("marketCapMoreThan", String(minMarketCap));
@@ -179,16 +179,79 @@ export async function fetchScreenerStocks({
   }
 }
 
-// ── Fetch broad stock list (symbols only, for backward compat) ──────────────
-// No country filter so we get US-listed ADRs like TSM, ASML, etc.
-export async function fetchStockList() {
-  // Use the rich screener (limit 8000) and return just symbols.
-  // This avoids the broken comma-batch /profile behavior on starter plans.
-  // Apply same 500M+ floor used in the primary universe path.
-  const rows = await fetchScreenerStocks({ minMarketCap: 500_000_000, limit: 8000 }); // broad (no geo filter) — caller may filter further
-  if (rows.length) return rows.map((r) => r.symbol);
+// ── Stable list endpoints (preferred for complete universe: all stocks + all ETFs, no mcap floor) ─
+export async function fetchStockListStable() {
+  const url = `${BASE}/stock-list?apikey=${KEY()}`;
+  await rateGate();
+  const res = await fetch(url, { timeout: 120000 });
+  let data = {};
+  try { data = await res.json(); } catch {}
+  if (!res.ok || data["Error Message"]) {
+    const msg = data["Error Message"] || `FMP ${res.status}`;
+    console.warn("[FMP] stable/stock-list failed:", msg);
+    throw new Error(msg);
+  }
+  if (!Array.isArray(data)) {
+    console.warn("[FMP] stable/stock-list unexpected non-array response");
+    throw new Error("Unexpected response from stock-list");
+  }
+  return data
+    .filter((s) => s && s.symbol)
+    .map((s) => ({ symbol: s.symbol, name: s.companyName || s.name || s.symbol }));
+}
 
-  // Last-resort fallback (very broad, will be slow to profile)
+export async function fetchETFListStable() {
+  const url = `${BASE}/etf-list?apikey=${KEY()}`;
+  await rateGate();
+  const res = await fetch(url, { timeout: 120000 });
+  let data = {};
+  try { data = await res.json(); } catch {}
+  if (!res.ok || data["Error Message"]) {
+    const msg = data["Error Message"] || `FMP ${res.status}`;
+    console.warn("[FMP] stable/etf-list failed:", msg);
+    throw new Error(msg);
+  }
+  if (!Array.isArray(data)) {
+    console.warn("[FMP] stable/etf-list unexpected non-array response");
+    throw new Error("Unexpected response from etf-list");
+  }
+  return data
+    .filter((s) => s && s.symbol)
+    .map((s) => ({ symbol: s.symbol, name: s.name || s.companyName || s.symbol }));
+}
+
+export async function fetchFullUniverseList() {
+  const [stocks, etfs] = await Promise.all([
+    fetchStockListStable(),
+    fetchETFListStable(),
+  ]);
+  const merged = new Map();
+  for (const item of stocks) {
+    if (item.symbol && !merged.has(item.symbol)) {
+      merged.set(item.symbol, { symbol: item.symbol, name: item.name });
+    }
+  }
+  for (const item of etfs) {
+    if (item.symbol && !merged.has(item.symbol)) {
+      merged.set(item.symbol, { symbol: item.symbol, name: item.name });
+    }
+  }
+  const list = Array.from(merged.values());
+  console.log(`[FMP] stable lists: ${stocks.length} stocks + ${etfs.length} etfs → ${list.length} unique`);
+  return list;
+}
+
+// ── Fetch broad stock list (symbols only, for backward compat) ──────────────
+// Now uses stable stock+etf lists (full universe, no floor).
+export async function fetchStockList() {
+  try {
+    const items = await fetchFullUniverseList();
+    if (items && items.length) return items.map((r) => r.symbol);
+  } catch (e) {
+    console.warn("[FMP] full universe from stable lists failed, trying old fallback:", e.message);
+  }
+
+  // Last-resort fallback (old /stock/list)
   const url = `${BASE}/stock/list?apikey=${KEY()}`;
   try {
     await rateGate();
@@ -199,7 +262,6 @@ export async function fetchStockList() {
     const cand = data
       .filter((s) => s.symbol && s.type === "stock")
       .map((s) => s.symbol);
-    // Note: fetchProfiles now forces batchSize=1 (starter plans ignore comma batches)
     const profRows = await fetchProfiles(cand, { concurrency: 4, batchSize: 1 });
     const filtered = profRows.filter(
       (r) =>
@@ -298,6 +360,32 @@ export async function fetchProfiles(
 
   await Promise.all(workers);
   return results;
+}
+
+// ── Fetch full universe rows using stable lists (for refresh) ──────────────
+// Tries BOTH stock-list and etf-list (under /stable base), merges unique symbols.
+// Returns basic rows with symbol+name (no expensive per-symbol profiles to avoid
+// rate limits; price/mcap/etc will be empty until other enrichment).
+export async function fetchUniverseRows(onProgress) {
+  const listItems = await fetchFullUniverseList();
+  if (!listItems.length) return [];
+
+  // Return basic rows from the lists (symbol + name).
+  console.log(`[FMP] universe from stable lists: ${listItems.length} symbols (basics only)`);
+  return listItems.map((item) => ({
+    symbol: item.symbol,
+    name: item.name,
+    sector: "—",
+    industry: "—",
+    exchange: "",
+    country: "",
+    price: null,
+    mcap: null,
+    volume: null,
+    beta: null,
+    div_yield: null,
+    updated_at: Date.now(),
+  }));
 }
 
 // ── Key metrics TTM (fast, 1 call/stock) ───────────────────────────────────

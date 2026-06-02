@@ -393,8 +393,8 @@ export function markGrowthChecked(symbol) {
 
 /**
  * Prune stocks below a minimum market cap.
- * Used after a forced universe refresh to enforce the 500M floor policy
- * so the local DB doesn't keep growing with old small-cap data.
+ * Used optionally after force universe refresh if a minMcap was passed in request.
+ * (Universe now comes from full stock-list + etf-list; no default floor applied on fetch.)
  */
 export function pruneBelowMarketCap(minMcap) {
   const stmt = db.prepare(`DELETE FROM stocks WHERE mcap IS NOT NULL AND mcap < ?`);

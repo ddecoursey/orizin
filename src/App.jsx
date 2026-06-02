@@ -237,6 +237,26 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     cancelOperation,
   } = useScreener(currentUser);
 
+  // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
+  // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
+  const [searchInput, setSearchInput] = useState(filters.search || "");
+  const searchDebounceRef = useRef(null);
+  useEffect(() => {
+    setSearchInput(filters.search || "");
+  }, [filters.search]);
+  const handleSearchChange = (val) => {
+    setSearchInput(val);
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      setFilters({ ...filters, search: val });
+    }, 200);
+  };
+  useEffect(() => {
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, []);
+
   const applyRecommendation = (rec) => {
     // Ori no longer recommends weight changes — user controls the Q/V/G sliders directly.
     const filtersToApply = rec.filters || rec.recommendFilters || rec.applyFilters;
@@ -506,7 +526,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         }}
       />
 
-      <ProgressBar progress={loadProgress} label={enrichLoading ? "Enriching…" : "Refreshing…"} onCancel={cancelOperation} />
+      <ProgressBar progress={loadProgress} label={enrichLoading ? "Enriching…" : "Refreshing universe…"} onCancel={cancelOperation} />
 
       {/* Very subtle starfield background (dark mode only) */}
       {theme === "dark" && <Starfield />}
@@ -568,10 +588,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                   <span className="text-gray-600 text-sm">⌕</span>
                   <input
                     type="text"
-                    value={filters.search}
-                    onChange={(e) =>
-                      setFilters({ ...filters, search: e.target.value })
-                    }
+                    value={searchInput}
+                    onChange={(e) => handleSearchChange(e.target.value)}
                     placeholder="Search symbol or name…"
                     autoComplete="off"
                     autoCorrect="off"
@@ -621,8 +639,8 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                   <span className="text-gray-600 text-sm">⌕</span>
                   <input
                     type="text"
-                    value={filters.search}
-                    onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+                    value={searchInput}
+                    onChange={(e) => handleSearchChange(e.target.value)}
                     placeholder="Search symbol or name…"
                     autoComplete="off"
                     autoCorrect="off"

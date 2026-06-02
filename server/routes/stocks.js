@@ -79,9 +79,13 @@ import {
   fetchInsiderTrades,
   fetchStockNews,
   fetchIntraday,
+  fetchUniverseRows,
 } from "../fmp.js";
-// We dynamically fetch up to 8000 symbols via company-screener with scope-aware filters + 500M mkt cap floor.
-// Supports: 'us' (country=US), 'us-listed' (NYSE,NASDAQ,AMEX incl. ADRs like TSM), 'global' (no geo filter).
+// Universe refresh now uses BOTH FMP stable endpoints: /stock-list and /etf-list.
+// Merged for complete list of global stocks + ETFs (no mcap floor), then /profile
+// calls for details. Scope filters applied post-fetch. Old company-screener kept
+// only as last-resort fallback inside getUniverseRows.
+const DEFAULT_MIN_MARKET_CAP = 300_000_000; // still used for optional prune / legacy fallback logic
 
 const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -127,12 +131,14 @@ async function getUniverse(force = false) {
   );
 }
 
-// New: get rich rows directly from screener (preferred fast path). Scope-aware + per-scope 24h cache.
-// Universe fetch now applies a 500M+ market cap floor (cleaner, more relevant universe).
-async function getScreenerRows(force = false, scope = "global") {
+// Get universe rows using stable stock-list + etf-list (for refresh).
+// Fetches both, merges for full global stocks+ETFs (no floor). Returns basic rows (symbol+name).
+// Scope-aware cache + filtering. Client mcap etc still apply to view. Screener as fallback on error.
+async function getUniverseRows(force = false, scope = "global", { minMarketCap = 0 } = {}) {
   const s = ["us", "us-listed", "global"].includes(scope) ? scope : "global";
-  const cacheKey = `screener_rows_cache:${s}`;
-  const cacheAtKey = `screener_rows_cache_at:${s}`;
+  // cache per scope only (lists give everything; mcap handled in UI)
+  const cacheKey = `universe_rows_cache:${s}`;
+  const cacheAtKey = `universe_rows_cache_at:${s}`;
 
   const cachedAt = getMeta(cacheAtKey);
   const cached = getMeta(cacheKey);
@@ -147,22 +153,55 @@ async function getScreenerRows(force = false, scope = "global") {
     } catch {}
   }
 
-  let country = null;
-  let exchange = null;
-  if (s === "us") {
-    country = "US";
-  } else if (s === "us-listed") {
-    exchange = "NYSE,NASDAQ,AMEX";
+  // Fetch using both stable lists + profile enrichment (this is the new path for universe refresh)
+  let rows;
+  let listErr;
+  try {
+    rows = await fetchUniverseRows();
+  } catch (e) {
+    listErr = e;
+    console.warn("[universe] stable lists failed, trying screener fallback:", e.message);
+    rows = null;
   }
-  // global: no geo/exchange filter (still gets the 500M mkt cap floor below)
 
-  const rows = await fetchScreenerStocks({ minMarketCap: 500_000_000, limit: 8000, country, exchange });
-  if (rows && rows.length) {
-    setMeta(cacheKey, JSON.stringify(rows));
-    setMeta(cacheAtKey, String(Date.now()));
-    return rows;
+  if (!rows || !rows.length) {
+    // ultimate fallback to old screener if lists failed
+    let country = null;
+    let exchange = null;
+    if (s === "us") {
+      country = "US";
+    } else if (s === "us-listed") {
+      exchange = "NYSE,NASDAQ,AMEX";
+    }
+    try {
+      rows = await fetchScreenerStocks({ minMarketCap: 0, limit: 8000, country, exchange, includeEtfsAndFunds: true });
+    } catch (e) {
+      console.warn("[universe] screener fallback also failed:", e.message);
+      rows = [];
+    }
   }
-  return [];
+
+  if (!rows || !rows.length) {
+    if (listErr) throw listErr;
+    return [];
+  }
+
+  // apply scope filter (lists are always global)
+  if (s === "us-listed") {
+    rows = rows.filter((r) => {
+      const ex = String(r.exchange || "").toUpperCase();
+      return ["NYSE", "NASDAQ", "AMEX"].includes(ex);
+    });
+  } else if (s === "us") {
+    rows = rows.filter((r) => {
+      const c = String(r.country || "").toUpperCase();
+      return c === "US";
+    });
+  }
+
+  setMeta(cacheKey, JSON.stringify(rows));
+  setMeta(cacheAtKey, String(Date.now()));
+  return rows;
 }
 
 const router = Router();
@@ -207,30 +246,23 @@ router.post("/stocks/refresh", refreshLimiter, async (req, res) => {
       scope = legacyUsOnly !== false ? "us" : "us-listed";
     }
 
-    // Fast path: company-screener already gives us usable price/mcap/sector data
-    // for up to 8000 names. This completely bypasses the broken profile batching
-    // on starter plans.
-    let universeMsg;
-    if (scope === "us") {
-      universeMsg = "Fetching universe from company-screener (US companies only)…";
-    } else if (scope === "us-listed") {
-      universeMsg = "Fetching universe from company-screener (US-listed incl. ADRs like TSM, ASML)…";
-    } else {
-      universeMsg = "Fetching universe from company-screener (Global markets)…";
-    }
+    const minMcap = Number(req.body?.minMarketCap) || 0;
 
-    send({ type: "status", message: universeMsg + " (500M+ mkt cap floor)" });
-    const screenerRows = await getScreenerRows(force, scope);
-    if (screenerRows.length) {
-      saveScreenerBatch(screenerRows);
+    // New primary path: use stable /stock-list + /etf-list (both) to get full universe.
+    // Then enrich with profiles. This gives complete list (no 8000 cap or mcap floor).
+    // Scope (us / us-listed) filtering applied to the resulting rows.
+    send({ type: "status", message: `Fetching universe via FMP stable stock-list + etf-list (${scope})…` });
 
-      if (force) {
-        // Enforce the 500M mkt cap floor in the persisted DB.
-        // This cleans up any old small-cap symbols from previous fetches
-        // so the visible universe drops to the expected ~3000 names.
-        const pruned = pruneBelowMarketCap(500_000_000);
+    const universeRows = await getUniverseRows(force, scope, { minMarketCap: minMcap });
+    if (universeRows.length) {
+      saveScreenerBatch(universeRows);
+
+      // No automatic prune (we want the full list from the lists). If a minMcap was
+      // explicitly passed we could prune, but for universe refresh we keep everything.
+      if (force && minMcap > 0) {
+        const pruned = pruneBelowMarketCap(minMcap);
         if (pruned > 0) {
-          console.log(`[refresh] Pruned ${pruned} symbols below 500M mkt cap floor (force refresh)`);
+          console.log(`[refresh] Pruned ${pruned} symbols below ${minMcap} (force)`);
         }
       }
 
@@ -249,9 +281,17 @@ router.post("/stocks/refresh", refreshLimiter, async (req, res) => {
       return;
     }
 
-    // Legacy slow path (only if screener gave us nothing)
+    // Legacy slow path (only if stable lists + profiles gave us nothing)
     send({ type: "status", message: "Falling back to symbol list + profiles…" });
-    const universe = await getUniverse(force);
+    let universe;
+    try {
+      universe = await getUniverse(force);
+    } catch (e) {
+      console.warn("Legacy getUniverse also failed:", e.message);
+      send({ type: "error", message: e.message || "Failed to fetch universe symbols from FMP" });
+      res.end();
+      return;
+    }
     send({
       type: "progress",
       done: 0,
@@ -947,7 +987,7 @@ router.get("/status", (req, res) => {
   res.json({
     stockCount: getStockCount(),
     enrichedCount: getEnrichedCount(),
-    universeTarget: 8000, // company-screener limit (now 500M+ mkt cap floor; dynamic per scope)
+    universeTarget: 8000, // company-screener limit (300M+ floor by default, stocks + ETFs included)
     lastFetch: lastFetch ? Number(lastFetch) : null,
     apiKeySet:
       !!process.env.FMP_API_KEY &&

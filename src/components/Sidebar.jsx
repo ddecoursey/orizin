@@ -408,7 +408,7 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
 
         <Section title="Universe" defaultOpen>
           <div className="text-[9px] uppercase tracking-widest text-gray-600 font-bold mb-1">Scope</div>
-          <div className="flex border border-gray-700 rounded-md overflow-hidden text-[10px] mb-1">
+          <div className="flex border border-gray-700 rounded-md overflow-hidden text-[10px] mb-4">
             {[
               ["us", "US only"],
               ["us-listed", "US + ADR"],
@@ -427,18 +427,24 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
                     ? "US-headquartered companies only (country=US)"
                     : val === "us-listed"
                     ? "Stocks listed on NYSE/NASDAQ/AMEX including ADRs (TSM, ASML, ARM...)"
-                    : "All markets worldwide (top ~8000 by screener)"
+                    : "All markets worldwide (full stock + ETF list from stable endpoints; no mcap floor)."
                 }
               >
                 {label}
               </button>
             ))}
           </div>
-          <div className="text-[9px] text-gray-500 mb-2 leading-snug">
-            {universeScope === "us" && "US-headquartered only. Refresh to update list."}
-            {universeScope === "us-listed" && "US exchanges + ADRs like TSM. Refresh for fresh list."}
-            {universeScope === "global" && "Worldwide (no geo filter). Refresh to pull more names."}
-          </div>
+
+          {/* ETF include toggle — client-side filter (universe refresh always loads full lists) */}
+          <label className="flex items-center gap-2 text-xs text-gray-400 mt-3 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={!!f.includeEtfs}
+              onChange={(e) => set("includeEtfs", e.target.checked)}
+              className="accent-blue-400"
+            />
+            <span>Include ETFs &amp; Funds</span>
+          </label>
         </Section>
 
         <Section title="Size" defaultOpen>

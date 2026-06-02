@@ -104,8 +104,11 @@ function saveTabs(user, tabs) {
 
 export const DEFAULT_FILTERS = {
   // universe: 'us' | 'us-listed' | 'global' — controls both refresh scope and client-side filtering.
-  // Default is now global (with backend 500M mkt cap floor on fetch).
+  // includeEtfs: toggle ETFs/funds in results (refresh always pulls full lists for complete universe).
+  // Bulk refresh uses full stock+etf lists (no mcap floor). Use Size mcap / pinnedOnly / search to narrow.
+  // Manual Add Ticker works for anything.
   universe: "global",
+  includeEtfs: true,  // toggle to hide ETFs/funds client-side (universe refresh always loads full from lists)
   mcapMin: "",
   mcapMax: "",
   volMin: "",
@@ -208,6 +211,19 @@ function applyFilters(all, f, pins) {
 
   return all.filter((r) => {
     if (f.pinnedOnly && !pins.has(r.symbol)) return false;
+
+    // ETF/fund exclusion via filter pane toggle. Heuristic on name/symbol (lists include both).
+    if (!f.includeEtfs) {
+      const nm = `${r.name || ''} ${r.symbol || ''}`.toUpperCase();
+      if (
+        /\b(ETF|ETN)\b/.test(nm) ||
+        nm.includes('ISHARES') || nm.includes('SPDR') || nm.includes('VANGUARD') ||
+        nm.includes('INVESCO') || nm.includes('PROSHARES') ||
+        / (FUND|INDEX|TRUST)\b/.test(nm)
+      ) {
+        return false;
+      }
+    }
 
     // Universe scope filter (client-side; DB may contain stocks from any prior scope)
     const scope = normalizeUniverse(f);
@@ -404,7 +420,7 @@ export function useScreener(currentUser) {
   function streamRefresh(onDone, force = false) {
     const controller = startLongOperation();
 
-    setStatus({ type: "loading", msg: "Fetching profiles from FMP…" });
+    setStatus({ type: "loading", msg: "Fetching universe from FMP (stock-list + etf-list)…" });
     setLoadProg({ done: 0, total: null, errors: 0 });
 
     const opts = {
@@ -413,9 +429,24 @@ export function useScreener(currentUser) {
       signal: controller.signal,
     };
 
+    // Compute a load-time floor for the FMP screener call.
+    // Base floor is 300M (global default for stocks + ETFs). If user has set a higher mcapMin/mcap filter
+    // in the Size section, use the higher value for the fetch (narrows what gets stored).
+    const BASE_FLOOR = 300_000_000;
+    let loadMinMcap = BASE_FLOOR;
+    const mcapCond = filters.mcap;
+    if (mcapCond && typeof mcapCond === "object") {
+      if (mcapCond.min != null) loadMinMcap = Math.max(BASE_FLOOR, Number(mcapCond.min) * 1e9);
+      else if ((mcapCond.op === ">" || mcapCond.op === ">=") && mcapCond.value != null) loadMinMcap = Math.max(BASE_FLOOR, Number(mcapCond.value) * 1e9);
+    } else {
+      const flat = Number(filters.mcapMin);
+      if (flat > 0) loadMinMcap = Math.max(BASE_FLOOR, flat * 1e9);
+    }
+
     const refreshBody = {
       force: !!force,
       scope: normalizeUniverse(filters),
+      minMarketCap: loadMinMcap,
     };
     opts.body = JSON.stringify(refreshBody);
 
@@ -843,12 +874,15 @@ export function useScreener(currentUser) {
     loadStocks,
     // Normal call → only missing data. Pass true (or call enrichAll(true)) to force re-enrich everything visible.
     enrichAll: (force = false) => {
-      const targets = force
-        ? filtered.map((r) => r.symbol)
-        : filtered
-            .filter((r) => !r.has_km || !r.has_rat)
-            .map((r) => r.symbol);
-      return enrichAll(targets, force);
+      // force: re-gather for ALL securities in the DB/universe (regardless of filters or on-screen)
+      // non-force: only missing among currently visible
+      if (force) {
+        return enrichAll(null, true); // no symbols list + force => backend uses getAllStocks()
+      }
+      const targets = filtered
+        .filter((r) => !r.has_km || !r.has_rat)
+        .map((r) => r.symbol);
+      return enrichAll(targets, false);
     },
     enrichLoading,
     loadProgress,

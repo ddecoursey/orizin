@@ -96,19 +96,20 @@ export default function Header({
   const isFullyEnriched = missing === 0;
 
   // Some symbols (ETFs, indexes, funds) never return key-metrics/ratios from
-  // FMP, so `missing` may never reach 0. `force` lets the user re-gather ALL
-  // visible stocks regardless of how many are still pending.
+  // FMP, so `missing` may never reach 0. `force` now re-gathers for the ENTIRE
+  // loaded universe (all securities), not just visible.
   function runGather(force) {
     if (enrichLoading) return;
 
-    const count = force ? filtered.length : missing;
+    const count = force ? stocks.length : missing;
     if (count === 0) return;
 
     const confirmText = force
-      ? `Force re-gather ALL data for ${count} visible stock${count === 1 ? "" : "s"} from FMP?\n\n` +
-        `This refreshes the table + EVERYTHING in the company overview panels:\n` +
+      ? `Force re-gather ALL data for the entire universe (${count} securities) from FMP?\n\n` +
+        `This refreshes the table + EVERYTHING in the company overview panels for ALL loaded securities (stocks + ETFs),\n` +
+        `regardless of current filters or what's on screen:\n` +
         `metrics, DCF, analyst targets, profiles, insider trades, news, RSI, ratings, grades, and full price history.\n` +
-        `Heavy operation — can take 15-40+ minutes on large universes.`
+        `Heavy operation — can take a long time on large universes.`
       : `Gather full financial data for ${count} stock${count === 1 ? "" : "s"} from FMP?\n\n` +
         `This is a heavy API call — depending on the count it can take several minutes. ` +
         `Are you sure you want to continue?`;
@@ -194,11 +195,11 @@ export default function Header({
             <>
               <MenuItem
                 onClick={() => { close(); onRefresh?.(); }}
-                title="Force a fresh pull of the universe from FMP (applies 500M+ mkt cap floor + current scope). Prunes old small-caps from the DB."
+                title="Universe Refresh: pulls full list from FMP stable stock-list + etf-list (no mcap floor), then enriches profiles. Includes all global stocks and ETFs."
               >
-                ↻ Stock Refresh
+                ↻ Universe Refresh
                 <span className="block text-[10px] text-gray-500 mt-0.5">
-                  Fresh pull of the universe from FMP (current scope).
+                  Full universe from FMP stable lists (stocks + ETFs, no floor).
                 </span>
               </MenuItem>
               <MenuItem
@@ -216,11 +217,11 @@ export default function Header({
               </MenuItem>
               <MenuItem
                 onClick={() => { close(); runGather(true); }}
-                disabled={enrichLoading || filtered.length === 0}
+                disabled={enrichLoading || stocks.length === 0}
               >
-                ↻ Force re-gather all ({filtered.length})
+                ↻ Force re-gather all ({stocks.length})
                 <span className="block text-[10px] text-gray-500 mt-0.5">
-                  Re-fetches every visible stock, even ETFs/indexes.
+                  Re-fetches ALL in universe (regardless of filters or screen), even ETFs.
                 </span>
               </MenuItem>
             </>
