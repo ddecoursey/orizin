@@ -501,11 +501,13 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
         filtered={filtered}
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
-        onGatherData={(force) => {
-          if (force) {
+        onGatherData={(scope) => {
+          // Only the full "Force re-gather all" force-refreshes the table's
+          // sparklines (cheap — the table re-fetches just the rendered rows).
+          if (scope === "all") {
             setSparklineForceVersion(v => v + 1);
           }
-          enrichAll(!!force);
+          enrichAll(scope);
         }}
         enrichLoading={enrichLoading}
         theme={theme}

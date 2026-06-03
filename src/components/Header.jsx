@@ -95,27 +95,33 @@ export default function Header({
   const missing = filtered.filter((r) => !r.has_km || !r.has_rat).length;
   const isFullyEnriched = missing === 0;
 
-  // Some symbols (ETFs, indexes, funds) never return key-metrics/ratios from
-  // FMP, so `missing` may never reach 0. `force` now re-gathers for the ENTIRE
-  // loaded universe (all securities), not just visible.
-  function runGather(force) {
+  // Two distinct operations:
+  //   scope='visible' → only the on-screen (filtered) rows. Gathers the ones still
+  //     missing data, or force-refreshes them all if everything visible is loaded.
+  //   scope='all' → the ENTIRE loaded universe, ignoring filters / what's on screen.
+  // Some symbols (ETFs, indexes, funds) never return key-metrics/ratios from FMP,
+  // so the visible `missing` count may never reach 0 — that's expected.
+  function runGather(scope) {
     if (enrichLoading) return;
 
-    const count = force ? stocks.length : missing;
+    const all = scope === "all";
+    const count = all ? stocks.length : missing > 0 ? missing : filtered.length;
     if (count === 0) return;
 
-    const confirmText = force
+    const confirmText = all
       ? `Force re-gather ALL data for the entire universe (${count} securities) from FMP?\n\n` +
         `This refreshes the table + EVERYTHING in the company overview panels for ALL loaded securities (stocks + ETFs),\n` +
         `regardless of current filters or what's on screen:\n` +
         `metrics, DCF, analyst targets, profiles, insider trades, news, RSI, ratings, grades, and full price history.\n` +
         `Heavy operation — can take a long time on large universes.`
-      : `Gather full financial data for ${count} stock${count === 1 ? "" : "s"} from FMP?\n\n` +
-        `This is a heavy API call — depending on the count it can take several minutes. ` +
-        `Are you sure you want to continue?`;
+      : missing > 0
+        ? `Gather financial data for the ${count} on-screen stock${count === 1 ? "" : "s"} still missing it, from FMP?\n\n` +
+          `This is a heavy API call — depending on the count it can take several minutes.`
+        : `Re-gather data for all ${count} stock${count === 1 ? "" : "s"} currently on screen from FMP?\n\n` +
+          `Everything visible is already loaded — this force-refreshes their metrics, ratios, DCF & price history.`;
 
     const ok = window.confirm(confirmText);
-    if (ok) onGatherData?.(force);
+    if (ok) onGatherData?.(scope);
   }
 
   const dotColor =
@@ -204,20 +210,22 @@ export default function Header({
                 </span>
               </MenuItem>
               <MenuItem
-                onClick={() => { close(); runGather(isFullyEnriched); }}
+                onClick={() => { close(); runGather("visible"); }}
                 disabled={enrichLoading || filtered.length === 0}
               >
                 ↻ {enrichLoading
                   ? "Gathering…"
-                  : isFullyEnriched
-                    ? "Re-gather Data"
-                    : `Gather Data (${missing})`}
+                  : missing > 0
+                    ? `Gather Data (${missing})`
+                    : `Re-gather visible (${filtered.length})`}
                 <span className="block text-[10px] text-gray-500 mt-0.5">
-                  Pull metrics, ratios, growth & DCF for visible stocks.
+                  {missing > 0
+                    ? `Metrics, ratios, growth & DCF for the ${missing} on-screen stock${missing === 1 ? "" : "s"} missing data.`
+                    : `Force-refresh the ${filtered.length} stock${filtered.length === 1 ? "" : "s"} currently on screen.`}
                 </span>
               </MenuItem>
               <MenuItem
-                onClick={() => { close(); runGather(true); }}
+                onClick={() => { close(); runGather("all"); }}
                 disabled={enrichLoading || stocks.length === 0}
               >
                 ↻ Force re-gather all ({stocks.length})

@@ -85,12 +85,13 @@ class EnrichmentManager {
     if (this.recentActivity.length > 30) this.recentActivity.pop();
   }
 
-  async _processOne(symbol) {
+  // refresh=true (maintenance pass): re-fetch km/rat even if already present, so
+  // stale metrics on enriched rows actually get updated.
+  async _processOne(symbol, refresh = false) {
     const row = db.getStock(symbol);
     if (!row) return;
 
     let didWork = false;
-    let errMsg = null;
     // Freshest mcap for this symbol — updated by the profile backfill below so the
     // km-derived metrics use it instead of the stale snapshot (which is null for a
     // symbol that only just arrived via the list-based universe refresh).
@@ -115,8 +116,8 @@ class EnrichmentManager {
       }
     }
 
-    const needKm = !row.has_km;
-    const needRat = !row.has_rat;
+    const needKm = refresh || !row.has_km;
+    const needRat = refresh || !row.has_rat;
 
     try {
       if (needKm) {
@@ -170,7 +171,7 @@ class EnrichmentManager {
         this._logActivity(symbol, 'ok');
       }
     } catch (e) {
-      errMsg = e.message || String(e);
+      const errMsg = e.message || String(e);
       this.errors++;
       this._logActivity(symbol, 'err', errMsg);
       // Only log non-429 to the debug log during background (429s are normal pacer)
@@ -178,36 +179,50 @@ class EnrichmentManager {
         logError(`[BackgroundEnrich] ${symbol}`, { symbol, error: errMsg });
       }
     }
+
+    // If the attempt produced no new data (un-enrichable symbol, or a maintenance
+    // pass that returned nothing), still advance updated_at so the rotation moves on
+    // and this symbol enters its cooldown — otherwise the loop re-selects it forever.
+    // Enrichable symbols already advanced it via saveKm/saveRat/saveScreenerBatch.
+    if (!didWork) {
+      try { db.touchStock?.(symbol); } catch {}
+    }
   }
 
   async _runLoop() {
     while (!this._stopped) {
       try {
-        // 1. Prioritize truly missing
-        let targets = db.getMissingEnrich ? db.getMissingEnrich(8) : [];
+        // 1. Prioritize symbols still missing core data — oldest-attempt first,
+        //    skipping ones tried within the cooldown so un-enrichable symbols don't
+        //    monopolize the queue by being retried every tick.
+        const missing = db.getMissingEnrichDue ? db.getMissingEnrichDue(8) : [];
+        const work = missing.map((s) => ({ symbol: s, refresh: false }));
 
-        // 2. Fall back to oldest updated (stale data)
-        if (targets.length < 5) {
-          const oldest = db.getOldestSymbols ? db.getOldestSymbols(12) : [];
-          const missingSet = new Set(targets);
-          for (const s of oldest) {
-            if (!missingSet.has(s)) targets.push(s);
-            if (targets.length >= 12) break;
+        // 2. Caught up on missing → spend the spare capacity refreshing the stalest
+        //    already-enriched rows (re-fetch km/rat) so metrics don't go stale forever.
+        if (missing.length < 5) {
+          const stale = db.getStaleEnriched ? db.getStaleEnriched(12) : [];
+          const seen = new Set(missing);
+          for (const s of stale) {
+            if (seen.has(s)) continue;
+            seen.add(s);
+            work.push({ symbol: s, refresh: true });
+            if (work.length >= 12) break;
           }
         }
 
-        if (targets.length === 0) {
-          // Nothing to do — sleep a bit longer
+        if (work.length === 0) {
+          // Nothing missing and nothing stale enough to refresh — sleep a bit longer
           await sleep(15000);
           continue;
         }
 
         // Process sequentially with rate limiting + small concurrency
-        const batch = targets.slice(0, this.concurrency * 3);
-        for (const sym of batch) {
+        const batch = work.slice(0, this.concurrency * 3);
+        for (const item of batch) {
           if (this._stopped) break;
           await this._claimSlot();
-          await this._processOne(sym);
+          await this._processOne(item.symbol, item.refresh);
         }
 
         // Throttle the outer loop a little so we don't spin when queue is small

@@ -378,6 +378,48 @@ export function getMissingEnrichCount() {
   return db.prepare('SELECT COUNT(*) AS c FROM stocks WHERE has_km=0 OR has_rat=0').get().c;
 }
 
+// Background-loop selector: symbols still missing core data, oldest-attempt first,
+// EXCLUDING any attempted within `cooldownMs`. Combined with touchStock() on every
+// attempt, this rotates through the whole missing backlog instead of re-selecting
+// the same un-enrichable symbols (ETFs/funds with no fundamentals) every tick.
+export function getMissingEnrichDue(limit = 8, cooldownMs = 6 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - cooldownMs;
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks
+         WHERE (has_km = 0 OR has_rat = 0)
+           AND (updated_at IS NULL OR updated_at < ?)
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+    )
+    .all(cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+// Background maintenance selector: already-enriched symbols whose data is older
+// than `staleMs`, stalest first. Lets the loop keep metrics fresh once the missing
+// backlog is drained, without churning rows that were just updated.
+export function getStaleEnriched(limit = 12, staleMs = 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - staleMs;
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks
+         WHERE has_km = 1 AND has_rat = 1
+           AND updated_at IS NOT NULL AND updated_at < ?
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+    )
+    .all(cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+// Advance updated_at without otherwise changing a row. Used by the background loop
+// so an attempt that produced no new data still moves the rotation forward (and
+// starts that symbol's cooldown) instead of being picked again immediately.
+export function touchStock(symbol) {
+  db.prepare('UPDATE stocks SET updated_at = ? WHERE symbol = ?').run(Date.now(), symbol);
+}
+
 export function getOldestSymbols(limit = 50) {
   // Prefer symbols that haven't been touched in a while (for background maintenance)
   return db

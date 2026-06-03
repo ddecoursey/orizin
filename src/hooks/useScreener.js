@@ -872,17 +872,26 @@ export function useScreener(currentUser) {
     createTab,
     deleteTab,
     loadStocks,
-    // Normal call → only missing data. Pass true (or call enrichAll(true)) to force re-enrich everything visible.
-    enrichAll: (force = false) => {
-      // force: re-gather for ALL securities in the DB/universe (regardless of filters or on-screen)
-      // non-force: only missing among currently visible
-      if (force) {
+    // scope='visible' (default): act only on the on-screen (filtered) rows — fetch
+    //   the ones still missing data, or force-refresh them all if they're already
+    //   enriched.
+    // scope='all': force re-gather the ENTIRE loaded universe, ignoring filters and
+    //   what's on screen. These are deliberately two different operations.
+    enrichAll: (scope = "visible") => {
+      if (scope === "all") {
         return enrichAll(null, true); // no symbols list + force => backend uses getAllStocks()
       }
-      const targets = filtered
+      const visible = filtered.map((r) => r.symbol);
+      if (!visible.length) return;
+      const missing = filtered
         .filter((r) => !r.has_km || !r.has_rat)
         .map((r) => r.symbol);
-      return enrichAll(targets, false);
+      // Some on-screen rows still need their first gather → fetch just those.
+      // Otherwise everything visible is already loaded and the user wants a refresh
+      // → force-re-fetch the visible set (but NOT the rest of the universe).
+      return missing.length
+        ? enrichAll(missing, false)
+        : enrichAll(visible, true);
     },
     enrichLoading,
     loadProgress,
