@@ -442,7 +442,7 @@ export async function fetchKeyMetrics(symbol, opts = {}) {
     let ebitdaMargin = null;
     if (evS !== null && evEb !== null && evEb !== 0) ebitdaMargin = evS / evEb;
 
-    return {
+    const result = {
       roic: n(km.returnOnInvestedCapitalTTM),
       roe: n(km.returnOnEquityTTM),
       roa: n(km.returnOnAssetsTTM),
@@ -462,6 +462,19 @@ export async function fetchKeyMetrics(symbol, opts = {}) {
       _ev: ev,
       _haveEv: haveEv,
     };
+
+    // FMP sometimes returns a row with every fundamental null (ETFs, funds, and
+    // other non-operating instruments). Treat that as "no data" rather than saving
+    // it — otherwise the caller sets has_km=1 and the UI shows an "enriched" dot on
+    // a stock whose metrics are all blank.
+    const meaningfulKm = [
+      result.roic, result.roe, result.roa, result.ev_ebitda, result.ev_sales,
+      result.fcf_yield, result.earnings_yield, result.net_debt_ebitda,
+      result.current_ratio, result.pe, result.pb,
+    ];
+    if (meaningfulKm.every((v) => v == null)) return null;
+
+    return result;
   } catch (e) {
     const msg = `[FMP] key-metrics-ttm ${symbol}: ${e.message}`;
     console.warn(msg);
@@ -481,7 +494,7 @@ export async function fetchRatios(symbol, opts = {}) {
     const rat = Array.isArray(data) ? data[0] : data;
     if (!rat || typeof rat !== "object") return null;
 
-    return {
+    const result = {
       gross_margin: n(rat.grossProfitMarginTTM),
       op_margin: n(rat.operatingProfitMarginTTM),
       pe: n(rat.priceToEarningsRatioTTM),
@@ -494,6 +507,16 @@ export async function fetchRatios(symbol, opts = {}) {
       current_ratio: n(rat.currentRatioTTM),
       ev_gp: null,
     };
+
+    // Same guard as key-metrics: an all-null ratios row means "no fundamentals",
+    // so don't let it flip has_rat=1 with nothing to show.
+    const meaningfulRat = [
+      result.gross_margin, result.op_margin, result.pe, result.pb, result.ps,
+      result.debt_equity, result.roe,
+    ];
+    if (meaningfulRat.every((v) => v == null)) return null;
+
+    return result;
   } catch (e) {
     const msg = `[FMP] ratios-ttm ${symbol}: ${e.message}`;
     console.warn(msg);

@@ -215,6 +215,20 @@ try {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);`);
 } catch {}
 
+// Secondary indexes on the stocks table. The screener serves every row ordered by
+// mcap, and the always-on background enrichment job repeatedly looks for the
+// oldest-updated and not-yet-enriched symbols. Without these each of those is a
+// full-table scan (plus a temp b-tree for the sort) across the whole ~8k+ universe,
+// several times a minute, forever.
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_mcap ON stocks(mcap DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_updated_at ON stocks(updated_at);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_enrich ON stocks(has_km, has_rat);`);
+  console.log('[db] Stocks indexes ready');
+} catch (e) {
+  console.warn('[db] Could not create stocks indexes:', e.message);
+}
+
 // Migration: sparklines table for persisted historical price data (for sparklines)
 try {
   const sparkCols = new Set(
@@ -243,15 +257,21 @@ const upsertStock = db.prepare(`
     @div_yield, @updated_at
   )
   ON CONFLICT(symbol) DO UPDATE SET
-    name      = excluded.name,
-    sector    = excluded.sector,
-    industry  = excluded.industry,
-    exchange  = excluded.exchange,
+    -- Preserve existing values when the incoming row is a "placeholder" (null,
+    -- '' or '—'). The list-based universe refresh only carries symbol+name, so a
+    -- naive overwrite would wipe mcap/sector/industry/price/etc. from already-
+    -- enriched rows (they'd still show the "enriched" dot but be blank). COALESCE/
+    -- NULLIF makes a refresh non-destructive: real data updates, placeholders keep
+    -- whatever the profile/screener already populated.
+    name      = COALESCE(NULLIF(excluded.name, ''), stocks.name),
+    sector    = COALESCE(NULLIF(excluded.sector, '—'), stocks.sector),
+    industry  = COALESCE(NULLIF(excluded.industry, '—'), stocks.industry),
+    exchange  = COALESCE(NULLIF(excluded.exchange, ''), stocks.exchange),
     country   = COALESCE(NULLIF(excluded.country, ''), stocks.country),
-    price     = excluded.price,
-    mcap      = excluded.mcap,
-    volume    = excluded.volume,
-    beta      = excluded.beta,
+    price     = COALESCE(excluded.price, stocks.price),
+    mcap      = COALESCE(excluded.mcap, stocks.mcap),
+    volume    = COALESCE(excluded.volume, stocks.volume),
+    beta      = COALESCE(excluded.beta, stocks.beta),
     div_yield = COALESCE(excluded.div_yield, stocks.div_yield),
     updated_at = excluded.updated_at
 `);
@@ -339,8 +359,23 @@ export function getMissingRat() {
   return db.prepare('SELECT symbol FROM stocks WHERE has_rat=0').all().map(r => r.symbol);
 }
 
-export function getMissingEnrich() {
+export function getMissingEnrich(limit) {
+  // The background loop only ever needs the next handful; passing a limit keeps it
+  // from materializing a multi-thousand-element array on every tick. The enrich
+  // route still calls it with no arg to build the full target list.
+  if (limit && Number.isFinite(limit)) {
+    return db
+      .prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0 LIMIT ?')
+      .all(limit)
+      .map((r) => r.symbol);
+  }
   return db.prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0').all().map(r => r.symbol);
+}
+
+// Count only — for status/telemetry. Avoids building (and discarding) the full
+// array of missing symbols just to read its .length.
+export function getMissingEnrichCount() {
+  return db.prepare('SELECT COUNT(*) AS c FROM stocks WHERE has_km=0 OR has_rat=0').get().c;
 }
 
 export function getOldestSymbols(limit = 50) {

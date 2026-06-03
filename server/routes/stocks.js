@@ -99,6 +99,19 @@ const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 // Only meaningful results are cached (non-null object / non-empty array), so a
 // transient failure isn't pinned for the whole TTL.
 const detailCache = new Map(); // key -> { at, data }
+// Cap the detail cache so a long-running server doesn't grow it without bound
+// (6 keys × thousands of symbols would otherwise accumulate forever). Map iterates
+// in insertion order, so evicting the first key drops the oldest entry.
+const DETAIL_CACHE_MAX = 3000;
+function setDetailCache(key, data) {
+  if (detailCache.has(key)) {
+    detailCache.delete(key); // re-insert so updates move to the tail (newest)
+  } else if (detailCache.size >= DETAIL_CACHE_MAX) {
+    const oldest = detailCache.keys().next().value;
+    if (oldest !== undefined) detailCache.delete(oldest);
+  }
+  detailCache.set(key, { at: Date.now(), data });
+}
 async function cachedDetail(key, ttlMs, fn, force = false) {
   if (!force) {
     const hit = detailCache.get(key);
@@ -106,7 +119,7 @@ async function cachedDetail(key, ttlMs, fn, force = false) {
   }
   const data = await fn();
   const useful = Array.isArray(data) ? data.length > 0 : data != null;
-  if (useful) detailCache.set(key, { at: Date.now(), data });
+  if (useful) setDetailCache(key, data);
   return data;
 }
 
@@ -442,12 +455,19 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             // (which only provides symbol+name for perf reasons). Gather will now also
             // backfill basics for any symbol it touches (in addition to the force path).
             const currentRow = getStock(symbol);
+            // Track the freshest mcap we know for this symbol. The km-derived metrics
+            // (ps / net_margin / fcf_margin) need it, and for a freshly-listed symbol
+            // the captured `row` has mcap=null — so we must use the value the profile
+            // backfill just wrote, not the stale snapshot.
+            let mcap = currentRow?.mcap ?? null;
             const needsBasic = !currentRow?.price || !currentRow?.mcap || !currentRow?.sector || currentRow?.sector === '—';
             if (needsBasic) {
               try {
                 const prof = await fetchProfile(symbol, ENRICH_OPTS);
                 if (prof) {
-                  saveScreenerBatch([profileToRow(prof)]);
+                  const profRow = profileToRow(prof);
+                  saveScreenerBatch([profRow]);
+                  if (profRow.mcap != null) mcap = profRow.mcap;
                 }
               } catch (e) {
                 console.warn(`[Enrich] Profile backfill failed for ${symbol}:`, e.message);
@@ -455,8 +475,11 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             }
 
             // ── Parallelize the two most important calls per symbol ─────────
-            const needKm = !row?.has_km;
-            const needRat = !row?.has_rat;
+            // On force we re-fetch even already-loaded metrics so the core valuation
+            // numbers (PE/ROIC/margins) actually refresh — matching what the
+            // "Force re-gather all" action promises.
+            const needKm = force || !row?.has_km;
+            const needRat = force || !row?.has_rat;
 
             let km = null;
             let rat = null;
@@ -483,13 +506,13 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             }
 
             if (km) {
-              if (km._haveEv && km._ev && row?.mcap) {
+              if (km._haveEv && km._ev && mcap) {
                 const ev = km._ev;
                 if (km.earnings_yield != null && km.ev_sales != null)
-                  km.net_margin = (row.mcap * km.earnings_yield * km.ev_sales) / ev;
+                  km.net_margin = (mcap * km.earnings_yield * km.ev_sales) / ev;
                 if (km.fcf_yield != null && km.ev_sales != null)
-                  km.fcf_margin = (row.mcap * km.fcf_yield * km.ev_sales) / ev;
-                if (km.ev_sales != null) km.ps = (row.mcap * km.ev_sales) / ev;
+                  km.fcf_margin = (mcap * km.fcf_yield * km.ev_sales) / ev;
+                if (km.ev_sales != null) km.ps = (mcap * km.ev_sales) / ev;
               }
               delete km._ev;
               delete km._haveEv;
@@ -567,7 +590,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
                 const prof = await fetchProfile(symbol);
                 if (prof) {
                   // Update in-memory detail cache so the panel sees it immediately
-                  detailCache.set(`profile:${symbol}`, { at: Date.now(), data: prof });
+                  setDetailCache(`profile:${symbol}`, prof);
                   // Also persist basic fields (price, mcap, sector, industry, exchange, country)
                   // to the main stocks table so the screener shows them (was broken after switching
                   // to list-based universe which only provides symbol+name).
@@ -581,7 +604,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
               try {
                 const trades = await fetchInsiderTrades(symbol, { limit: 40 });
                 if (Array.isArray(trades)) {
-                  detailCache.set(`insider:${symbol}`, { at: Date.now(), data: trades });
+                  setDetailCache(`insider:${symbol}`, trades);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] Insider failed for ${symbol}:`, e.message);
@@ -591,7 +614,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
               try {
                 const nws = await fetchStockNews(symbol, { limit: 20 });
                 if (Array.isArray(nws)) {
-                  detailCache.set(`stocknews:${symbol}`, { at: Date.now(), data: nws });
+                  setDetailCache(`stocknews:${symbol}`, nws);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] News failed for ${symbol}:`, e.message);
@@ -601,7 +624,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
               try {
                 const rsiData = await fetchRSI(symbol, { periodLength: 10 });
                 if (Array.isArray(rsiData)) {
-                  detailCache.set(`rsi:${symbol}:10`, { at: Date.now(), data: rsiData });
+                  setDetailCache(`rsi:${symbol}:10`, rsiData);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] RSI failed for ${symbol}:`, e.message);
@@ -611,7 +634,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
               try {
                 const ratSnap = await fetchRatingsSnapshot(symbol);
                 if (ratSnap) {
-                  detailCache.set(`ratings:${symbol}`, { at: Date.now(), data: ratSnap });
+                  setDetailCache(`ratings:${symbol}`, ratSnap);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] Ratings failed for ${symbol}:`, e.message);
@@ -621,7 +644,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
               try {
                 const gr = await fetchGrades(symbol);
                 if (Array.isArray(gr)) {
-                  detailCache.set(`grades:${symbol}`, { at: Date.now(), data: gr });
+                  setDetailCache(`grades:${symbol}`, gr);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] Grades failed for ${symbol}:`, e.message);

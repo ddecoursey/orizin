@@ -498,9 +498,11 @@ function shutdown(signal) {
   server.close(() => {
     console.log('HTTP server closed.');
 
-    // best-sqlite3 connections are usually fine to just let GC, but we can be explicit
+    // best-sqlite3 connections are usually fine to just let GC, but we can be explicit.
+    // `db` is a namespace import, so the Database instance (with .close) is db.default —
+    // db.close itself is undefined and the old call silently did nothing.
     try {
-      db.close?.();
+      db.default?.close?.();
       console.log('Database connection closed.');
     } catch (e) {
       // ignore

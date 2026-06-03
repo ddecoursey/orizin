@@ -97,6 +97,13 @@ router.delete("/users/:username", (req, res) => {
       return res.status(400).json({ error: "Cannot delete the last remaining user" });
     }
 
+    // Prevent deleting the last admin (would leave the app with no one who can
+    // manage users / trigger refreshes — same lockout the demote path guards).
+    const target = db.getUserByUsername(username);
+    if (target && target.is_admin && db.adminCount() <= 1) {
+      return res.status(400).json({ error: "Cannot delete the last remaining admin" });
+    }
+
     const deleted = db.default.prepare('DELETE FROM users WHERE username = ?').run(username);
     
     if (deleted.changes > 0) {

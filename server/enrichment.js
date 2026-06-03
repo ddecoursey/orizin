@@ -35,7 +35,7 @@ class EnrichmentManager {
   }
 
   getStatus() {
-    const missing = db.getMissingEnrich ? db.getMissingEnrich().length : 0;
+    const missing = db.getMissingEnrichCount ? db.getMissingEnrichCount() : 0;
     return {
       running: this.running,
       targetRpm: this.targetRpm,
@@ -91,6 +91,10 @@ class EnrichmentManager {
 
     let didWork = false;
     let errMsg = null;
+    // Freshest mcap for this symbol — updated by the profile backfill below so the
+    // km-derived metrics use it instead of the stale snapshot (which is null for a
+    // symbol that only just arrived via the list-based universe refresh).
+    let mcap = row.mcap ?? null;
 
     // Backfill basic profile data (price, mcap, sector, industry, exchange, country, etc.)
     // if missing. This is needed because the list-based universe refresh only provides
@@ -101,7 +105,9 @@ class EnrichmentManager {
       try {
         const prof = await fetchProfile(symbol, { maxRetries: 1, timeoutMs: 10000 });
         if (prof) {
-          db.saveScreenerBatch([profileToRow(prof)]);
+          const profRow = profileToRow(prof);
+          db.saveScreenerBatch([profRow]);
+          if (profRow.mcap != null) mcap = profRow.mcap;
           didWork = true;
         }
       } catch (e) {
@@ -116,14 +122,14 @@ class EnrichmentManager {
       if (needKm) {
         const km = await fetchKeyMetrics(symbol, { maxRetries: 2, timeoutMs: 12000 });
         if (km) {
-          if (km._haveEv && km._ev && row.mcap) {
+          if (km._haveEv && km._ev && mcap) {
             // same derivations as main enrich
             const ev = km._ev;
             if (km.earnings_yield != null && km.ev_sales != null)
-              km.net_margin = (row.mcap * km.earnings_yield * km.ev_sales) / ev;
+              km.net_margin = (mcap * km.earnings_yield * km.ev_sales) / ev;
             if (km.fcf_yield != null && km.ev_sales != null)
-              km.fcf_margin = (row.mcap * km.fcf_yield * km.ev_sales) / ev;
-            if (km.ev_sales != null) km.ps = (row.mcap * km.ev_sales) / ev;
+              km.fcf_margin = (mcap * km.fcf_yield * km.ev_sales) / ev;
+            if (km.ev_sales != null) km.ps = (mcap * km.ev_sales) / ev;
           }
           delete km._ev;
           delete km._haveEv;
@@ -178,7 +184,7 @@ class EnrichmentManager {
     while (!this._stopped) {
       try {
         // 1. Prioritize truly missing
-        let targets = db.getMissingEnrich ? db.getMissingEnrich().slice(0, 8) : [];
+        let targets = db.getMissingEnrich ? db.getMissingEnrich(8) : [];
 
         // 2. Fall back to oldest updated (stale data)
         if (targets.length < 5) {
