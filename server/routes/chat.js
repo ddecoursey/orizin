@@ -576,7 +576,9 @@ router.post("/chat", async (req, res) => {
     saveChatSession({
       id: sid,
       user_id: req.userId,
-      title: message.slice(0, 60),
+      // Keep the title from the first message; don't overwrite it on every turn
+      // (a long conversation shouldn't get renamed to whatever was typed last).
+      title: session?.title || message.slice(0, 60),
       messages: JSON.stringify(messages),
       created_at: session?.created_at || Date.now(),
       updated_at: Date.now(),

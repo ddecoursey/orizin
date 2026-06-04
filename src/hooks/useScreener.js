@@ -366,10 +366,16 @@ export function useScreener(currentUser) {
   const currentAbortRef = useRef(null); // for cancelling refresh or enrich
   const loadProgRef = useRef(null); // latest progress numbers for status messages
 
-  // Derived - split heavy ranking from light weighting for better slider perf
+  // Derived - split heavy ranking from light weighting for better slider perf.
+  // `pins` only affects the result when the "pinned only" filter is on, so gate the
+  // dependency: otherwise pinning/unpinning a stock would needlessly re-run the whole
+  // filter → rank → weight chain over the entire universe (the table still re-sorts
+  // pinned rows to the top on its own).
+  const EMPTY_PINS = useMemo(() => new Set(), []);
+  const pinsForFilter = filters.pinnedOnly ? pins : EMPTY_PINS;
   const filteredRows = useMemo(
-    () => applyFilters(stocks, filters, pins),
-    [stocks, filters, pins]
+    () => applyFilters(stocks, filters, pinsForFilter),
+    [stocks, filters, pinsForFilter]
   );
 
   const rankedData = useMemo(
@@ -621,10 +627,45 @@ export function useScreener(currentUser) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Refresh just a few specific rows in place (fetch each by symbol and swap it in)
+  // instead of re-downloading the whole universe — used after a small/single-symbol
+  // gather so the Deep Research re-gather doesn't pull ~10k rows to update one.
+  async function mergeStocks(symbolList) {
+    try {
+      const results = await Promise.all(
+        symbolList.map((s) =>
+          fetch(`/api/stocks/${encodeURIComponent(s)}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+        ),
+      );
+      const fresh = new Map(
+        results.filter((r) => r && r.symbol).map((r) => [r.symbol, r]),
+      );
+      if (!fresh.size) return;
+      const apply = (arr) => arr.map((r) => fresh.get(r.symbol) || r);
+      stocksRef.current = apply(stocksRef.current);
+      setStocks((prev) => apply(prev));
+    } catch {
+      // Fall back to a full reload if the targeted merge fails.
+      loadStocks(false, true);
+    }
+  }
+
   // ── Combined enrichment SSE loader ───────────────────────────────────────
 
-  function enrichAll(symbols, force = false) {
+  function enrichAll(symbols, force = false, onComplete = null) {
     if (enrichLoading) return;
+
+    // Fire the completion callback exactly once, however the stream ends (done,
+    // error, or network failure) — used by the per-symbol re-gather to know when
+    // to reload the detail panes.
+    let completed = false;
+    const finish = () => {
+      if (completed) return;
+      completed = true;
+      if (onComplete) onComplete();
+    };
 
     const controller = startLongOperation();
 
@@ -646,6 +687,7 @@ export function useScreener(currentUser) {
           setLoadProg(null);
           loadProgRef.current = null;
           console.error("Enrich request failed with status", res.status);
+          finish();
           return;
         }
 
@@ -705,12 +747,20 @@ export function useScreener(currentUser) {
                   loadProgRef.current = null;
                   setEnrichLoading(false);
                   setHasEnrichedOnce(true);
-                  loadStocks(false, true);
+                  // Small explicit gather (e.g. single-symbol re-gather) → patch just
+                  // those rows; larger ones → full reload.
+                  if (symbols && symbols.length > 0 && symbols.length <= 5) {
+                    mergeStocks(symbols);
+                  } else {
+                    loadStocks(false, true);
+                  }
+                  finish();
                 } else if (evt.type === "error") {
                   currentAbortRef.current = null;
                   setEnrichLoading(false);
                   setLoadProg(null);
                   loadProgRef.current = null;
+                  finish();
                 }
               } catch {}
             }
@@ -726,6 +776,7 @@ export function useScreener(currentUser) {
           loadProgRef.current = null;
         }
         currentAbortRef.current = null;
+        finish();
       });
   }
 
@@ -862,6 +913,9 @@ export function useScreener(currentUser) {
   return {
     stocks,
     filtered,
+    // Filtered set BEFORE weighting (stable when only the Q/V/G sliders move) — the
+    // table uses it for the heatmap so dragging weights doesn't recompute it.
+    filteredRows,
     status,
     lastFetch,
     filters,
@@ -899,6 +953,13 @@ export function useScreener(currentUser) {
       return missing.length
         ? enrichAll(missing, false)
         : enrichAll(visible, true);
+    },
+    // Re-gather everything for a single symbol (e.g. the Deep Research page): force
+    // re-fetch its metrics/ratios/DCF/profile/etc. `onComplete` fires when the
+    // server-side refresh is done, so the caller can reload the detail panes.
+    regatherSymbol: (symbol, onComplete) => {
+      if (!symbol) return;
+      return enrichAll([symbol], true, onComplete);
     },
     enrichLoading,
     loadProgress,

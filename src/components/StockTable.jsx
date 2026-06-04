@@ -147,7 +147,7 @@ const COLS = [
   { key: "score", label: "Score", plain: true, nosort: false },
 ];
 
-export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
+export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
   const [sortKey, setSortKey] = useState("mcap");
   const [sortDir, setSortDir] = useState(-1);
   const [sparklines, setSparklines] = useState(() => {
@@ -176,8 +176,11 @@ export default function StockTable({ rows, pins, onTogglePin, onAskAI, onSelectS
     return initial;
   }); // symbol -> number[]
 
-  // Memoize expensive computations
-  const heat = useMemo(() => buildHeat(rows), [rows]);
+  // Memoize expensive computations. Heat (per-column percentile colouring) depends
+  // only on the metric distributions, which don't change when the Q/V/G weights move
+  // — so key it on the pre-weight `heatRows` to avoid re-sorting ~20 columns on every
+  // slider tick. Values are identical to building from `rows` (same securities).
+  const heat = useMemo(() => buildHeat(heatRows), [heatRows]);
 
   // Fetch historical prices for sparklines (lazy, for visible rows)
   const inFlightRef = useRef(new Set());

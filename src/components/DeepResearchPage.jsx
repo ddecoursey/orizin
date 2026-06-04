@@ -1,6 +1,5 @@
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
-import { useStockDetail } from "../hooks/useStockDetail.js";
 import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
 
@@ -66,8 +65,9 @@ function StatGrid({ children }) {
   return <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">{children}</div>;
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol }) {
-  const detail = useStockDetail(symbol);
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {} }) {
+  // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
+  // so a re-gather reloads it once rather than double-fetching from FMP.
   const { profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart } = detail;
 
   const handleSearch = (stock) => {
@@ -149,6 +149,17 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 </div>
               )}
             </div>
+            {onRegather && (
+              <button
+                onClick={() => onRegather(symbol)}
+                disabled={regathering}
+                className="text-xs font-semibold px-3 py-1.5 rounded-md bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+                title="Re-fetch all data for this stock from FMP"
+              >
+                <span className={regathering ? "inline-block animate-spin" : ""}>↻</span>
+                {regathering ? "Gathering…" : "Re-gather"}
+              </button>
+            )}
             {onAskOri && (
               <button
                 onClick={() => onAskOri(symbol)}

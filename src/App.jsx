@@ -215,6 +215,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
   const {
     stocks,
     filtered,
+    filteredRows,
     status,
     lastFetch,
     filters,
@@ -231,11 +232,16 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     deleteTab,
     loadStocks,
     enrichAll,
+    regatherSymbol,
     enrichLoading,
     loadProgress,
     addTicker,
     cancelOperation,
   } = useScreener(currentUser);
+
+  // Bumped after a single-symbol re-gather so the Deep Research detail panes
+  // re-fetch the freshly gathered data.
+  const [detailReloadToken, setDetailReloadToken] = useState(0);
 
   // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
   // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
@@ -307,6 +313,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       : null;
   const researchDetail = useStockDetail(
     currentView === "deep-research" ? researchSymbol : null,
+    detailReloadToken,
   );
 
   function closeDetailA() {
@@ -558,6 +565,11 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                     { symbol: researchSymbol }
                   : null
               }
+              onRegather={(sym) =>
+                regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
+              }
+              regathering={enrichLoading}
+              detail={researchDetail}
               onBack={() => setCurrentView('screener')}
               onAskOri={(sym) => {
                 chat.setIsOpen(true);
@@ -735,6 +747,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
                 <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
                   <StockTable
                     rows={filtered}
+                    heatRows={filteredRows}
                     pins={pins}
                     onTogglePin={togglePin}
                     onAskAI={chat.askAboutStock}
