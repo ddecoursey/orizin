@@ -20,7 +20,7 @@ import {
   getAiEnrichmentBatch,
   getSparkline,
   saveSparkline,
-  pruneBelowMarketCap,
+  pruneUniverse,
 } from "../db.js";
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
@@ -84,12 +84,13 @@ import {
   fetchStockNews,
   fetchIntraday,
   fetchUniverseRows,
+  fetchEtfsFunds,
 } from "../fmp.js";
-// Universe refresh now uses BOTH FMP stable endpoints: /stock-list and /etf-list.
-// Merged for complete list of global stocks + ETFs (no mcap floor), then /profile
-// calls for details. Scope filters applied post-fetch. Old company-screener kept
-// only as last-resort fallback inside getUniverseRows.
-const DEFAULT_MIN_MARKET_CAP = 300_000_000; // still used for optional prune / legacy fallback logic
+// Universe refresh uses company-screener as the primary source: stocks are fetched
+// with a market-cap floor and isEtf/isFund=false (full data inline — mcap/sector/
+// price); ETFs/funds are fetched separately (no floor) and kept for price/name only,
+// never enriched. The stable stock-list/etf-list path is a last-resort fallback.
+const DEFAULT_MIN_MARKET_CAP = 500_000_000; // default floor for the stock universe
 
 const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -148,73 +149,81 @@ async function getUniverse(force = false) {
   );
 }
 
-// Get universe rows using stable stock-list + etf-list (for refresh).
-// Fetches both, merges for full global stocks+ETFs (no floor). Returns basic rows (symbol+name).
-// Basics like price/mcap/sector are backfilled by enrich (force) and background job.
-// Scope-aware cache + filtering. Client mcap etc still apply to view. Screener as fallback on error.
-async function getUniverseRows(force = false, scope = "global", { minMarketCap = 0 } = {}) {
+// Universe via company-screener (primary): stocks fetched with a market-cap floor
+// and isEtf/isFund=false (full data inline — mcap/sector/industry/price), plus all
+// ETFs/funds (no floor) tagged is_etf=1 for price/name display only (never enriched).
+// Scope maps to screener country/exchange filters. Falls back to the stable
+// stock-list/etf-list only if the screener returns no stocks.
+async function getUniverseRows(force = false, scope = "global", { minMarketCap = 0, includeEtfs = true } = {}) {
   const s = ["us", "us-listed", "global"].includes(scope) ? scope : "global";
-  // cache per scope only (lists give everything; mcap handled in UI)
-  const cacheKey = `universe_rows_cache:${s}`;
-  const cacheAtKey = `universe_rows_cache_at:${s}`;
+  const floor = minMarketCap > 0 ? minMarketCap : DEFAULT_MIN_MARKET_CAP;
+  // Cache keyed by scope + floor + etf-toggle so changing any of them re-fetches.
+  const cacheKey = `universe_rows_cache:${s}:${floor}:${includeEtfs ? 1 : 0}`;
+  const cacheAtKey = `universe_rows_cache_at:${s}:${floor}:${includeEtfs ? 1 : 0}`;
 
   const cachedAt = getMeta(cacheAtKey);
   const cached = getMeta(cacheKey);
-  if (
-    !force &&
-    cachedAt &&
-    cached &&
-    Date.now() - Number(cachedAt) < UNIVERSE_CACHE_TTL
-  ) {
+  if (!force && cachedAt && cached && Date.now() - Number(cachedAt) < UNIVERSE_CACHE_TTL) {
     try {
       return JSON.parse(cached);
     } catch {}
   }
 
-  // Fetch using both stable lists + profile enrichment (this is the new path for universe refresh)
-  let rows;
-  let listErr;
+  // Map scope → screener country/exchange filters (global = no restriction).
+  let country = null;
+  let exchange = null;
+  if (s === "us") country = "US";
+  else if (s === "us-listed") exchange = "NYSE,NASDAQ,AMEX";
+
+  // 1) Stocks above the floor (no ETFs/funds), full data inline.
+  let stockRows = [];
+  let stockErr = null;
   try {
-    rows = await fetchUniverseRows();
+    stockRows = await fetchScreenerStocks({
+      minMarketCap: floor,
+      limit: 15000,
+      country,
+      exchange,
+      isActivelyTrading: true,
+      includeEtfsAndFunds: false,
+    });
   } catch (e) {
-    listErr = e;
-    console.warn("[universe] stable lists failed, trying screener fallback:", e.message);
-    rows = null;
+    stockErr = e;
+    console.warn("[universe] stock screener failed:", e.message);
   }
 
-  if (!rows || !rows.length) {
-    // ultimate fallback to old screener if lists failed
-    let country = null;
-    let exchange = null;
-    if (s === "us") {
-      country = "US";
-    } else if (s === "us-listed") {
-      exchange = "NYSE,NASDAQ,AMEX";
-    }
+  // 2) ETFs/funds (no floor) — kept for price/name only, never enriched.
+  let etfRows = [];
+  if (includeEtfs) {
     try {
-      rows = await fetchScreenerStocks({ minMarketCap: 0, limit: 8000, country, exchange, includeEtfsAndFunds: true });
+      etfRows = await fetchEtfsFunds({ country, exchange, limit: 15000 });
     } catch (e) {
-      console.warn("[universe] screener fallback also failed:", e.message);
-      rows = [];
+      console.warn("[universe] ETF/fund screener failed:", e.message);
     }
   }
 
-  if (!rows || !rows.length) {
-    if (listErr) throw listErr;
-    return [];
+  let rows = [...stockRows, ...etfRows];
+
+  // Fallback: screener gave us no stocks → use the stable lists (symbol+name only).
+  if (stockRows.length === 0) {
+    console.warn("[universe] screener returned no stocks — falling back to stable lists");
+    try {
+      let listRows = await fetchUniverseRows();
+      if (s === "us-listed") {
+        listRows = listRows.filter((r) => ["NYSE", "NASDAQ", "AMEX"].includes(String(r.exchange || "").toUpperCase()));
+      } else if (s === "us") {
+        listRows = listRows.filter((r) => String(r.country || "").toUpperCase() === "US");
+      }
+      if (!includeEtfs) listRows = listRows.filter((r) => !r.is_etf);
+      if (listRows.length) rows = listRows;
+    } catch (e) {
+      if (!rows.length) throw stockErr || e;
+    }
   }
 
-  // apply scope filter (lists are always global)
-  if (s === "us-listed") {
-    rows = rows.filter((r) => {
-      const ex = String(r.exchange || "").toUpperCase();
-      return ["NYSE", "NASDAQ", "AMEX"].includes(ex);
-    });
-  } else if (s === "us") {
-    rows = rows.filter((r) => {
-      const c = String(r.country || "").toUpperCase();
-      return c === "US";
-    });
+  if (!rows.length) {
+    if (stockErr) throw stockErr;
+    return [];
   }
 
   setMeta(cacheKey, JSON.stringify(rows));
@@ -266,22 +275,33 @@ router.post("/stocks/refresh", refreshLimiter, requireAdmin, async (req, res) =>
     }
 
     const minMcap = Number(req.body?.minMarketCap) || 0;
+    const floor = minMcap > 0 ? minMcap : DEFAULT_MIN_MARKET_CAP;
+    // ETFs/funds are kept by default (price/name only, never enriched). Allow opting out.
+    const includeEtfs = req.body?.includeEtfs !== false;
+    // Captured before the fetch so a force-prune can tell refreshed rows (updated_at
+    // after this) from stale ones the screener no longer returns (below floor/delisted).
+    const refreshStart = Date.now();
 
-    // New primary path: use stable /stock-list + /etf-list (both) to get full universe.
-    // Then enrich with profiles. This gives complete list (no 8000 cap or mcap floor).
-    // Scope (us / us-listed) filtering applied to the resulting rows.
-    send({ type: "status", message: `Fetching universe via FMP stable stock-list + etf-list (${scope})…` });
+    // Primary path: company-screener — stocks above the floor (full data inline) plus
+    // ETFs/funds (no floor, kept for reference). Scope maps to country/exchange filters.
+    send({ type: "status", message: `Fetching universe via FMP company-screener (${scope}, floor $${Math.round(floor / 1e6)}M${includeEtfs ? ", +ETFs" : ""})…` });
 
-    const universeRows = await getUniverseRows(force, scope, { minMarketCap: minMcap });
+    const universeRows = await getUniverseRows(force, scope, { minMarketCap: floor, includeEtfs });
     if (universeRows.length) {
       saveScreenerBatch(universeRows);
 
-      // No automatic prune (we want the full list from the lists). If a minMcap was
-      // explicitly passed we could prune, but for universe refresh we keep everything.
-      if (force && minMcap > 0) {
-        const pruned = pruneBelowMarketCap(minMcap);
-        if (pruned > 0) {
-          console.log(`[refresh] Pruned ${pruned} symbols below ${minMcap} (force)`);
+      // On force, prune the universe down to the new floor: drop non-ETF stocks below
+      // the floor and stale placeholders the screener no longer returns. ETFs are kept.
+      // Guarded by a healthy stock count so a partial/failed fetch can't wipe the table.
+      if (force) {
+        const fetchedStocks = universeRows.filter((r) => !r.is_etf).length;
+        if (fetchedStocks > 500) {
+          const pruned = pruneUniverse(floor, refreshStart);
+          if (pruned.total > 0) {
+            console.log(`[refresh] Pruned ${pruned.total} (${pruned.belowFloor} below $${Math.round(floor / 1e6)}M, ${pruned.stalePlaceholders} stale) — ETFs kept`);
+          }
+        } else {
+          console.warn(`[refresh] Skipping prune — only ${fetchedStocks} stocks fetched (looks partial)`);
         }
       }
 
@@ -370,14 +390,16 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
 
   try {
     const { symbols, force } = req.body || {};
+    // ETFs/funds (is_etf=1) have no key-metrics/ratios, so they're never enrichment
+    // targets — their price/name comes from the universe screener refresh instead.
     let targets;
     if (symbols?.length) {
       targets = symbols.filter((s) => {
         const r = getStock(s);
-        return r && (force || !r.has_km || !r.has_rat);
+        return r && !r.is_etf && (force || !r.has_km || !r.has_rat);
       });
     } else if (force) {
-      targets = getAllStocks().map((r) => r.symbol);
+      targets = getAllStocks().filter((r) => !r.is_etf).map((r) => r.symbol);
     } else {
       targets = getMissingEnrich();
     }

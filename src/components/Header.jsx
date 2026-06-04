@@ -92,7 +92,8 @@ export default function Header({
   onSearchSelect,
   portfolioSummary = {},
 }) {
-  const missing = filtered.filter((r) => !r.has_km || !r.has_rat).length;
+  // ETFs are never enriched, so they don't count toward "missing" data.
+  const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
   const isFullyEnriched = missing === 0;
 
   // Two distinct operations:

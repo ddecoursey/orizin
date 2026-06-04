@@ -92,6 +92,9 @@ try {
     -- load state
     has_km         INTEGER DEFAULT 0,
     has_rat        INTEGER DEFAULT 0,
+    -- 1 = ETF/fund: kept in the universe for price/name but never enriched
+    -- (no key-metrics/ratios exist for them) and excluded from the enrich queues.
+    is_etf         INTEGER DEFAULT 0,
     updated_at     INTEGER
   );
 
@@ -173,11 +176,28 @@ try {
     ["op_income_growth", "REAL"],
     ["has_growth", "INTEGER DEFAULT 0"],
     ["country", "TEXT"],
+    ["is_etf", "INTEGER DEFAULT 0"],
   ];
   for (const [name, type] of NEW_COLS) {
     if (!existingCols.has(name)) {
       db.exec(`ALTER TABLE stocks ADD COLUMN ${name} ${type}`);
       console.log(`[db] Migration: added column "${name} ${type}" to stocks`);
+      // One-time backfill: tag existing ETF/fund rows by name so they immediately
+      // drop out of the enrichment queues. The next screener refresh sets is_etf
+      // authoritatively (and corrects any heuristic mistake), so this is just a
+      // best-effort head start for the rows already in the DB.
+      if (name === "is_etf") {
+        const info = db
+          .prepare(
+            `UPDATE stocks SET is_etf = 1 WHERE
+               name LIKE '%ETF%' OR name LIKE '%ETN%'
+               OR name LIKE '%iShares%' OR name LIKE '%SPDR%' OR name LIKE '%Vanguard%'
+               OR name LIKE '%Invesco%' OR name LIKE '%ProShares%'
+               OR name LIKE '% Fund%' OR name LIKE '% Index%' OR name LIKE '% Trust'`,
+          )
+          .run();
+        console.log(`[db] Migration: tagged ${info.changes} existing rows as ETF/fund (heuristic)`);
+      }
     }
   }
   // chat_sessions.user_id was added for multi-user support; backfill on
@@ -222,8 +242,10 @@ try {
 // several times a minute, forever.
 try {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_mcap ON stocks(mcap DESC);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_updated_at ON stocks(updated_at);`);
-  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_enrich ON stocks(has_km, has_rat);`);
+  // (is_etf, updated_at): the enrich selectors all filter is_etf=0 and walk/seek by
+  // updated_at, so this serves getMissingEnrichDue + getStaleEnriched directly.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_etf_updated ON stocks(is_etf, updated_at);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_enrich ON stocks(is_etf, has_km, has_rat);`);
   console.log('[db] Stocks indexes ready');
 } catch (e) {
   console.warn('[db] Could not create stocks indexes:', e.message);
@@ -250,11 +272,11 @@ const upsertStock = db.prepare(`
   INSERT INTO stocks (
     symbol, name, sector, industry, exchange, country,
     price, mcap, volume, beta,
-    div_yield, updated_at
+    div_yield, is_etf, updated_at
   ) VALUES (
     @symbol, @name, @sector, @industry, @exchange, @country,
     @price, @mcap, @volume, @beta,
-    @div_yield, @updated_at
+    @div_yield, @is_etf, @updated_at
   )
   ON CONFLICT(symbol) DO UPDATE SET
     -- Preserve existing values when the incoming row is a "placeholder" (null,
@@ -273,6 +295,9 @@ const upsertStock = db.prepare(`
     volume    = COALESCE(excluded.volume, stocks.volume),
     beta      = COALESCE(excluded.beta, stocks.beta),
     div_yield = COALESCE(excluded.div_yield, stocks.div_yield),
+    -- screener/profile carry an authoritative 0/1, so this corrects the migration
+    -- heuristic; COALESCE only guards against a caller that omits the field.
+    is_etf    = COALESCE(excluded.is_etf, stocks.is_etf),
     updated_at = excluded.updated_at
 `);
 
@@ -363,19 +388,20 @@ export function getMissingEnrich(limit) {
   // The background loop only ever needs the next handful; passing a limit keeps it
   // from materializing a multi-thousand-element array on every tick. The enrich
   // route still calls it with no arg to build the full target list.
+  // is_etf=0: ETFs/funds have no key-metrics/ratios, so they're never "missing".
   if (limit && Number.isFinite(limit)) {
     return db
-      .prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0 LIMIT ?')
+      .prepare('SELECT symbol FROM stocks WHERE is_etf = 0 AND (has_km=0 OR has_rat=0) LIMIT ?')
       .all(limit)
       .map((r) => r.symbol);
   }
-  return db.prepare('SELECT symbol FROM stocks WHERE has_km=0 OR has_rat=0').all().map(r => r.symbol);
+  return db.prepare('SELECT symbol FROM stocks WHERE is_etf = 0 AND (has_km=0 OR has_rat=0)').all().map(r => r.symbol);
 }
 
 // Count only — for status/telemetry. Avoids building (and discarding) the full
 // array of missing symbols just to read its .length.
 export function getMissingEnrichCount() {
-  return db.prepare('SELECT COUNT(*) AS c FROM stocks WHERE has_km=0 OR has_rat=0').get().c;
+  return db.prepare('SELECT COUNT(*) AS c FROM stocks WHERE is_etf = 0 AND (has_km=0 OR has_rat=0)').get().c;
 }
 
 // Background-loop selector: symbols still missing core data, oldest-attempt first,
@@ -387,7 +413,7 @@ export function getMissingEnrichDue(limit = 8, cooldownMs = 6 * 60 * 60 * 1000) 
   return db
     .prepare(
       `SELECT symbol FROM stocks
-         WHERE (has_km = 0 OR has_rat = 0)
+         WHERE is_etf = 0 AND (has_km = 0 OR has_rat = 0)
            AND (updated_at IS NULL OR updated_at < ?)
          ORDER BY updated_at ASC
          LIMIT ?`,
@@ -404,7 +430,7 @@ export function getStaleEnriched(limit = 12, staleMs = 24 * 60 * 60 * 1000) {
   return db
     .prepare(
       `SELECT symbol FROM stocks
-         WHERE has_km = 1 AND has_rat = 1
+         WHERE is_etf = 0 AND has_km = 1 AND has_rat = 1
            AND updated_at IS NOT NULL AND updated_at < ?
          ORDER BY updated_at ASC
          LIMIT ?`,
@@ -479,14 +505,36 @@ export function markGrowthChecked(symbol) {
 }
 
 /**
- * Prune stocks below a minimum market cap.
- * Used optionally after force universe refresh if a minMcap was passed in request.
- * (Universe now comes from full stock-list + etf-list; no default floor applied on fetch.)
+ * Prune stocks below a minimum market cap. ETFs/funds (is_etf=1) are always kept
+ * — they're carried for price/name and don't have a meaningful market-cap floor.
  */
 export function pruneBelowMarketCap(minMcap) {
-  const stmt = db.prepare(`DELETE FROM stocks WHERE mcap IS NOT NULL AND mcap < ?`);
+  const stmt = db.prepare(`DELETE FROM stocks WHERE is_etf = 0 AND mcap IS NOT NULL AND mcap < ?`);
   const info = stmt.run(minMcap);
   return info.changes || 0;
+}
+
+/**
+ * Full universe cleanup after a (force) screener refresh with a market-cap floor.
+ * Removes non-ETF stocks below the floor, plus stale NULL-mcap placeholders that
+ * weren't refreshed this pass (i.e. symbols the screener no longer returns because
+ * they're below the floor / delisted). ETFs are always kept. `refreshStart` is the
+ * timestamp captured before the refresh wrote its rows.
+ */
+export function pruneUniverse(floor, refreshStart = 0) {
+  const belowFloor =
+    db.prepare(`DELETE FROM stocks WHERE is_etf = 0 AND mcap IS NOT NULL AND mcap < ?`).run(floor)
+      .changes || 0;
+  let stalePlaceholders = 0;
+  if (refreshStart) {
+    stalePlaceholders =
+      db
+        .prepare(
+          `DELETE FROM stocks WHERE is_etf = 0 AND mcap IS NULL AND (updated_at IS NULL OR updated_at < ?)`,
+        )
+        .run(refreshStart).changes || 0;
+  }
+  return { belowFloor, stalePlaceholders, total: belowFloor + stalePlaceholders };
 }
 
 export function getStockCount() {

@@ -212,16 +212,21 @@ function applyFilters(all, f, pins) {
   return all.filter((r) => {
     if (f.pinnedOnly && !pins.has(r.symbol)) return false;
 
-    // ETF/fund exclusion via filter pane toggle. Heuristic on name/symbol (lists include both).
+    // ETF/fund exclusion via filter pane toggle. Prefer the authoritative is_etf flag
+    // from the server; fall back to a name heuristic for any older rows lacking it.
     if (!f.includeEtfs) {
-      const nm = `${r.name || ''} ${r.symbol || ''}`.toUpperCase();
-      if (
-        /\b(ETF|ETN)\b/.test(nm) ||
-        nm.includes('ISHARES') || nm.includes('SPDR') || nm.includes('VANGUARD') ||
-        nm.includes('INVESCO') || nm.includes('PROSHARES') ||
-        / (FUND|INDEX|TRUST)\b/.test(nm)
-      ) {
-        return false;
+      if (r.is_etf != null) {
+        if (r.is_etf) return false;
+      } else {
+        const nm = `${r.name || ''} ${r.symbol || ''}`.toUpperCase();
+        if (
+          /\b(ETF|ETN)\b/.test(nm) ||
+          nm.includes('ISHARES') || nm.includes('SPDR') || nm.includes('VANGUARD') ||
+          nm.includes('INVESCO') || nm.includes('PROSHARES') ||
+          / (FUND|INDEX|TRUST)\b/.test(nm)
+        ) {
+          return false;
+        }
       }
     }
 
@@ -432,7 +437,7 @@ export function useScreener(currentUser) {
     // Compute a load-time floor for the FMP screener call.
     // Base floor is 300M (global default for stocks + ETFs). If user has set a higher mcapMin/mcap filter
     // in the Size section, use the higher value for the fetch (narrows what gets stored).
-    const BASE_FLOOR = 300_000_000;
+    const BASE_FLOOR = 500_000_000;
     let loadMinMcap = BASE_FLOOR;
     const mcapCond = filters.mcap;
     if (mcapCond && typeof mcapCond === "object") {
@@ -881,10 +886,12 @@ export function useScreener(currentUser) {
       if (scope === "all") {
         return enrichAll(null, true); // no symbols list + force => backend uses getAllStocks()
       }
-      const visible = filtered.map((r) => r.symbol);
+      // ETFs are never enriched, so exclude them from both the force-refresh set
+      // and the missing set (otherwise they'd inflate counts and waste calls).
+      const visible = filtered.filter((r) => !r.is_etf).map((r) => r.symbol);
       if (!visible.length) return;
       const missing = filtered
-        .filter((r) => !r.has_km || !r.has_rat)
+        .filter((r) => !r.is_etf && (!r.has_km || !r.has_rat))
         .map((r) => r.symbol);
       // Some on-screen rows still need their first gather → fetch just those.
       // Otherwise everything visible is already loaded and the user wants a refresh

@@ -79,6 +79,7 @@ export function screenerToRow(s) {
     volume: n(s.volume || s.volAvg),
     beta: n(s.beta),
     div_yield: divYield,
+    is_etf: s.isEtf || s.isFund ? 1 : 0,
     updated_at: Date.now(),
   };
 }
@@ -263,12 +264,12 @@ export async function fetchFullUniverseList() {
   const merged = new Map();
   for (const item of stocks) {
     if (item.symbol && !merged.has(item.symbol)) {
-      merged.set(item.symbol, { symbol: item.symbol, name: item.name });
+      merged.set(item.symbol, { symbol: item.symbol, name: item.name, is_etf: 0 });
     }
   }
   for (const item of etfs) {
     if (item.symbol && !merged.has(item.symbol)) {
-      merged.set(item.symbol, { symbol: item.symbol, name: item.name });
+      merged.set(item.symbol, { symbol: item.symbol, name: item.name, is_etf: 1 });
     }
   }
   const list = Array.from(merged.values());
@@ -341,6 +342,7 @@ export function profileToRow(prof) {
     volume: n(prof.volAvg || prof.volume),
     beta: n(prof.beta),
     div_yield: divYield,
+    is_etf: prof.isEtf || prof.isFund ? 1 : 0,
     updated_at: Date.now(),
   };
 }
@@ -419,8 +421,43 @@ export async function fetchUniverseRows(onProgress) {
     volume: null,
     beta: null,
     div_yield: null,
+    is_etf: item.is_etf ? 1 : 0,
     updated_at: Date.now(),
   }));
+}
+
+// ── Fetch ETFs + funds via company-screener (for the "keep ETFs, don't enrich" mode) ─
+// Two calls (isEtf=true, isFund=true) merged. Returns screener rows tagged is_etf=1
+// with whatever price/mcap FMP provides — they're listed for reference but never
+// run through key-metrics/ratios enrichment.
+export async function fetchEtfsFunds({ country = null, exchange = null, limit = 12000 } = {}) {
+  async function call(kindParam) {
+    const params = new URLSearchParams({ limit: String(limit), apikey: KEY() });
+    params.set(kindParam, "true");
+    params.set("isActivelyTrading", "true");
+    if (country) params.set("country", country);
+    if (exchange) params.set("exchange", exchange);
+    const url = `${BASE}/company-screener?${params.toString()}`;
+    try {
+      const data = await fetchWithRetry(url, 3, 90000);
+      return Array.isArray(data) ? data : [];
+    } catch (e) {
+      console.warn(`[FMP] company-screener ${kindParam}=true failed:`, e.message);
+      return [];
+    }
+  }
+  const [etfs, funds] = await Promise.all([call("isEtf"), call("isFund")]);
+  const seen = new Set();
+  const rows = [];
+  for (const s of [...etfs, ...funds]) {
+    if (!s?.symbol || seen.has(s.symbol)) continue;
+    seen.add(s.symbol);
+    // Force is_etf=1 — these came from the ETF/fund screener regardless of whether
+    // the row echoes the flag back.
+    rows.push({ ...screenerToRow(s), is_etf: 1 });
+  }
+  console.log(`[FMP] screener ETFs+funds: ${etfs.length}+${funds.length} raw → ${rows.length} unique`);
+  return rows;
 }
 
 // ── Key metrics TTM (fast, 1 call/stock) ───────────────────────────────────
