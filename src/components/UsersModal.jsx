@@ -37,8 +37,8 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, mode
   useEffect(() => {
     if (showUsers) loadUsers();
     else setLoading(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showUsers]);
+
 
   async function addUser() {
     if (!newUsername || !newPassword) return;

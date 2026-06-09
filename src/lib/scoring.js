@@ -1,16 +1,115 @@
-// Rank a column 0..1 within the row set. asc=true means smaller value → higher rank.
-function rankCol(rows, key, asc) {
-  const idx = rows.map((r, i) => ({ v: r[key], i })).filter(x => x.v !== null && isFinite(x.v));
-  idx.sort((a, b) => asc ? a.v - b.v : b.v - a.v);
-  const out = new Array(rows.length).fill(null);
+// ── Orizen Score ────────────────────────────────────────────────────────────
+// Composite 0..100 score with three pillars (Quality / Value / Growth), built
+// from tie-aware percentile ranks within the currently filtered set.
+//
+// Design rules (these exist to keep sparse or junk data from inflating scores):
+//  1. JUNK GUARDS — values that would otherwise rank as "best" are corrected
+//     before ranking: negative P/E (loss-maker) ranks worst, negative D/E
+//     (negative equity) ranks worst and voids ROE, negative EV/EBITDA only
+//     counts as cheap when EBITDA is actually positive, ND/EBITDA is dropped
+//     when EBITDA is negative, and current ratio is capped at 3 (hoarding cash
+//     past that earns no extra credit).
+//  2. NEUTRAL IMPUTATION — a missing input counts as rank 0.45 ("unknown is
+//     slightly worse than median") instead of being ignored. A stock with two
+//     stellar metrics and fourteen blanks can no longer ace its pillars, and a
+//     stock with NO growth data can no longer beat an identical stock with
+//     mediocre growth (the old behavior redistributed the missing pillar's
+//     weight into the stock's good pillars).
+//  3. COVERAGE GATE — stocks with fewer than MIN_COMPONENTS real inputs are
+//     not scored at all (score = null) so symbol-only rows don't all show a
+//     meaningless ~45.
+//  4. Final score = slider-weighted average of the three pillars. Pillars are
+//     always present once a stock clears the gate, so the effective weights
+//     are exactly the user's sliders (normalized) — no silent redistribution.
+
+export const DEFAULT_WEIGHTS = { q: 35, v: 35, g: 30 };
+
+// Rank substitute for "this value is disqualifying" (sorts to the bottom of
+// ascending-is-better columns). Finite so it survives isFinite checks.
+const WORST = 1e15;
+
+// Rank assigned to missing inputs: slightly below the median stock.
+const IMPUTED_RANK = 0.45;
+
+// Minimum number of real (non-imputed) inputs, across all 16, to get a score.
+const MIN_COMPONENTS = 3;
+
+// Tie-aware percentile rank: 1 = best, 0 = worst, equal values share the same
+// rank (average of their positions). asc=true means smaller value = better.
+function rankVals(vals, asc) {
+  const idx = [];
+  for (let i = 0; i < vals.length; i++) {
+    const v = vals[i];
+    if (v !== null && v !== undefined && isFinite(v)) idx.push({ v, i });
+  }
+  const out = new Array(vals.length).fill(null);
   const L = idx.length;
-  idx.forEach((x, k) => { out[x.i] = L < 2 ? 0.5 : (L - 1 - k) / (L - 1); });
+  if (L === 0) return out;
+  if (L === 1) {
+    out[idx[0].i] = 0.5;
+    return out;
+  }
+  idx.sort((a, b) => (asc ? a.v - b.v : b.v - a.v));
+  let k = 0;
+  while (k < L) {
+    let j = k;
+    while (j + 1 < L && idx[j + 1].v === idx[k].v) j++;
+    const avgPos = (k + j) / 2;
+    const score = (L - 1 - avgPos) / (L - 1);
+    for (let m = k; m <= j; m++) out[idx[m].i] = score;
+    k = j + 1;
+  }
   return out;
 }
 
-function avg(arr) {
-  const a = arr.filter(x => x !== null && isFinite(x));
-  return a.length ? a.reduce((s, x) => s + x, 0) / a.length : null;
+const num = (v) => (v === null || v === undefined || !isFinite(v) ? null : v);
+
+// Pre-rank sanitization: returns the values that actually enter the ranking,
+// with junk cases corrected (see JUNK GUARDS above).
+export function scoringInputs(r) {
+  const de = num(r.debt_equity);
+  const negEquity = de !== null && de < 0;
+  const ebitdaMargin = num(r.ebitda_margin);
+
+  const pe = num(r.pe);
+  const evEb = num(r.ev_ebitda);
+  const cr = num(r.current_ratio);
+  const nd = num(r.net_debt_ebitda);
+
+  return {
+    // Quality
+    roic: num(r.roic),
+    // ROE computed against negative equity is meaningless (often a huge
+    // positive for money-losing companies) — drop it.
+    roe: negEquity ? null : num(r.roe),
+    gross_margin: num(r.gross_margin),
+    op_margin: num(r.op_margin),
+    fcf_margin: num(r.fcf_margin),
+    // Liquidity beyond 3x earns no extra credit (a 25x current ratio is idle
+    // capital, not 8x better than a healthy 3x).
+    current_ratio: cr !== null ? Math.min(cr, 3) : null,
+    // ND/EBITDA flips sign (looks like net cash) when EBITDA is negative.
+    net_debt_ebitda: nd !== null && ebitdaMargin !== null && ebitdaMargin <= 0 ? null : nd,
+    // Negative equity is a distress signal, not "no leverage".
+    debt_equity: negEquity ? WORST : de,
+
+    // Value
+    ev_gp: num(r.ev_gp),
+    // Negative EV/EBITDA is genuinely cheap ONLY when EBITDA is positive
+    // (negative enterprise value). With negative/unknown EBITDA it's junk.
+    ev_ebitda:
+      evEb !== null && evEb < 0 && !(ebitdaMargin !== null && ebitdaMargin > 0)
+        ? WORST
+        : evEb,
+    // Negative P/E = negative earnings; "cheapest" is the opposite of true.
+    pe: pe !== null && pe <= 0 ? WORST : pe,
+    fcf_yield: num(r.fcf_yield),
+
+    // Growth
+    revenue_growth: num(r.revenue_growth),
+    eps_growth: num(r.eps_growth),
+    fcf_growth: num(r.fcf_growth),
+  };
 }
 
 // Clamp 0..1
@@ -22,7 +121,7 @@ function dcfMarginOfSafety(price, dcf) {
   if (price == null || dcf == null || dcf <= 0 || price <= 0) return null;
   const mos = (dcf - price) / dcf;
   // Map: mos = -0.5 → 0, mos = 0 → 0.5, mos = +0.5 → 1
-  return clamp01((mos + 0.5));
+  return clamp01(mos + 0.5);
 }
 
 // Rule of 40: revenue growth + EBITDA margin (as percentages, but our data is fractional).
@@ -35,90 +134,107 @@ export function ruleOf40(r) {
   return { score, passes: score >= 40 };
 }
 
-export const DEFAULT_WEIGHTS = { q: 35, v: 35, g: 30 };
-
-// Orizen Score: 0..100 composite with 3 pillars.
-// Q = Quality (profitability + capital efficiency + balance sheet strength)
-// V = Value (multiples + DCF margin of safety)
-// G = Growth (revenue / EPS / FCF)
 /**
- * Heavy computation: pre-computes all ranks for the given rows.
- * This is expensive (many sorts) and should only run when the underlying data changes.
+ * Heavy computation: sanitizes inputs and pre-computes all percentile ranks
+ * for the given rows. Runs only when the underlying (filtered) data changes.
  */
 export function computeRankedRows(rows) {
-  if (!rows.length) return { rows, ranks: {} };
+  if (!rows.length) return { rows, ranks: { q: [], v: [], g: [] } };
 
-  // Quality inputs
-  const rRoic  = rankCol(rows, 'roic', false);
-  const rRoe   = rankCol(rows, 'roe', false);
-  const rGross = rankCol(rows, 'gross_margin', false);
-  const rOp    = rankCol(rows, 'op_margin', false);
-  const rFcfM  = rankCol(rows, 'fcf_margin', false);
-  const rCr    = rankCol(rows, 'current_ratio', false);
-  const rNd    = rankCol(rows, 'net_debt_ebitda', true);
-  const rDe    = rankCol(rows, 'debt_equity', true);
-
-  // Value inputs
-  const rEvGp  = rankCol(rows, 'ev_gp', true);
-  const rEvEb  = rankCol(rows, 'ev_ebitda', true);
-  const rPe    = rankCol(rows, 'pe', true);
-  const rFcfY  = rankCol(rows, 'fcf_yield', false);
-  const rDcf   = rows.map((r) => dcfMarginOfSafety(r.price, r.dcf));
-
-  // Growth inputs
-  const rRev   = rankCol(rows, 'revenue_growth', false);
-  const rEps   = rankCol(rows, 'eps_growth', false);
-  const rFcfG  = rankCol(rows, 'fcf_growth', false);
+  const inputs = rows.map(scoringInputs);
+  const col = (key) => inputs.map((s) => s[key]);
 
   return {
     rows,
     ranks: {
-      q: [rRoic, rRoe, rGross, rOp, rFcfM, rCr, rNd, rDe],
-      v: [rEvGp, rEvEb, rPe, rFcfY, rDcf],
-      g: [rRev, rEps, rFcfG],
+      q: [
+        rankVals(col('roic'), false),
+        rankVals(col('roe'), false),
+        rankVals(col('gross_margin'), false),
+        rankVals(col('op_margin'), false),
+        rankVals(col('fcf_margin'), false),
+        rankVals(col('current_ratio'), false),
+        rankVals(col('net_debt_ebitda'), true),
+        rankVals(col('debt_equity'), true),
+      ],
+      v: [
+        rankVals(col('ev_gp'), true),
+        rankVals(col('ev_ebitda'), true),
+        rankVals(col('pe'), true),
+        rankVals(col('fcf_yield'), false),
+        rows.map((r) => dcfMarginOfSafety(r.price, r.dcf)),
+      ],
+      g: [
+        rankVals(col('revenue_growth'), false),
+        rankVals(col('eps_growth'), false),
+        rankVals(col('fcf_growth'), false),
+      ],
     },
   };
 }
 
+// Average a pillar's component ranks for row i, imputing missing components
+// at IMPUTED_RANK. Returns the pillar score plus how many inputs were real.
+function pillarAt(componentCols, i) {
+  let sum = 0;
+  let present = 0;
+  for (const colRanks of componentCols) {
+    const v = colRanks[i];
+    if (v == null) {
+      sum += IMPUTED_RANK;
+    } else {
+      sum += v;
+      present++;
+    }
+  }
+  return { score: sum / componentCols.length, present, total: componentCols.length };
+}
+
 /**
- * Lightweight: applies weights to already-ranked data.
- * This is cheap and can run on every slider change.
+ * Lightweight: applies the Q/V/G slider weights to already-ranked data.
+ * Cheap enough to run on every slider change.
  */
 export function applyWeights(ranked, weights = DEFAULT_WEIGHTS) {
   const { rows, ranks } = ranked;
   if (!rows.length) return rows;
 
-  const w = { ...DEFAULT_WEIGHTS, ...weights };
-  const [rRoic, rRoe, rGross, rOp, rFcfM, rCr, rNd, rDe] = ranks.q;
-  const [rEvGp, rEvEb, rPe, rFcfY, rDcf] = ranks.v;
-  const [rRev, rEps, rFcfG] = ranks.g;
+  const wq = Number(weights?.q ?? DEFAULT_WEIGHTS.q) || 0;
+  const wv = Number(weights?.v ?? DEFAULT_WEIGHTS.v) || 0;
+  const wg = Number(weights?.g ?? DEFAULT_WEIGHTS.g) || 0;
+  const denom = wq + wv + wg;
 
   return rows.map((r, i) => {
-    const qScore = avg([rRoic[i], rRoe[i], rGross[i], rOp[i], rFcfM[i], rCr[i], rNd[i], rDe[i]]);
-    const vScore = avg([rEvGp[i], rEvEb[i], rPe[i], rFcfY[i], rDcf[i]]);
-    const gScore = avg([rRev[i], rEps[i], rFcfG[i]]);
+    const q = pillarAt(ranks.q, i);
+    const v = pillarAt(ranks.v, i);
+    const g = pillarAt(ranks.g, i);
 
-    let num = 0, denom = 0;
-    if (qScore != null) { num += qScore * w.q; denom += w.q; }
-    if (vScore != null) { num += vScore * w.v; denom += w.v; }
-    if (gScore != null) { num += gScore * w.g; denom += w.g; }
-    const score = denom > 0 ? num / denom : null;
+    const present = q.present + v.present + g.present;
+    const totalInputs = q.total + v.total + g.total;
+    const scored = present >= MIN_COMPONENTS && denom > 0;
 
-    const effectiveWeights = {
-      q: (qScore != null && denom > 0) ? w.q / denom : 0,
-      v: (vScore != null && denom > 0) ? w.v / denom : 0,
-      g: (gScore != null && denom > 0) ? w.g / denom : 0,
-    };
+    const score = scored ? (q.score * wq + v.score * wv + g.score * wg) / denom : null;
 
     const r40 = ruleOf40(r);
 
     return {
       ...r,
-      qScore,
-      vScore,
-      gScore,
+      qScore: scored ? q.score : null,
+      vScore: scored ? v.score : null,
+      gScore: scored ? g.score : null,
       score,
-      effectiveWeights,
+      // Fraction of the 16 scorecard inputs with real data — surfaced in the
+      // UI and to Ori so low-coverage scores are visibly less trustworthy.
+      dataCoverage: totalInputs ? present / totalInputs : 0,
+      pillarCoverage: {
+        q: q.total ? q.present / q.total : 0,
+        v: v.total ? v.present / v.total : 0,
+        g: g.total ? g.present / g.total : 0,
+      },
+      // With imputation every scored stock carries all three pillars, so the
+      // effective weights are simply the normalized sliders.
+      effectiveWeights: scored
+        ? { q: wq / denom, v: wv / denom, g: wg / denom }
+        : { q: 0, v: 0, g: 0 },
       rule_of_40: r40.score,
       passes_rule_of_40: r40.passes,
     };

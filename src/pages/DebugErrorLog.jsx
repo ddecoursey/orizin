@@ -1,5 +1,23 @@
 import { useState, useEffect } from 'react';
 
+// Small stat tile used across the dashboard panels.
+function Tile({ label, value, sub, accent }) {
+  return (
+    <div className="bg-gray-950 border border-gray-800 rounded p-3">
+      <div className="text-gray-400 text-xs">{label}</div>
+      <div className={`text-2xl font-semibold tabular-nums mt-1 ${accent || ''}`}>{value}</div>
+      {sub && <div className="text-xs text-gray-500 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
+const SESSION_BADGE = {
+  open: { label: 'MARKET OPEN', cls: 'bg-emerald-900 text-emerald-300' },
+  pre: { label: 'PRE-MARKET', cls: 'bg-amber-900 text-amber-300' },
+  after: { label: 'AFTER-HOURS', cls: 'bg-amber-900 text-amber-300' },
+  closed: { label: 'MARKET CLOSED', cls: 'bg-gray-700 text-gray-400' },
+};
+
 export default function DebugErrorLog() {
   const [errors, setErrors] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -12,6 +30,9 @@ export default function DebugErrorLog() {
   const [enrichStatus, setEnrichStatus] = useState(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
   const [rpmInput, setRpmInput] = useState('150');
+
+  // FMP usage / cache / freshness dashboard
+  const [stats, setStats] = useState(null);
 
   useEffect(() => {
     document.title = 'Debug • Orizen';
@@ -97,8 +118,23 @@ export default function DebugErrorLog() {
     controlEnrichment(null, rpm);
   };
 
+  const fetchStats = async () => {
+    try {
+      const res = await fetch('/api/debug/fmp-stats');
+      if (!res.ok) return;
+      const data = await res.json();
+      setStats(data);
+    } catch {
+      // transient — next poll retries
+    }
+  };
+
   const clearErrors = async () => {
-    // Simple client-side clear (we can enhance later with a backend clear endpoint)
+    try {
+      await fetch('/api/debug/errors/clear', { method: 'POST' });
+    } catch {
+      // even if the server call fails, clear the view
+    }
     setErrors([]);
   };
 
@@ -106,10 +142,12 @@ export default function DebugErrorLog() {
     if (access !== 'allowed') return;
     fetchErrors();
     fetchEnrichment();
+    fetchStats();
     const interval = setInterval(() => {
       fetchErrors();
       fetchEnrichment();
-    }, 4000); // poll both
+      fetchStats();
+    }, 4000); // poll all three
     return () => clearInterval(interval);
   }, [access]);
 
@@ -155,7 +193,7 @@ export default function DebugErrorLog() {
               onClick={clearErrors}
               className="px-4 py-2 text-sm rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
             >
-              Clear View
+              Clear Log
             </button>
             <button
               onClick={fetchErrors}
@@ -235,7 +273,11 @@ export default function DebugErrorLog() {
                 <div className="flex gap-6 mt-1">
                   <div>
                     <span className="text-emerald-400 text-2xl font-semibold tabular-nums">{enrichStatus.processed}</span>
-                    <div className="text-xs text-gray-500">processed</div>
+                    <div className="text-xs text-gray-500">enriched</div>
+                  </div>
+                  <div>
+                    <span className="text-sky-400 text-2xl font-semibold tabular-nums">{enrichStatus.quotesRefreshed ?? 0}</span>
+                    <div className="text-xs text-gray-500">quotes</div>
                   </div>
                   <div>
                     <span className="text-red-400 text-2xl font-semibold tabular-nums">{enrichStatus.errors}</span>
@@ -309,6 +351,141 @@ export default function DebugErrorLog() {
             <div className="text-gray-500 text-sm">Loading enrichment status...</div>
           )}
         </div>
+
+        {/* FMP API usage + caches + data freshness */}
+        {stats && (
+          <div className="mb-8 grid grid-cols-1 xl:grid-cols-2 gap-6">
+            {/* FMP usage */}
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  📡 FMP API Usage
+                  {stats.market && (
+                    <span className={`text-xs px-2 py-0.5 rounded ${(SESSION_BADGE[stats.market.session] || SESSION_BADGE.closed).cls}`}>
+                      {(SESSION_BADGE[stats.market.session] || SESSION_BADGE.closed).label}
+                    </span>
+                  )}
+                </h2>
+                <span className="text-[10px] text-gray-500">{stats.market?.statusLine}</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <Tile
+                  label="Pace (now)"
+                  value={`${stats.fmp.rpmNow} rpm`}
+                  sub="plan limit 300 rpm"
+                  accent={stats.fmp.rpmNow > 280 ? 'text-red-400' : stats.fmp.rpmNow > 220 ? 'text-amber-300' : 'text-emerald-400'}
+                />
+                <Tile
+                  label="Last 15 min"
+                  value={stats.fmp.last15min.calls}
+                  sub={`${stats.fmp.last15min.http429} × 429`}
+                  accent={stats.fmp.last15min.http429 > 0 ? 'text-amber-300' : ''}
+                />
+                <Tile
+                  label="Last hour"
+                  value={stats.fmp.last60min.calls}
+                  sub={`${stats.fmp.last60min.errors} errors`}
+                />
+                <Tile
+                  label="Since boot"
+                  value={stats.fmp.total.calls.toLocaleString()}
+                  sub={`avg ${stats.fmp.avgMs}ms · ${stats.fmp.total.http429} × 429`}
+                />
+              </div>
+              {stats.fmp.byEndpoint?.length > 0 && (
+                <div className="mt-4">
+                  <div className="text-xs text-gray-400 mb-1.5">By endpoint (since boot)</div>
+                  <div className="max-h-44 overflow-y-auto border border-gray-800 rounded">
+                    <table className="w-full text-[11px]">
+                      <thead className="bg-gray-950 text-gray-500 sticky top-0">
+                        <tr>
+                          <th className="text-left px-2 py-1 font-medium">endpoint</th>
+                          <th className="text-right px-2 py-1 font-medium">calls</th>
+                          <th className="text-right px-2 py-1 font-medium">ok</th>
+                          <th className="text-right px-2 py-1 font-medium">429</th>
+                          <th className="text-right px-2 py-1 font-medium">err</th>
+                          <th className="text-right px-2 py-1 font-medium">avg ms</th>
+                        </tr>
+                      </thead>
+                      <tbody className="font-mono divide-y divide-gray-800/60">
+                        {stats.fmp.byEndpoint.map((e) => (
+                          <tr key={e.endpoint}>
+                            <td className="px-2 py-1 text-gray-300">{e.endpoint}</td>
+                            <td className="px-2 py-1 text-right text-gray-300">{e.calls}</td>
+                            <td className="px-2 py-1 text-right text-emerald-400/80">{e.ok}</td>
+                            <td className={`px-2 py-1 text-right ${e.http429 ? 'text-amber-300' : 'text-gray-600'}`}>{e.http429}</td>
+                            <td className={`px-2 py-1 text-right ${e.errors ? 'text-red-400' : 'text-gray-600'}`}>{e.errors}</td>
+                            <td className="px-2 py-1 text-right text-gray-400">{e.avgMs}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Caches + freshness */}
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              <h2 className="text-xl font-semibold mb-1">🗄 Caches &amp; Data Freshness</h2>
+              <p className="text-xs text-gray-500 mb-4">
+                Cache hits are FMP calls we didn't make. Detail lookups persist in SQLite, so restarts no longer re-bill the quota.
+              </p>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                <Tile
+                  label="Detail cache hit rate"
+                  value={(() => {
+                    const c = stats.detailCache;
+                    const total = c.hits + c.dbHits + c.misses;
+                    return total ? `${Math.round(((c.hits + c.dbHits) / total) * 100)}%` : '—';
+                  })()}
+                  sub={`${stats.detailCache.hits} mem · ${stats.detailCache.dbHits} db · ${stats.detailCache.misses} miss`}
+                />
+                <Tile
+                  label="Persisted entries"
+                  value={stats.freshness.kvCache.toLocaleString()}
+                  sub={`+ ${stats.freshness.sparklines.toLocaleString()} sparklines`}
+                />
+                <Tile
+                  label="Universe"
+                  value={stats.freshness.stocks.toLocaleString()}
+                  sub={`${stats.freshness.etfs.toLocaleString()} ETFs · ${stats.freshness.enriched.toLocaleString()} enriched`}
+                />
+                <Tile
+                  label="Missing core data"
+                  value={stats.freshness.missingEnrich.toLocaleString()}
+                  sub="backlog (non-ETF)"
+                  accent={stats.freshness.missingEnrich > 0 ? 'text-amber-300' : 'text-emerald-400'}
+                />
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 text-sm">
+                <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-2">Price freshness (quotes)</div>
+                  <div className="space-y-1 text-[11px] font-mono">
+                    <div className="flex justify-between"><span className="text-gray-500">≤ 30 min</span><span className="text-emerald-400">{stats.freshness.price.fresh30m.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">≤ 6 h</span><span className="text-emerald-300/80">{stats.freshness.price.fresh6h.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">≤ 24 h</span><span className="text-gray-300">{stats.freshness.price.fresh24h.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">older / never</span><span className="text-amber-300">{stats.freshness.price.older.toLocaleString()}</span></div>
+                  </div>
+                  <div className="text-[10px] text-gray-600 mt-2">
+                    Top names refresh ~30 min while the market is open; the rest rotate through the session. Quote churn pauses overnight &amp; weekends.
+                  </div>
+                </div>
+                <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-2">Fundamentals freshness (km + ratios)</div>
+                  <div className="space-y-1 text-[11px] font-mono">
+                    <div className="flex justify-between"><span className="text-gray-500">≤ 24 h</span><span className="text-emerald-400">{stats.freshness.fundamentals.fresh24h.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">≤ 7 d</span><span className="text-gray-300">{stats.freshness.fundamentals.fresh7d.toLocaleString()}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-500">older</span><span className="text-amber-300">{stats.freshness.fundamentals.stale7d.toLocaleString()}</span></div>
+                  </div>
+                  <div className="text-[10px] text-gray-600 mt-2">
+                    Stalest enriched rows are re-fetched continuously with spare budget (24 h cycle).
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {fetchError ? (
           <div className="bg-red-950 border border-red-800 rounded-lg p-6">

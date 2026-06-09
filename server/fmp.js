@@ -11,15 +11,108 @@ const KEY = () => process.env.FMP_API_KEY || "";
 // concurrency (10 enrichment workers + many sparklines). Prevents 429 storms.
 // Tuned just under the limit for safety margin.
 const MIN_INTERVAL_MS = 205; // ~292 rpm max — safe headroom under 300
-let _lastCall = 0;
+let _nextSlot = 0;
 
+// Slot reservation: each caller atomically claims the next free slot BEFORE
+// sleeping. The old version read a shared "last call" timestamp and slept,
+// which let any number of concurrent callers (enrich workers + sparklines +
+// background job) wake at the same instant and burst far past 300 rpm.
 async function rateGate() {
   const now = Date.now();
-  const wait = _lastCall + MIN_INTERVAL_MS - now;
+  const target = Math.max(now, _nextSlot);
+  _nextSlot = target + MIN_INTERVAL_MS;
+  const wait = target - now;
   if (wait > 0) {
     await new Promise((r) => setTimeout(r, wait));
   }
-  _lastCall = Date.now();
+}
+
+// ── FMP call instrumentation ───────────────────────────────────────────────
+// Counts every network attempt against the FMP quota, per endpoint and per
+// minute, so the debug page can show real usage, 429 pressure, and pace.
+const fmpStats = {
+  startedAt: Date.now(),
+  total: { calls: 0, ok: 0, errors: 0, http429: 0, totalMs: 0 },
+  byEndpoint: new Map(), // endpoint -> { calls, ok, errors, http429, totalMs }
+  minuteBuckets: [],     // [{ minute, calls, ok, errors, http429 }], newest last
+};
+const MAX_MINUTE_BUCKETS = 120;
+
+function endpointOf(url) {
+  try {
+    const u = new URL(url);
+    return u.pathname.replace(/^\/stable\//, "").replace(/^\//, "") || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function recordCall(endpoint, { ok, is429, ms }) {
+  const t = fmpStats.total;
+  t.calls++;
+  t.totalMs += ms;
+  if (is429) t.http429++;
+  else if (ok) t.ok++;
+  else t.errors++;
+
+  let e = fmpStats.byEndpoint.get(endpoint);
+  if (!e) {
+    e = { calls: 0, ok: 0, errors: 0, http429: 0, totalMs: 0 };
+    fmpStats.byEndpoint.set(endpoint, e);
+  }
+  e.calls++;
+  e.totalMs += ms;
+  if (is429) e.http429++;
+  else if (ok) e.ok++;
+  else e.errors++;
+
+  const minute = Math.floor(Date.now() / 60000);
+  let b = fmpStats.minuteBuckets[fmpStats.minuteBuckets.length - 1];
+  if (!b || b.minute !== minute) {
+    b = { minute, calls: 0, ok: 0, errors: 0, http429: 0 };
+    fmpStats.minuteBuckets.push(b);
+    if (fmpStats.minuteBuckets.length > MAX_MINUTE_BUCKETS) {
+      fmpStats.minuteBuckets.splice(0, fmpStats.minuteBuckets.length - MAX_MINUTE_BUCKETS);
+    }
+  }
+  b.calls++;
+  if (is429) b.http429++;
+  else if (ok) b.ok++;
+  else b.errors++;
+}
+
+export function getFmpStats() {
+  const nowMin = Math.floor(Date.now() / 60000);
+  const window = (mins) => {
+    const cutoff = nowMin - mins;
+    let calls = 0, http429 = 0, errors = 0;
+    for (const b of fmpStats.minuteBuckets) {
+      if (b.minute > cutoff) {
+        calls += b.calls;
+        http429 += b.http429;
+        errors += b.errors;
+      }
+    }
+    return { calls, http429, errors };
+  };
+  const last1 = window(1);
+  const last15 = window(15);
+  const last60 = window(60);
+  return {
+    startedAt: fmpStats.startedAt,
+    total: { ...fmpStats.total },
+    avgMs: fmpStats.total.calls ? Math.round(fmpStats.total.totalMs / fmpStats.total.calls) : 0,
+    rpmNow: last1.calls,
+    last15min: last15,
+    last60min: last60,
+    byEndpoint: [...fmpStats.byEndpoint.entries()]
+      .map(([endpoint, s]) => ({
+        endpoint,
+        ...s,
+        avgMs: s.calls ? Math.round(s.totalMs / s.calls) : 0,
+      }))
+      .sort((a, b) => b.calls - a.calls),
+  };
 }
 
 function n(v) {
@@ -86,6 +179,7 @@ export function screenerToRow(s) {
 
 async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
   const sanitizedUrl = url.replace(/apikey=[^&]+/, 'apikey=***');
+  const endpoint = endpointOf(url);
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     await rateGate();
@@ -103,20 +197,23 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
     try {
       const res = await fetch(url, { signal: fetchSignal });
 
+      // Read once as text and parse once — the previous clone().json() +
+      // res.json() fallback parsed large payloads twice on cache misses.
+      const bodyText = await res.text();
       let responseData = null;
-      if (res.ok) {
-        try {
-          responseData = await res.clone().json(); // clone so we can still return it
-        } catch {
-          // Body wasn't valid JSON — fine, we'll return null below.
-        }
+      try {
+        responseData = JSON.parse(bodyText);
+      } catch {
+        responseData = null; // non-JSON body — callers treat null as "no data"
       }
 
       const elapsedMs = Date.now() - requestStarted;
+      recordCall(endpoint, { ok: res.ok, is429: res.status === 429, ms: elapsedMs });
+
       // Only log non-OK responses to the error log. Successful calls would
       // spam Railway's log rate limit (each ratios-ttm response is huge,
       // multiplied by thousands of enrich requests).
-      if (!res.ok) {
+      if (!res.ok && res.status !== 429) {
         logError(`[FMP CALL] ${sanitizedUrl}${attemptInfo}`, {
           status: res.status,
           ok: false,
@@ -136,17 +233,22 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
       if (!res.ok)
         throw new Error(`FMP ${res.status}: ${res.statusText} (${sanitizedUrl})`);
 
-      return responseData ?? await res.json();
+      return responseData;
 
     } catch (e) {
       const msg = e.message || "";
       const aborted = e.name === "AbortError";
       const elapsedMs = Date.now() - requestStarted;
-      logError(`[FMP CALL] ${sanitizedUrl}${attemptInfo} FAILED`, {
-        error: aborted ? `timeout after ${Math.round(timeoutMs / 1000)}s` : msg,
-        ms: elapsedMs,
-        attempt: attempt + 1,
-      });
+      // HTTP-level failures were already recorded above; only count transport
+      // errors (timeout / reset / DNS) here so attempts aren't double-counted.
+      if (!msg.startsWith("FMP ")) {
+        recordCall(endpoint, { ok: false, is429: false, ms: elapsedMs });
+        logError(`[FMP CALL] ${sanitizedUrl}${attemptInfo} FAILED`, {
+          error: aborted ? `timeout after ${Math.round(timeoutMs / 1000)}s` : msg,
+          ms: elapsedMs,
+          attempt: attempt + 1,
+        });
+      }
 
       const retryable =
         aborted ||
@@ -403,7 +505,7 @@ export async function fetchProfiles(
 // Returns basic rows with symbol+name (no expensive per-symbol profiles to avoid
 // rate limits). price/mcap/sector/industry etc. are populated later by gather
 // (force path) and the continuous background job.
-export async function fetchUniverseRows(onProgress) {
+export async function fetchUniverseRows() {
   const listItems = await fetchFullUniverseList();
   if (!listItems.length) return [];
 
@@ -630,36 +732,43 @@ export async function fetchFinancialGrowth(symbol, opts = {}) {
 // Lightweight historical EOD prices for sparklines
 export async function fetchHistoricalPricesLight(symbol, days = 45) {
   const url = `${BASE}/historical-price-eod/light?symbol=${symbol}&apikey=${KEY()}`;
-  console.log(`[FMP] Fetching historical light for ${symbol} (last ${days} days)`);
 
   try {
     const data = await fetchWithRetry(url);
-
-    console.log(`[FMP] Raw response type for ${symbol}:`, typeof data, Array.isArray(data) ? '(array)' : '(not array)');
-
-    if (!Array.isArray(data)) {
-      console.warn(`[FMP] Unexpected response shape for ${symbol}:`, data);
-      return [];
-    }
+    if (!Array.isArray(data)) return [];
 
     // FMP light returns newest first usually
     const sorted = [...data].sort((a, b) => new Date(a.date) - new Date(b.date));
     const recent = sorted.slice(-days);
 
-    const result = recent.map(d => ({
-      date: d.date,
-      price: n(d.price),
-    })).filter(d => d.price != null);
-
-    console.log(`[FMP] ${symbol} → ${result.length} valid prices returned`);
-    return result;
-
+    return recent
+      .map((d) => ({ date: d.date, price: n(d.price) }))
+      .filter((d) => d.price != null);
   } catch (e) {
-    console.error(`[FMP] Failed to fetch historical light for ${symbol}:`, e.message);
-    if (e.response) {
-      console.error(`[FMP] Response status:`, e.response.status);
-    }
+    console.warn(`[FMP] historical light ${symbol}:`, e.message);
     return [];
+  }
+}
+
+// Lightweight real-time quote — 1 small call per symbol. Used by the
+// market-hours price refresher to keep price/volume/mcap current through the
+// trading day without re-pulling the whole profile.
+export async function fetchQuote(symbol, opts = {}) {
+  const url = `${BASE}/quote?symbol=${symbol}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 1, opts.timeoutMs ?? 9000);
+    const q = Array.isArray(data) ? data[0] : data;
+    if (!q || typeof q !== "object" || !q.symbol) return null;
+    return {
+      symbol: q.symbol,
+      price: n(q.price),
+      volume: n(q.volume),
+      mcap: n(q.marketCap),
+      change_pct: n(q.changePercentage ?? q.changesPercentage),
+    };
+  } catch (e) {
+    console.warn(`[FMP] quote ${symbol}:`, e.message);
+    return null;
   }
 }
 

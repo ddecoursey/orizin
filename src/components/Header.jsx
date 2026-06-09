@@ -78,7 +78,6 @@ export default function Header({
   onRefresh,
   onGatherData,
   enrichLoading,
-  lastFetch,
   theme,
   onToggleTheme,
   currentUser,
@@ -89,8 +88,6 @@ export default function Header({
   currentView = 'screener',
   onNavigate,
   stocks = [],
-  onSearchSelect,
-  portfolioSummary = {},
 }) {
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;

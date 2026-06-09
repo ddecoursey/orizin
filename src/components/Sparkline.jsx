@@ -1,5 +1,3 @@
-import React from 'react';
-
 export default function Sparkline({ data, color = '#22c55e', width = 64, height = 22 }) {
   if (!data || data.length < 2) {
     return <div className="h-[22px] w-[64px] bg-gray-800/30 rounded" />;

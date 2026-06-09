@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { computeRankedRows, applyWeights } from "../lib/scoring.js";
 import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
@@ -18,14 +18,29 @@ function weightsKey(user) {
   return `screener_weights_v1:${user}`;
 }
 
-const DEFAULT_WEIGHTS = { q: 25, v: 25, b: 15, d: 20, g: 15 };
+// Keep in sync with DEFAULT_WEIGHTS in lib/scoring.js — the old local default
+// ({ q:25, v:25, b:15, d:20, g:15 }) carried dead b/d pillars from a previous
+// scoring model and silently gave new users a different Q/V/G mix than the
+// scoring engine (and Ori's prompt) document.
+const DEFAULT_WEIGHTS = { q: 35, v: 35, g: 30 };
+
+// Only the three live pillars; strips legacy b/d keys from old saved blobs.
+function sanitizeWeights(w) {
+  const out = { ...DEFAULT_WEIGHTS };
+  if (w && typeof w === "object") {
+    for (const k of ["q", "v", "g"]) {
+      const n = Number(w[k]);
+      if (Number.isFinite(n)) out[k] = Math.max(0, Math.min(100, n));
+    }
+  }
+  return out;
+}
 
 function loadWeights(user) {
   try {
     const raw = localStorage.getItem(weightsKey(user));
     if (!raw) return { ...DEFAULT_WEIGHTS };
-    const w = JSON.parse(raw);
-    return w && typeof w === "object" ? { ...DEFAULT_WEIGHTS, ...w } : { ...DEFAULT_WEIGHTS };
+    return sanitizeWeights(JSON.parse(raw));
   } catch {
     return { ...DEFAULT_WEIGHTS };
   }
@@ -58,11 +73,6 @@ function loadPins(user) {
   } catch {
     return new Set();
   }
-}
-function savePins(user, pins) {
-  try {
-    localStorage.setItem(pinsKey(user), JSON.stringify([...pins]));
-  } catch {}
 }
 
 function loadTabs(user) {
@@ -156,25 +166,38 @@ function normalizeUniverse(f = {}) {
   return "global";
 }
 
-function applyFilters(all, f, pins) {
-  const g = (k, mul = 1) =>
-    f[k] === "" || f[k] == null ? null : Number(f[k]) * mul;
+// Strict numeric coercion for filter values. Sidebar inputs store strings, and
+// a cleared input leaves "" behind — global isFinite("") is true (coerces to
+// 0), which used to turn a *cleared* "P/E ≤" filter into "P/E ≤ 0" and empty
+// the table. Number.isFinite after explicit conversion has no such trap.
+function condNum(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function applyFilters(all, f, pins) {
+  const g = (k) => condNum(f[k]);
 
   // New flexible numeric condition checker
   // Supports: { op: ">", value: 50 }, { op: "between", min: 10, max: 100 }, etc.
+  // Empty/non-numeric bounds mean "no constraint" — never a phantom 0.
   function numericMatch(rowVal, cond) {
     if (!cond) return true;
     if (rowVal == null || !isFinite(rowVal)) return true;
 
-    const { op, value, min, max } = cond;
+    const op = cond.op || ">=";
 
     if (op === "between" || op === "range") {
+      const min = condNum(cond.min);
+      const max = condNum(cond.max);
       if (min != null && rowVal < min) return false;
       if (max != null && rowVal > max) return false;
       return true;
     }
 
-    if (value == null || !isFinite(value)) return true;
+    const value = condNum(cond.value);
+    if (value == null) return true;
 
     switch (op) {
       case ">":  return rowVal > value;
@@ -200,10 +223,22 @@ function applyFilters(all, f, pins) {
   function getNumCond(f, key) {
     const v = f[key];
     if (v == null || v === "") return null;
-    if (typeof v === "object") return v;
+    if (typeof v === "object") {
+      const op = v.op || (key.endsWith("Max") ? "<=" : ">=");
+      if (op === "between" || op === "range") {
+        // A between with both sides empty is no filter at all.
+        if (condNum(v.min) == null && condNum(v.max) == null) return null;
+        return v;
+      }
+      // Cleared input ({ op, value: "" }) → filter is off.
+      if (condNum(v.value) == null) return null;
+      return v;
+    }
     // Legacy flat number → operator. Default operator follows the key suffix so
     // a bare "peMax": 20 means "<= 20" (not ">= 20"); "roicMin": 15 means ">= 15".
-    return { op: key.endsWith("Max") ? "<=" : ">=", value: Number(v) };
+    const n = condNum(v);
+    if (n == null) return null;
+    return { op: key.endsWith("Max") ? "<=" : ">=", value: n };
   }
   const sectorSet = f.sectors?.length ? new Set(f.sectors) : null;
   const industrySet = f.industries?.length ? new Set(f.industries) : null;
@@ -464,7 +499,21 @@ export function useScreener(currentUser) {
     // Retry the start of the streaming refresh as well. This path is taken
     // on the first load after a refresh when the local cache is empty.
     fetchWithRetry("/api/stocks/refresh", opts, 2, 280)
-      .then((res) => {
+      .then(async (res) => {
+        if (!res.ok) {
+          // Non-SSE failure (admin-only 403, rate-limit 429, …). Without this
+          // check the reader below parsed a JSON error body as an empty stream
+          // and the UI sat on "Fetching universe…" forever.
+          let msg = `Refresh failed (HTTP ${res.status})`;
+          try {
+            const data = await res.json();
+            if (data?.error) msg = data.error;
+          } catch { /* non-JSON body — keep the status message */ }
+          currentAbortRef.current = null;
+          setLoadProg(null);
+          setStatus({ type: stocksRef.current.length ? "ready" : "error", msg });
+          return;
+        }
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
@@ -578,6 +627,9 @@ export function useScreener(currentUser) {
 
     runInitialLoad();
     return () => { cancelled = true; };
+    // Mount-only by design — loadStocks is recreated each render but only the
+    // initial invocation belongs here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Hydrate screens/weights from the server so they follow the account across
@@ -607,8 +659,9 @@ export function useScreener(currentUser) {
           localStorage.setItem(activeKey(user), nextActive);
         }
         if (server.weights) {
-          setWeightsRaw(server.weights);
-          saveWeights(user, server.weights);
+          const clean = sanitizeWeights(server.weights);
+          setWeightsRaw(clean);
+          saveWeights(user, clean);
         }
         // Re-derive pins from the adopted active tab (parity with mount init).
         const at = nextTabs.find((t) => t.id === nextActive);

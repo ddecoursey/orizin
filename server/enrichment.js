@@ -4,16 +4,31 @@ import {
   fetchRatios,
   fetchHistoricalPricesLight,
   fetchProfile,
+  fetchQuote,
   profileToRow,
 } from './fmp.js';
 import { logError } from './logger.js';
+import { marketSession } from './marketHours.js';
 
 // Background continuous enrichment manager.
-// Runs at low sustained rate (e.g. 150-200 rpm) to keep the 38k+ universe fresh
-// without user-triggered long jobs. Prioritizes missing data, then oldest entries.
-// Designed to run forever in the server process.
+// Runs at low sustained rate (e.g. 150-200 rpm) to keep the universe fresh
+// without user-triggered long jobs, and spends quota where it matters:
+//
+//   market OPEN   → missing-data backlog + live quote refresh (top names every
+//                   ~30 min, the whole priced universe on a ~6 h rotation) +
+//                   stale-fundamentals refresh with whatever budget is left.
+//   pre/after     → backlog + a slow price rotation (catch the open/close moves).
+//   CLOSED        → backlog + fundamentals only, at a reduced pace. No quote
+//                   churn overnight or on weekends — prices aren't moving, so
+//                   those FMP calls would be pure waste.
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Price refresh tiers (regular session)
+const TOP_TIER_COUNT = 500;                 // biggest names by mcap
+const TOP_TIER_STALE_MS = 30 * 60 * 1000;   // refresh their quotes every ~30 min
+const TAIL_STALE_MS = 6 * 60 * 60 * 1000;   // everything else ~ once per session
+const EXTENDED_STALE_MS = 2 * 60 * 60 * 1000; // pre/after-hours top-tier pace
 
 class EnrichmentManager {
   constructor() {
@@ -21,6 +36,7 @@ class EnrichmentManager {
     this.targetRpm = parseInt(process.env.BACKGROUND_ENRICH_RPM || '150', 10);
     this.concurrency = 2; // low to be nice to FMP
     this.processed = 0;
+    this.quotesRefreshed = 0;
     this.errors = 0;
     this.lastSymbol = null;
     this.lastUpdate = null;
@@ -41,10 +57,12 @@ class EnrichmentManager {
       targetRpm: this.targetRpm,
       concurrency: this.concurrency,
       processed: this.processed,
+      quotesRefreshed: this.quotesRefreshed || 0,
       errors: this.errors,
       lastSymbol: this.lastSymbol,
       lastUpdate: this.lastUpdate,
       missingCount: missing,
+      marketSession: marketSession(),
       recent: this.recentActivity.slice(0, 15),
     };
   }
@@ -189,45 +207,101 @@ class EnrichmentManager {
     }
   }
 
+  // One quote call: update price/volume/mcap + price_updated_at only (never
+  // updated_at, which drives the fundamentals rotation).
+  async _refreshQuote(symbol) {
+    try {
+      const q = await fetchQuote(symbol);
+      if (q && q.price != null) {
+        db.saveQuote(symbol, q);
+        this.quotesRefreshed = (this.quotesRefreshed || 0) + 1;
+        this.lastSymbol = symbol;
+        this.lastUpdate = new Date().toISOString();
+      } else {
+        // No quote (delisted/unsupported) — advance its clock so the rotation
+        // doesn't re-pick it all day.
+        db.touchQuote?.(symbol);
+      }
+    } catch (e) {
+      db.touchQuote?.(symbol);
+      this.errors++;
+      this._logActivity(symbol, 'err', e.message);
+    }
+  }
+
+  // Build this tick's work list based on the current US market session.
+  _buildWork() {
+    const session = marketSession();
+    const work = [];
+
+    // 1. Missing core data is always first priority (smaller slice when the
+    //    market is open so quotes get budget too).
+    const missingBudget = session === 'open' ? 4 : 8;
+    const missing = db.getMissingEnrichDue ? db.getMissingEnrichDue(missingBudget) : [];
+    for (const s of missing) work.push({ symbol: s, kind: 'enrich', refresh: false });
+
+    // 2. Live quotes while the market is trading (and a slower trickle in
+    //    pre/after hours to capture the open/close). Nothing overnight/weekends.
+    if (session === 'open') {
+      const top = db.getTopPriceRefreshDue?.(TOP_TIER_COUNT, TOP_TIER_STALE_MS, 8) || [];
+      const tail = db.getAnyPriceRefreshDue?.(TAIL_STALE_MS, 6) || [];
+      const seen = new Set(work.map((w) => w.symbol));
+      for (const s of [...top, ...tail]) {
+        if (seen.has(s)) continue;
+        seen.add(s);
+        work.push({ symbol: s, kind: 'quote' });
+      }
+    } else if (session === 'pre' || session === 'after') {
+      const top = db.getTopPriceRefreshDue?.(TOP_TIER_COUNT, EXTENDED_STALE_MS, 4) || [];
+      const seen = new Set(work.map((w) => w.symbol));
+      for (const s of top) {
+        if (seen.has(s)) continue;
+        seen.add(s);
+        work.push({ symbol: s, kind: 'quote' });
+      }
+    }
+
+    // 3. Spare budget → refresh the stalest already-enriched fundamentals.
+    if (work.length < 12) {
+      const stale = db.getStaleEnriched ? db.getStaleEnriched(12 - work.length) : [];
+      const seen = new Set(work.map((w) => w.symbol));
+      for (const s of stale) {
+        if (seen.has(s)) continue;
+        seen.add(s);
+        work.push({ symbol: s, kind: 'enrich', refresh: true });
+      }
+    }
+
+    return { session, work };
+  }
+
   async _runLoop() {
     while (!this._stopped) {
       try {
-        // 1. Prioritize symbols still missing core data — oldest-attempt first,
-        //    skipping ones tried within the cooldown so un-enrichable symbols don't
-        //    monopolize the queue by being retried every tick.
-        const missing = db.getMissingEnrichDue ? db.getMissingEnrichDue(8) : [];
-        const work = missing.map((s) => ({ symbol: s, refresh: false }));
-
-        // 2. Caught up on missing → spend the spare capacity refreshing the stalest
-        //    already-enriched rows (re-fetch km/rat) so metrics don't go stale forever.
-        if (missing.length < 5) {
-          const stale = db.getStaleEnriched ? db.getStaleEnriched(12) : [];
-          const seen = new Set(missing);
-          for (const s of stale) {
-            if (seen.has(s)) continue;
-            seen.add(s);
-            work.push({ symbol: s, refresh: true });
-            if (work.length >= 12) break;
-          }
-        }
+        const { session, work } = this._buildWork();
 
         if (work.length === 0) {
-          // Nothing missing and nothing stale enough to refresh — sleep a bit longer
-          await sleep(15000);
+          // Nothing missing, nothing stale, no quotes due — idle. Check back
+          // sooner during trading hours, lazily when the market is closed.
+          await sleep(session === 'open' ? 15000 : 60000);
           continue;
         }
 
-        // Process sequentially with rate limiting + small concurrency
-        const batch = work.slice(0, this.concurrency * 3);
+        const batch = work.slice(0, this.concurrency * 6);
         for (const item of batch) {
           if (this._stopped) break;
           await this._claimSlot();
-          await this._processOne(item.symbol, item.refresh);
+          if (item.kind === 'quote') {
+            await this._refreshQuote(item.symbol);
+          } else {
+            await this._processOne(item.symbol, item.refresh);
+          }
         }
 
-        // Throttle the outer loop a little so we don't spin when queue is small
-        const effectiveInterval = Math.max(3000, Math.floor(60000 / this.targetRpm) * 2);
-        await sleep(effectiveInterval);
+        // Throttle the outer loop a little so we don't spin when queue is small.
+        // Off-hours runs at half pace — the backlog isn't urgent at 2 AM.
+        const base = Math.max(3000, Math.floor(60000 / this.targetRpm) * 2);
+        await sleep(session === 'closed' ? base * 2 : base);
       } catch (loopErr) {
         console.error('[Enrichment] Background loop error (will continue):', loopErr);
         await sleep(10000);

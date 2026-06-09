@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import Starfield from "./components/Starfield";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
@@ -211,7 +211,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     document.documentElement.classList.toggle("light", theme === "light");
     localStorage.setItem(themeKey, theme);
     if (settingsHydrated.current) patchUserSettings({ theme });
-  }, [theme]);
+  }, [theme, themeKey]);
   const {
     stocks,
     filtered,
@@ -460,9 +460,17 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
     onEnterDeepResearch: (symbol) => openDeepResearch(symbol),
   });
 
+  // Known-symbol set for ticker extraction — built once per universe load
+  // instead of on every chat message (it's ~10k entries).
+  const knownSymbols = useMemo(
+    () => new Set(stocks.map((s) => s.symbol)),
+    [stocks],
+  );
+
   // Keep additional chat-focused symbols enriched with full detail data so that
   // *any* way the user asks Ori about stocks (explicit button, typing names in chat,
   // following up on Ori's suggestions, etc.) causes the rich context to be sent.
+  const detailSym = detailStock?.symbol || null;
   useEffect(() => {
     const fromFocus = chat.focusSymbols || [];
     // Also pull tickers mentioned in the most recent user message(s)
@@ -471,14 +479,14 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
       .slice(-2)
       .map((m) => m.content || "")
       .join(" ");
-    const extracted = extractSymbols(recentUserMsgs, stocks);
+    const extracted = extractSymbols(recentUserMsgs, knownSymbols);
     const desired = [...new Set([...fromFocus, ...extracted])].slice(0, 3);
 
     // Don't duplicate the main open detail stock (it already gets full treatment as activeStock)
-    const extras = desired.filter((s) => !detailStock || s !== detailStock.symbol).slice(0, 2);
+    const extras = desired.filter((s) => s !== detailSym).slice(0, 2);
     setChatFocusSym1(extras[0] || null);
     setChatFocusSym2(extras[1] || null);
-  }, [chat.focusSymbols, chat.messages, detailStock?.symbol, stocks]);
+  }, [chat.focusSymbols, chat.messages, detailSym, knownSymbols]);
 
   // Bump this when the user does a Force Re-gather so the table can also
   // force-refresh its sparklines from the server (which will hit FMP).
@@ -978,15 +986,16 @@ function CheckIcon({ className = "" }) {
 // Extract likely stock tickers (1-5 uppercase letters) from text, filtered to
 // symbols that exist in the current universe. Used to auto-enrich context for
 // Ori when the user types natural language questions about specific stocks.
-function extractSymbols(text, knownStocks = []) {
-  if (!text) return [];
+function extractSymbols(text, knownSymbolSet) {
+  if (!text || !knownSymbolSet?.size) return [];
   const candidates = String(text).toUpperCase().match(/\b([A-Z]{1,5})\b/g) || [];
-  const known = new Set(knownStocks.map((s) => s.symbol));
-  return [...new Set(candidates.filter((c) => known.has(c)))];
+  return [...new Set(candidates.filter((c) => knownSymbolSet.has(c)))];
 }
 
-// Price % change over ~N trading days back from the latest close, plus the
-// full-window (1y) change. points: [{ date, price }] oldest→newest.
+// Price % change over ~N trading days back from the latest close.
+// points: [{ date, price }] oldest→newest. The detail chart loads ~5 years of
+// dailies, so "1y" must be ~252 trading days back — using the full window here
+// previously reported the 5-year change as "1yr" to Ori and the UI.
 function pricePerformance(points) {
   if (!points || points.length < 2) return null;
   const last = points[points.length - 1].price;
@@ -998,7 +1007,7 @@ function pricePerformance(points) {
     m1: at(21),
     m3: at(63),
     m6: at(126),
-    y1: at(points.length - 1),
+    y1: at(Math.min(252, points.length - 1)),
   };
 }
 

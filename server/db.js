@@ -154,6 +154,12 @@ try {
     data        TEXT,            -- JSON blob: { tabs, activeTab, weights, theme, sidebarCollapsed }
     updated_at  INTEGER
   );
+
+  CREATE TABLE IF NOT EXISTS kv_cache (
+    key         TEXT PRIMARY KEY,  -- e.g. "profile:AAPL", "ratings:MSFT"
+    data        TEXT NOT NULL,     -- JSON payload
+    updated_at  INTEGER NOT NULL
+  );
 `);
   console.log('[db] Schema initialized successfully');
 } catch (err) {
@@ -177,6 +183,10 @@ try {
     ["has_growth", "INTEGER DEFAULT 0"],
     ["country", "TEXT"],
     ["is_etf", "INTEGER DEFAULT 0"],
+    // Tracks quote/price freshness separately from updated_at: the background
+    // price refresher must not bump updated_at, or it would push rows out of
+    // the km/rat staleness rotation without actually refreshing fundamentals.
+    ["price_updated_at", "INTEGER"],
   ];
   for (const [name, type] of NEW_COLS) {
     if (!existingCols.has(name)) {
@@ -246,6 +256,8 @@ try {
   // updated_at, so this serves getMissingEnrichDue + getStaleEnriched directly.
   db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_etf_updated ON stocks(is_etf, updated_at);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_enrich ON stocks(is_etf, has_km, has_rat);`);
+  // Serves the price-refresh rotation (stalest quoted symbols first).
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_stocks_price_updated ON stocks(price_updated_at);`);
   console.log('[db] Stocks indexes ready');
 } catch (e) {
   console.warn('[db] Could not create stocks indexes:', e.message);
@@ -444,6 +456,133 @@ export function getStaleEnriched(limit = 12, staleMs = 24 * 60 * 60 * 1000) {
 // starts that symbol's cooldown) instead of being picked again immediately.
 export function touchStock(symbol) {
   db.prepare('UPDATE stocks SET updated_at = ? WHERE symbol = ?').run(Date.now(), symbol);
+}
+
+// ── Intraday price refresh (quote-driven, market-hours aware) ──────────────
+
+const applyQuoteStmt = db.prepare(`
+  UPDATE stocks SET
+    price            = COALESCE(@price, price),
+    volume           = COALESCE(@volume, volume),
+    mcap             = COALESCE(@mcap, mcap),
+    price_updated_at = @price_updated_at
+  WHERE symbol = @symbol
+`);
+
+export function saveQuote(symbol, q) {
+  applyQuoteStmt.run({
+    symbol,
+    price: q?.price ?? null,
+    volume: q?.volume ?? null,
+    mcap: q?.mcap ?? null,
+    price_updated_at: Date.now(),
+  });
+}
+
+// Advance only the quote clock (used when a quote attempt returned nothing, so
+// the rotation moves on instead of re-picking the same dead symbol).
+export function touchQuote(symbol) {
+  db.prepare('UPDATE stocks SET price_updated_at = ? WHERE symbol = ?').run(Date.now(), symbol);
+}
+
+// Top-N by market cap whose quote is older than staleMs — the "keep the names
+// that matter fresh through the trading day" tier.
+export function getTopPriceRefreshDue(topN = 500, staleMs = 30 * 60 * 1000, limit = 10) {
+  const cutoff = Date.now() - staleMs;
+  return db
+    .prepare(
+      `SELECT symbol FROM (
+         SELECT symbol, price_updated_at FROM stocks
+           WHERE mcap IS NOT NULL
+           ORDER BY mcap DESC LIMIT ?
+       )
+       WHERE price_updated_at IS NULL OR price_updated_at < ?
+       ORDER BY price_updated_at ASC
+       LIMIT ?`,
+    )
+    .all(topN, cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+// Whole-universe rotation: stalest quotes first (NULLs sort first in SQLite).
+export function getAnyPriceRefreshDue(staleMs = 6 * 60 * 60 * 1000, limit = 10) {
+  const cutoff = Date.now() - staleMs;
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks
+         WHERE price IS NOT NULL
+           AND (price_updated_at IS NULL OR price_updated_at < ?)
+         ORDER BY price_updated_at ASC
+         LIMIT ?`,
+    )
+    .all(cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+// ── Data freshness summary (debug page) ────────────────────────────────────
+
+export function getFreshnessSummary() {
+  const now = Date.now();
+  const m30 = now - 30 * 60 * 1000;
+  const h6 = now - 6 * 60 * 60 * 1000;
+  const h24 = now - 24 * 60 * 60 * 1000;
+  const d7 = now - 7 * 24 * 60 * 60 * 1000;
+  const one = (sql, ...args) => db.prepare(sql).get(...args).c;
+  return {
+    stocks: one('SELECT COUNT(*) c FROM stocks'),
+    etfs: one('SELECT COUNT(*) c FROM stocks WHERE is_etf = 1'),
+    enriched: one('SELECT COUNT(*) c FROM stocks WHERE has_km = 1 AND has_rat = 1'),
+    missingEnrich: one('SELECT COUNT(*) c FROM stocks WHERE is_etf = 0 AND (has_km = 0 OR has_rat = 0)'),
+    price: {
+      fresh30m: one('SELECT COUNT(*) c FROM stocks WHERE price_updated_at >= ?', m30),
+      fresh6h: one('SELECT COUNT(*) c FROM stocks WHERE price_updated_at >= ?', h6),
+      fresh24h: one('SELECT COUNT(*) c FROM stocks WHERE price_updated_at >= ?', h24),
+      older: one('SELECT COUNT(*) c FROM stocks WHERE price IS NOT NULL AND (price_updated_at IS NULL OR price_updated_at < ?)', h24),
+    },
+    fundamentals: {
+      fresh24h: one('SELECT COUNT(*) c FROM stocks WHERE has_km = 1 AND updated_at >= ?', h24),
+      fresh7d: one('SELECT COUNT(*) c FROM stocks WHERE has_km = 1 AND updated_at >= ?', d7),
+      stale7d: one('SELECT COUNT(*) c FROM stocks WHERE has_km = 1 AND (updated_at IS NULL OR updated_at < ?)', d7),
+    },
+    sparklines: one('SELECT COUNT(*) c FROM sparklines'),
+    kvCache: one('SELECT COUNT(*) c FROM kv_cache'),
+    aiEnrichment: one('SELECT COUNT(*) c FROM ai_enrichment'),
+  };
+}
+
+// ── Persistent key-value cache (per-symbol detail lookups) ─────────────────
+// Write-through companion to the in-memory detail cache so profiles, ratings,
+// grades, insider trades, news, and RSI survive server restarts instead of
+// costing a fresh FMP call each redeploy.
+
+const getKvStmt = db.prepare('SELECT data, updated_at FROM kv_cache WHERE key = ?');
+const setKvStmt = db.prepare(`
+  INSERT INTO kv_cache (key, data, updated_at) VALUES (?, ?, ?)
+  ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at
+`);
+
+export function kvGet(key) {
+  const row = getKvStmt.get(key);
+  if (!row) return null;
+  try {
+    return { data: JSON.parse(row.data), updatedAt: row.updated_at };
+  } catch {
+    return null;
+  }
+}
+
+export function kvSet(key, data) {
+  try {
+    setKvStmt.run(key, JSON.stringify(data), Date.now());
+  } catch (e) {
+    console.warn('[db] kvSet failed:', e.message);
+  }
+}
+
+// Drop entries not touched within maxAgeMs (run occasionally to bound growth).
+export function kvPurgeOlderThan(maxAgeMs = 14 * 24 * 60 * 60 * 1000) {
+  const cutoff = Date.now() - maxAgeMs;
+  return db.prepare('DELETE FROM kv_cache WHERE updated_at < ?').run(cutoff).changes;
 }
 
 export function getOldestSymbols(limit = 50) {

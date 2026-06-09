@@ -6,10 +6,6 @@ import {
   saveScreenerBatch,
   saveKm,
   saveRat,
-  saveDcf,
-  saveGrowth,
-  markDcfChecked,
-  markGrowthChecked,
   getMissingEnrich,
   setMeta,
   getMeta,
@@ -17,10 +13,12 @@ import {
   getEnrichedCount,
   saveAiEnrichment,
   getAiEnrichment,
-  getAiEnrichmentBatch,
   getSparkline,
   saveSparkline,
   pruneUniverse,
+  kvGet,
+  kvSet,
+  kvPurgeOlderThan,
 } from "../db.js";
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
@@ -67,7 +65,6 @@ import {
   fetchRatios,
   fetchProfile,
   profileToRow,
-  screenerToRow,
   fetchScreenerStocks,
   fetchDCF,
   fetchPriceTarget,
@@ -94,16 +91,21 @@ const DEFAULT_MIN_MARKET_CAP = 500_000_000; // default floor for the stock unive
 
 const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
-// In-memory TTL cache for per-symbol detail lookups (profile / ratings / grades
-// / rsi). These power the stock detail pane and don't change intraday, so a
-// short-lived cache makes reopening a stock instant and spares FMP round-trips.
-// Only meaningful results are cached (non-null object / non-empty array), so a
-// transient failure isn't pinned for the whole TTL.
+// Two-level TTL cache for per-symbol detail lookups (profile / ratings / grades
+// / rsi / news / insider). Level 1 is an in-memory LRU for hot keys; level 2 is
+// the SQLite kv_cache, so a server restart/redeploy doesn't throw away every
+// cached lookup and re-bill it against the FMP quota. Only meaningful results
+// are cached (non-null object / non-empty array), so a transient failure isn't
+// pinned for the whole TTL.
 const detailCache = new Map(); // key -> { at, data }
-// Cap the detail cache so a long-running server doesn't grow it without bound
-// (6 keys × thousands of symbols would otherwise accumulate forever). Map iterates
-// in insertion order, so evicting the first key drops the oldest entry.
+// Cap the in-memory cache so a long-running server doesn't grow it without
+// bound. Map iterates in insertion order, so evicting the first key drops the
+// oldest entry.
 const DETAIL_CACHE_MAX = 3000;
+const detailCacheStats = { hits: 0, dbHits: 0, misses: 0 };
+export function getDetailCacheStats() {
+  return { ...detailCacheStats, memEntries: detailCache.size, memMax: DETAIL_CACHE_MAX };
+}
 function setDetailCache(key, data) {
   if (detailCache.has(key)) {
     detailCache.delete(key); // re-insert so updates move to the tail (newest)
@@ -112,17 +114,44 @@ function setDetailCache(key, data) {
     if (oldest !== undefined) detailCache.delete(oldest);
   }
   detailCache.set(key, { at: Date.now(), data });
+  kvSet(key, data); // write-through so it survives restarts
 }
 async function cachedDetail(key, ttlMs, fn, force = false) {
   if (!force) {
     const hit = detailCache.get(key);
-    if (hit && Date.now() - hit.at < ttlMs) return hit.data;
+    if (hit && Date.now() - hit.at < ttlMs) {
+      detailCacheStats.hits++;
+      return hit.data;
+    }
+    // Memory miss → check the persistent cache before going to FMP.
+    const persisted = kvGet(key);
+    if (persisted && Date.now() - persisted.updatedAt < ttlMs) {
+      detailCacheStats.dbHits++;
+      // Promote to memory without rewriting the same payload to SQLite.
+      if (detailCache.size >= DETAIL_CACHE_MAX) {
+        const oldest = detailCache.keys().next().value;
+        if (oldest !== undefined) detailCache.delete(oldest);
+      }
+      detailCache.set(key, { at: persisted.updatedAt, data: persisted.data });
+      return persisted.data;
+    }
   }
+  detailCacheStats.misses++;
   const data = await fn();
   const useful = Array.isArray(data) ? data.length > 0 : data != null;
   if (useful) setDetailCache(key, data);
   return data;
 }
+
+// Bound the persistent cache: drop entries unused for 14 days, once a day.
+setInterval(() => {
+  try {
+    const purged = kvPurgeOlderThan(14 * 24 * 60 * 60 * 1000);
+    if (purged > 0) console.log(`[cache] purged ${purged} stale kv_cache entries`);
+  } catch (e) {
+    console.warn('[cache] purge failed:', e.message);
+  }
+}, 24 * 60 * 60 * 1000).unref();
 
 async function getUniverse(force = false) {
   const cachedAt = getMeta("universe_cache_at");
@@ -918,8 +947,9 @@ router.get("/stocks/insider/:symbol", async (req, res) => {
 router.get("/stocks/intraday/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
+    const force = req.query.force === '1' || req.query.force === 'true';
     const prices = await cachedDetail(`intraday:${symbol}`, 5 * 60 * 1000, () =>
-      fetchIntraday(symbol),
+      fetchIntraday(symbol), force
     );
     res.json({ symbol, prices });
   } catch (e) {

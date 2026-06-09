@@ -104,54 +104,6 @@ function FilterRow({ label, filterKey, filters, set, step = 1 }) {
   );
 }
 
-function NumRow({ label, value, onChange, step = 1, placeholder = '' }) {
-  const numValue = value === '' || value == null ? '' : Number(value);
-
-  const adjust = (delta) => {
-    const current = numValue === '' ? 0 : numValue;
-    const next = Math.max(0, current + delta); // prevent negative for most filters
-    onChange(next === 0 ? '' : next);
-  };
-
-  return (
-    <div className="flex items-center gap-2 mb-1">
-      <label className="flex-1 text-xs text-gray-400">{label}</label>
-
-      <div className="flex items-center">
-        <input
-          type="number"
-          value={value}
-          step={step}
-          placeholder={placeholder}
-          onChange={e => onChange(e.target.value)}
-          className="w-20 px-2 py-1.5 text-sm lg:w-16 lg:px-1.5 lg:py-0.5 lg:text-xs rounded-l border border-gray-700 bg-gray-900 text-gray-200 focus:outline-none focus:border-blue-500
-            [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-        />
-
-        {/* Quick adjust arrows */}
-        <div className="flex flex-col border border-l-0 border-gray-700 rounded-r overflow-hidden">
-          <button
-            type="button"
-            onClick={() => adjust(step)}
-            className="px-2.5 text-[10px] leading-none min-h-[18px] lg:px-2 lg:text-[9px] lg:min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors"
-            title={`+${step}`}
-          >
-            ▲
-          </button>
-          <button
-            type="button"
-            onClick={() => adjust(-step)}
-            className="px-2.5 text-[10px] leading-none min-h-[18px] lg:px-2 lg:text-[9px] lg:min-h-[16px] text-gray-500 hover:text-gray-200 hover:bg-gray-800 active:bg-gray-700 transition-colors border-t border-gray-700"
-            title={`-${step}`}
-          >
-            ▼
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function MultiSelect({ label, options, selected, onChange, search, onSearchChange, placeholder }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -297,12 +249,6 @@ export default function Sidebar({ filters, setFilters, stocks, onAddTicker, coll
       : stocks;
     return [...new Set(pool.map(r => r.industry).filter(i => i && i !== '—'))].sort();
   }, [stocks, f.sectors]);
-
-  function toggleMulti(key, val) {
-    const arr = f[key] || [];
-    const next = arr.includes(val) ? arr.filter(x => x !== val) : [...arr, val];
-    setArr(key, next);
-  }
 
   async function handleAdd() {
     const sym = addInput.trim().toUpperCase();

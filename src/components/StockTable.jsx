@@ -86,32 +86,6 @@ function ScoreBar({ score }) {
   );
 }
 
-function Cell({ val, type, colKey, heat, plain }) {
-  if (plain) return null; // handled inline
-  const formatted = fmt(val, type);
-  const cls = heatClass(val, colKey, heat);
-  const text = formatted ?? <span className="text-gray-600">—</span>;
-  const positive = type === "pct" && val > 0;
-  const negative = type === "pct" && val < 0;
-  return (
-    <td
-      className={`px-3 py-2 text-right text-xs font-mono whitespace-nowrap ${cls}`}
-    >
-      {formatted == null ? (
-        <span className="text-gray-600">—</span>
-      ) : (
-        <span
-          className={
-            positive ? "text-emerald-400" : negative ? "text-red-400" : ""
-          }
-        >
-          {formatted}
-        </span>
-      )}
-    </td>
-  );
-}
-
 const COLS = [
   { key: "pin", label: "★", left: true, nosort: true },
   { key: "symbol", label: "Symbol", left: true, plain: true },
@@ -150,31 +124,11 @@ const COLS = [
 export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
   const [sortKey, setSortKey] = useState("mcap");
   const [sortDir, setSortDir] = useState(-1);
-  const [sparklines, setSparklines] = useState(() => {
-    // Hydrate from localStorage on initial mount so that after a refresh
-    // we don't immediately re-request everything that we already have persisted.
-    // This makes sparklines behave like the main metric data: once gathered,
-    // refresh/scroll is instant with no network activity for previously seen symbols.
-    const initial = new Map();
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('sparkline_v1:')) {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            // key format: sparkline_v1:SYMBOL:45
-            const parts = key.split(':');
-            const sym = parts[1];
-            if (sym && Array.isArray(parsed?.prices) && parsed.prices.length > 0) {
-              initial.set(sym, parsed.prices);
-            }
-          }
-        }
-      }
-    } catch {}
-    return initial;
-  }); // symbol -> number[]
+  // symbol -> number[]. localStorage hydration happens lazily per symbol inside
+  // fetchSparklineInternal (getSparklineFromLocal) — the old eager loop parsed
+  // every persisted sparkline JSON blob synchronously at mount, which scaled
+  // with the total number of symbols ever viewed and visibly slowed startup.
+  const [sparklines, setSparklines] = useState(() => new Map());
 
   // Memoize expensive computations. Heat (per-column percentile colouring) depends
   // only on the metric distributions, which don't change when the Q/V/G weights move
@@ -283,7 +237,6 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       if (!force) {
         const localPrices = getSparklineFromLocal(symbol, 45);
         if (localPrices && localPrices.length > 0) {
-          console.log(`[Sparkline] LocalStorage hit for ${symbol}`);
           setSparklines(prev => {
             const next = new Map(prev);
             next.set(symbol, localPrices);
@@ -295,22 +248,11 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       }
 
       const forceParam = force ? '&force=1' : '';
-      console.log(`[Sparkline] Fetching from backend for ${symbol}${force ? ' (force)' : ''}`);
       const res = await fetch(`/api/stocks/sparkline/${symbol}?days=45${forceParam}`);
-
-      console.log(`[Sparkline] Backend response status for ${symbol}:`, res.status);
-
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => 'No error body');
-        console.error(`[Sparkline] Backend error for ${symbol}:`, res.status, errorText);
-        return;
-      }
+      if (!res.ok) return;
 
       const data = await res.json();
-      console.log(`[Sparkline] Backend data for ${symbol}:`, data);
-
       const prices = data.prices?.map(p => p.price) || [];
-      console.log(`[Sparkline] Parsed ${prices.length} prices for ${symbol}`);
 
       setSparklines(prev => {
         const next = new Map(prev);
@@ -322,8 +264,8 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       if (prices.length > 0) {
         saveSparklineToLocal(symbol, 45, prices);
       }
-    } catch (e) {
-      console.error(`[Sparkline] Fetch failed for ${symbol}:`, e);
+    } catch {
+      // Network hiccup — the cell keeps its placeholder; a later scroll retries.
     } finally {
       inFlightRef.current.delete(symbol);
     }
@@ -347,6 +289,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
   // Virtualization setup - Battle-tested pattern for large tables in flex layouts
   const parentRef = useRef(null);
 
+  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual opts this component out of React Compiler memoization; expected and fine for a virtualized table.
   const rowVirtualizer = useVirtualizer({
     count: sorted.length,
     getScrollElement: () => parentRef.current,
@@ -355,14 +298,21 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
     getItemKey: (index) => sorted[index]?.symbol ?? index, // Stable keys prevent unnecessary re-renders
   });
 
+  // Computed during render (the virtualizer re-renders this component as you
+  // scroll), so effects keyed on `visibleRangeKey` actually re-run when the
+  // visible window moves. The previous version read getVirtualItems() inside
+  // an effect whose deps never changed on scroll — newly revealed rows kept
+  // their "loading" placeholder until some unrelated state change kicked it.
+  const virtualItems = rowVirtualizer.getVirtualItems();
+  const visibleRangeKey = virtualItems.length
+    ? `${virtualItems[0].index}:${virtualItems[virtualItems.length - 1].index}`
+    : "";
+
   // 5-second delay before enabling sparkline fetching on initial load
   const [sparklinesEnabled, setSparklinesEnabled] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setSparklinesEnabled(true);
-      console.log('[Sparkline] Enabling sparkline fetching after 5s delay');
-    }, 5000);
+    const timer = setTimeout(() => setSparklinesEnabled(true), 5000);
     return () => clearTimeout(timer);
   }, []);
 
@@ -372,33 +322,28 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
   useEffect(() => {
     if (!sparklinesEnabled || enrichLoading) return;
 
-    const visibleItems = rowVirtualizer.getVirtualItems();
-    const visibleSymbols = visibleItems
+    const visibleSymbols = rowVirtualizer.getVirtualItems()
       .map(vi => sorted[vi.index]?.symbol)
       .filter(Boolean);
 
-    console.log('[Sparkline] Visible symbols:', visibleSymbols);
     visibleSymbols.forEach(symbol => {
-      // Skip if we already have it (either from this session or hydrated from localStorage on refresh)
+      // Skip if we already have it (either from this session or hydrated from localStorage)
       if (sparklines.has(symbol) || inFlightRef.current.has(symbol)) {
         return;
       }
-      console.log('[Sparkline] Fetching for:', symbol);
       scheduleSparklineFetch(symbol);
     });
-  }, [rowVirtualizer, sorted, sparklines, sparklinesEnabled, enrichLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleRangeKey, sorted, sparklines, sparklinesEnabled, enrichLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // When the parent triggers a Force Re-gather, also force-refresh
   // sparklines for whatever is currently visible.
   useEffect(() => {
     if (sparklineForceVersion === 0) return;
 
-    const visibleItems = rowVirtualizer.getVirtualItems();
-    const visibleSymbols = visibleItems
+    const visibleSymbols = rowVirtualizer.getVirtualItems()
       .map(vi => sorted[vi.index]?.symbol)
       .filter(Boolean);
 
-    console.log('[Sparkline] Force refresh due to global re-gather:', visibleSymbols);
     visibleSymbols.forEach(symbol => {
       scheduleSparklineFetch(symbol, true); // force = true
     });
@@ -414,16 +359,6 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
     }
   }
 
-  // Helpful utilities for "infinite scroll" UX
-  const scrollToTop = () => rowVirtualizer.scrollToOffset(0);
-  const scrollToRow = (symbol) => {
-    const index = sorted.findIndex((r) => r.symbol === symbol);
-    if (index !== -1) {
-      rowVirtualizer.scrollToIndex(index, { align: 'center' });
-    }
-  };
-
-  const virtualItems = rowVirtualizer.getVirtualItems();
   const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
   const paddingBottom =
     virtualItems.length > 0
@@ -541,7 +476,16 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
           </tr>
         </thead>
 
-        <tbody style={{ paddingTop: `${paddingTop}px`, paddingBottom: `${paddingBottom}px` }}>
+        <tbody>
+          {/* Spacer rows give the table its full virtual height. CSS padding
+              does not apply to table-row-groups, so the old tbody padding was
+              silently ignored — the scrollbar only ever reflected the rendered
+              slice and jumping/dragging through a large universe misbehaved. */}
+          {paddingTop > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={COLS.length + (onAskAI ? 1 : 0)} style={{ height: `${paddingTop}px`, padding: 0, border: 0 }} />
+            </tr>
+          )}
           {virtualItems.map((virtualRow) => {
             const r = sorted[virtualRow.index];
             if (!r) return null;
@@ -676,6 +620,11 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
               </tr>
             );
           })}
+          {paddingBottom > 0 && (
+            <tr aria-hidden="true">
+              <td colSpan={COLS.length + (onAskAI ? 1 : 0)} style={{ height: `${paddingBottom}px`, padding: 0, border: 0 }} />
+            </tr>
+          )}
         </tbody>
       </table>
 

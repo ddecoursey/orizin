@@ -129,6 +129,18 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
           colors={{ bg: '#134e4b', fg: '#5eead4' }}
           title="Growth — Revenue, EPS, and FCF growth (TTM). Higher = favor faster-growing companies."
         />
+        {r.dataCoverage != null && r.score != null && (
+          <SubChip
+            label="Data"
+            value={r.dataCoverage}
+            colors={
+              r.dataCoverage >= 0.75
+                ? { bg: '#1e3a5f', fg: '#93c5fd' }
+                : { bg: '#78350f', fg: '#fcd34d' }
+            }
+            title="How much of the 16-metric scorecard has real data. Missing inputs count as a slightly-below-median rank instead of being ignored, so sparse data can't inflate the score — but low coverage still means lower confidence."
+          />
+        )}
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-gray-800 text-gray-400">
           β {r.beta != null ? r.beta.toFixed(1) : '—'}
         </span>
@@ -185,7 +197,7 @@ export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }
           <MemoizedScorecard
             key={r.symbol}
             r={r}
-            index={i}
+            rank={i + 1}
             onSelectStock={onSelectStock}
             pinned={pins?.has(r.symbol)}
             onTogglePin={onTogglePin}

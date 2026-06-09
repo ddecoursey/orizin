@@ -3,19 +3,20 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
-import bcrypt from 'bcryptjs';
-import stocksRouter from './routes/stocks.js';
+import stocksRouter, { getDetailCacheStats } from './routes/stocks.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
 import * as db from './db.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
+import { marketSession, marketStatusLine } from './marketHours.js';
 
 // Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
-import { logError, getErrors } from './logger.js';
+import { logError, getErrors, clearErrors } from './logger.js';
 export { logError, getErrors };
 
 // Admin require (self-contained in auth.js to prevent circular deps with routes)
@@ -47,6 +48,29 @@ app.use(helmet({
 
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+// Gzip JSON API responses (no extra dependency). /api/stocks alone is several
+// MB of JSON for a large universe; gzip cuts the transfer ~8-10x. Only res.json
+// is wrapped, so SSE streams (refresh/enrich/chat) are untouched. Small bodies
+// skip compression — not worth the CPU.
+app.use('/api', (req, res, next) => {
+  if (!/\bgzip\b/i.test(String(req.headers['accept-encoding'] || ''))) return next();
+  const origJson = res.json.bind(res);
+  res.json = (body) => {
+    try {
+      const text = JSON.stringify(body);
+      if (text.length < 1024) return origJson(body);
+      const gz = zlib.gzipSync(Buffer.from(text), { level: zlib.constants.Z_BEST_SPEED });
+      res.set('Content-Encoding', 'gzip');
+      res.set('Vary', 'Accept-Encoding');
+      res.type('application/json');
+      return res.send(gz);
+    } catch {
+      return origJson(body);
+    }
+  };
+  next();
+});
 
 // Rate limit login attempts (protect against brute force)
 const loginLimiter = rateLimit({
@@ -361,17 +385,24 @@ app.use('/api', chatRouter);
 app.use('/api', usersRouter);
 app.use('/api', settingsRouter);
 
-// Global error handler for all /api routes — ensures we never return HTML
-app.use('/api', (err, req, res, next) => {
+// Global error handler for all /api routes — ensures we never return HTML.
+// (Express identifies error middleware by arity, so the 4th param stays.)
+app.use('/api', (err, req, res, _next) => {
   console.error('[API Error]', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Debug error logging endpoints (admin only)
-app.post('/api/debug/errors', requireAdmin, (req, res) => {
-  const { message, ...rest } = req.body || {};
-  if (message) {
-    logError(message, rest);
+// Debug error logging endpoints. POST is open to any authenticated user so the
+// frontend can report real client-side errors (it used to be admin-only, which
+// turned every non-admin browser report into 403 noise); reading/clearing the
+// log stays admin-only. Accepts a single entry or a batch { entries: [...] }.
+app.post('/api/debug/errors', (req, res) => {
+  const body = req.body || {};
+  const entries = Array.isArray(body.entries) ? body.entries.slice(0, 25) : [body];
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { message, ...rest } = entry;
+    if (message) logError(String(message).slice(0, 2000), rest);
   }
   res.json({ ok: true });
 });
@@ -379,6 +410,21 @@ app.post('/api/debug/errors', requireAdmin, (req, res) => {
 app.get('/api/debug/errors', requireAdmin, (req, res) => {
   const limit = parseInt(req.query.limit) || 100;
   res.json({ errors: getErrors(limit) });
+});
+
+app.post('/api/debug/errors/clear', requireAdmin, (req, res) => {
+  res.json({ ok: true, cleared: clearErrors() });
+});
+
+// FMP usage, cache effectiveness, data freshness, and market session — powers
+// the /debug dashboard so quota problems are visible before they hurt.
+app.get('/api/debug/fmp-stats', requireAdmin, (req, res) => {
+  res.json({
+    fmp: fmp.getFmpStats(),
+    detailCache: getDetailCacheStats(),
+    freshness: db.getFreshnessSummary(),
+    market: { session: marketSession(), statusLine: marketStatusLine() },
+  });
 });
 
 // Probes FMP reachability from this host without going through the
@@ -427,22 +473,17 @@ app.get('/api/debug/enrichment', requireAdmin, (req, res) => {
 
 app.post('/api/debug/enrichment', requireAdmin, (req, res) => {
   const { action, rpm } = req.body || {};
-  let changed = false;
   if (action === 'start') {
     enrichmentManager.start();
-    changed = true;
   } else if (action === 'stop') {
     enrichmentManager.stop();
-    changed = true;
   } else if (action === 'kill' || action === 'abort' || action === 'stop-all' || action === 'kill-all') {
     // Kill background + abort all in-flight FMP fetches (universe refresh, user gathers, etc.)
     enrichmentManager.stop();
     try { fmp.abortAllOngoingFetches?.(); } catch {}
-    changed = true;
   }
   if (typeof rpm === 'number' && rpm > 0) {
     enrichmentManager.setRpm(rpm);
-    changed = true;
   }
   res.json({ ok: true, status: enrichmentManager.getStatus() });
 });
@@ -455,10 +496,24 @@ app.use('/api', (req, res) => {
   res.status(404).json({ error: 'API route not found', method: req.method, path: req.path });
 });
 
-// Serve built React app in production
+// Serve built React app in production. Vite emits content-hashed filenames
+// under /assets, so those can be cached hard (a redeploy changes the hash);
+// index.html must always revalidate so clients pick up new bundles.
 const distPath = path.join(__dirname, '../dist');
-app.use(express.static(distPath));
+app.use(express.static(distPath, {
+  index: false,
+  setHeaders: (res, filePath) => {
+    if (/[\\/]assets[\\/]/.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    } else if (/\.(png|svg|jpg|jpeg|webp|ico|woff2?)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+    } else {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
+  },
+}));
 app.get('*', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
   res.sendFile(path.join(distPath, 'index.html'));
 });
 

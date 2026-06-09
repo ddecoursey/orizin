@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState } from 'react';
 
 export function useChat(filteredStocks, filters, weights, onApplyUpdates, activeStock = null, session = {}) {
   const [isOpen, setIsOpen]         = useState(false);
@@ -7,7 +7,6 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
   const [isStreaming, setIsStreaming]= useState(false);
   const [error, setError]           = useState(null);
   const [focusSymbols, setFocusSymbols] = useState([]);
-  const abortRef = useRef(null);
 
   // Compact a stock row to the fields Ori needs (shared by the top-50 list,
   // the pinned list, and the active stock).
@@ -26,6 +25,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       debt_equity: s.debt_equity, div_yield: s.div_yield,
       payout: s.payout, beta: s.beta, score: s.score,
       qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
+      dataCoverage: s.dataCoverage,
       effectiveWeights: s.effectiveWeights,
     };
   }
@@ -56,6 +56,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
         net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
         debt_equity: s.debt_equity, div_yield: s.div_yield, beta: s.beta,
         score: s.score, qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
+        dataCoverage: s.dataCoverage,
         latestRsi: s.latestRsi,
         profile: s.profile
           ? {
@@ -124,11 +125,11 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       availableIndustries: allIndustries,
       focusSymbols,
       scorecardDefinition: {
-        description: "The Orizen Score is a weighted average of three pillars. All inputs are ranked 0-1 relative to the current filtered set.",
-        Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better), Net Debt/EBITDA & Debt/Equity (lower better)",
+        description: "The Orizen Score is a weighted average of three pillars. All inputs are tie-aware 0-1 percentile ranks within the current filtered set.",
+        Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
         V: "Value — average rank of: EV/GP, EV/EBITDA, P/E (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
         G: "Growth — average rank of: Revenue growth (TTM), EPS growth (TTM), FCF growth (TTM)",
-        note: "If a stock is missing data for a pillar, its weight is redistributed to the remaining pillars (see 'effectiveWeights' on cards)."
+        note: "Junk guards: negative P/E and negative D/E rank WORST (not best); ROE on negative equity is voided. Missing inputs are imputed at rank 0.45 instead of ignored, and stocks with <3 of 16 real inputs are unscored — so sparse data can't inflate a score. dataCoverage = fraction of the 16 inputs with real data; treat low-coverage scores skeptically."
       }
     };
   }
@@ -203,6 +204,25 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
                 setSessionId(evt.sessionId);
                 setIsStreaming(false);
 
+                // The server strips [[remember: …]] tokens before persisting;
+                // mirror that for the live bubble and surface what was saved.
+                const rememberRe = /\[\[\s*remember\s*:\s*[^\]]+?\s*\]\]/gi;
+                if (rememberRe.test(accumulated) || (evt.remembered && evt.remembered.length)) {
+                  accumulated = accumulated.replace(rememberRe, '').trimEnd();
+                  setMessages(prev => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last?.role === 'assistant') {
+                      next[next.length - 1] = {
+                        ...last,
+                        content: (last.content || '').replace(rememberRe, '').trimEnd(),
+                        remembered: evt.remembered && evt.remembered.length ? evt.remembered : undefined,
+                      };
+                    }
+                    return next;
+                  });
+                }
+
                 // Do NOT auto-apply. We show a confirmation UI instead.
                 const extracted = extractUpdatesFromResponse(accumulated);
                 if (accumulated && extracted) {
@@ -241,7 +261,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
                 // stock via an inline token, e.g. [[deep-research:AAPL]]. We strip
                 // the token from the visible text and attach the symbol so the
                 // ChatPanel can render an "Open Deep Research" confirm button.
-                const drMatch = accumulated.match(/\[\[deep-research:\s*([A-Za-z0-9.\-]+)\s*\]\]/i);
+                const drMatch = accumulated.match(/\[\[deep-research:\s*([A-Za-z0-9.-]+)\s*\]\]/i);
                 if (drMatch) {
                   const drSym = drMatch[1].toUpperCase();
                   setMessages(prev => {
@@ -368,7 +388,38 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
   async function deleteSession(id) {
     try {
       await fetch(`/api/chat/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    } catch {}
+    } catch { /* best-effort */ }
+  }
+
+  // ── Ori's persistent memory (durable user facts, stored server-side) ──────
+
+  async function listMemory() {
+    try {
+      const res = await fetch('/api/chat/memory');
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.memory || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function deleteMemory(index) {
+    try {
+      const res = await fetch(`/api/chat/memory/${index}`, { method: 'DELETE' });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.memory || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async function clearMemory() {
+    try {
+      await fetch('/api/chat/memory', { method: 'DELETE' });
+    } catch { /* best-effort */ }
+    return [];
   }
 
   function dismissRecommendation(messageIndex) {
@@ -397,21 +448,12 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     applyRecommendation, dismissRecommendation,
     enterDeepResearch: (sym) => session.onEnterDeepResearch?.(sym),
     listSessions, loadSession, deleteSession,
+    listMemory, deleteMemory, clearMemory,
     stockCount: filteredStocks?.length || 0,
     // Surfaced so the chat UI can tailor itself to the current page.
     view: session.view || 'screener',
     activeSymbol: activeStock?.symbol || null,
   };
-}
-
-function summarizeApplied(f) {
-  const parts = [];
-  if (f.industries?.length) parts.push(`industries=${f.industries.join('/')}`);
-  if (f.sectors?.length) parts.push(`sectors=${f.sectors.join('/')}`);
-  for (const k of ['mcapMin','mcapMax','roicMin','grossMin','opMin','netMin','peMax','pbMax','psMax','evEbMax','fcfMin','ndMax','crMin','deMax','divMin','betaMin','betaMax']) {
-    if (f[k] != null && f[k] !== '') parts.push(`${k}=${f[k]}`);
-  }
-  return parts.join(', ') || 'updated';
 }
 
 const VALID_FILTER_KEYS = [

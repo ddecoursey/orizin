@@ -20,3 +20,9 @@ export function logError(message, details = {}) {
 export function getErrors(limit = 100) {
   return errorLog.slice(0, limit);
 }
+
+export function clearErrors() {
+  const count = errorLog.length;
+  errorLog.length = 0;
+  return count;
+}

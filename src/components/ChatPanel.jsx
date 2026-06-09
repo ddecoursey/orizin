@@ -64,7 +64,7 @@ function Markdown({ text }) {
       '<div class="overflow-x-auto my-2"><table class="w-full border-collapse border border-gray-800 text-xs">$1</table></div>',
     )
     // bullet lists
-    .replace(/^[\-\*] (.+)$/gm, '<li class="ml-4 text-xs">$1</li>')
+    .replace(/^[-*] (.+)$/gm, '<li class="ml-4 text-xs">$1</li>')
     .replace(/((<li[^>]*>.*<\/li>\n?)+)/g, '<ul class="list-disc my-1">$1</ul>')
     // numbered lists
     .replace(/^\d+\. (.+)$/gm, '<li class="ml-4 text-xs">$1</li>')
@@ -122,6 +122,8 @@ export default function ChatPanel({ chat }) {
   const [input, setInput] = useState("");
   const [showRecall, setShowRecall] = useState(false);
   const [sessions, setSessions] = useState([]);
+  const [showMemory, setShowMemory] = useState(false);
+  const [memory, setMemory] = useState([]);
   // Shell-style history: index into prior user messages, null = current draft.
   const [histIdx, setHistIdx] = useState(null);
   const messagesEndRef = useRef(null);
@@ -186,8 +188,27 @@ export default function ChatPanel({ chat }) {
 
   async function toggleRecall() {
     if (showRecall) { setShowRecall(false); return; }
+    setShowMemory(false);
     await refreshSessions();
     setShowRecall(true);
+  }
+
+  async function toggleMemory() {
+    if (showMemory) { setShowMemory(false); return; }
+    setShowRecall(false);
+    const facts = chat.listMemory ? await chat.listMemory() : [];
+    setMemory(facts);
+    setShowMemory(true);
+  }
+
+  async function handleForgetFact(index) {
+    const next = await chat.deleteMemory?.(index);
+    setMemory(next || []);
+  }
+
+  async function handleForgetAll() {
+    await chat.clearMemory?.();
+    setMemory([]);
   }
 
   function handleLoadSession(id) {
@@ -224,6 +245,13 @@ export default function ChatPanel({ chat }) {
         </span>
         <div className="ml-auto flex gap-1">
           <button
+            onClick={toggleMemory}
+            className={`text-[10px] px-1.5 py-1 rounded hover:bg-gray-800 ${showMemory ? "text-gray-200 bg-gray-800" : "text-gray-500 hover:text-gray-300"}`}
+            title="What Ori remembers about you"
+          >
+            Memory
+          </button>
+          <button
             onClick={toggleRecall}
             className={`text-[10px] px-1.5 py-1 rounded hover:bg-gray-800 ${showRecall ? "text-gray-200 bg-gray-800" : "text-gray-500 hover:text-gray-300"}`}
             title="Recall a past conversation"
@@ -245,6 +273,47 @@ export default function ChatPanel({ chat }) {
             ×
           </button>
         </div>
+
+        {/* Memory dropdown — durable facts Ori has learned about this user */}
+        {showMemory && (
+          <div className="absolute right-2 top-full mt-1 w-72 max-w-[calc(100%-1rem)] max-h-64 lg:max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50">
+            <div className="px-3 py-2 flex items-center justify-between text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-800 sticky top-0 bg-gray-900">
+              <span>Ori remembers</span>
+              {memory.length > 0 && (
+                <button
+                  onClick={handleForgetAll}
+                  className="text-red-400/80 hover:text-red-300 normal-case tracking-normal"
+                  title="Forget everything"
+                >
+                  Forget all
+                </button>
+              )}
+            </div>
+            {memory.length === 0 ? (
+              <div className="px-3 py-4 text-xs text-gray-600 text-center">
+                Nothing yet. Tell Ori about your investing style, horizon, or
+                constraints and it will remember for future conversations.
+              </div>
+            ) : (
+              memory.map((f, i) => (
+                <div
+                  key={i}
+                  className="group flex items-start gap-2 px-3 py-2 border-b border-gray-800/50"
+                >
+                  <span className="text-violet-400/80 text-[10px] mt-0.5 shrink-0">◆</span>
+                  <span className="flex-1 text-xs text-gray-300 leading-snug">{f.text || String(f)}</span>
+                  <button
+                    onClick={() => handleForgetFact(i)}
+                    className="text-gray-600 hover:text-red-400 px-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity shrink-0"
+                    title="Forget this"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
         {/* Recall dropdown — past conversations (server-persisted per user) */}
         {showRecall && (
@@ -334,6 +403,14 @@ export default function ChatPanel({ chat }) {
               ) : msg.content ? (
                 <>
                   <Markdown text={msg.content} />
+
+                  {/* Subtle note when Ori saved a durable fact to memory */}
+                  {msg.remembered && msg.remembered.length > 0 && (
+                    <div className="mt-2 text-[10px] text-violet-300/80 flex items-start gap-1">
+                      <span className="shrink-0">◆</span>
+                      <span>Remembered: {msg.remembered.join(" · ")}</span>
+                    </div>
+                  )}
 
                   {/* Confirmation UI for Ori's offer to open Deep Research */}
                   {msg.deepResearch && (

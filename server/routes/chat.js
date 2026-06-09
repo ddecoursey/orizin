@@ -4,22 +4,69 @@ import {
   getChatSession,
   listChatSessions,
   deleteChatSession,
-  getAiEnrichmentBatch,
+  getUserSettings,
+  patchUserSettings,
 } from "../db.js";
 import { fmt } from "./prompt-helpers.js";
+import { marketStatusLine } from "../marketHours.js";
 
 const router = Router();
+
+// ── Ori's persistent per-user memory ───────────────────────────────────────
+// Durable facts Ori has learned about the user (risk tolerance, horizon,
+// sectors they avoid, tax situation, etc.), stored in the user_settings blob
+// and injected into every system prompt. Ori adds to it by emitting
+// [[remember: fact]] tokens, which we parse out of each reply server-side.
+const MAX_MEMORY_FACTS = 40;
+
+function getOriMemory(userId) {
+  try {
+    const settings = getUserSettings(userId);
+    return Array.isArray(settings.oriMemory) ? settings.oriMemory : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOriMemoryFacts(userId, newFacts) {
+  if (!newFacts.length) return [];
+  const existing = getOriMemory(userId);
+  const seen = new Set(existing.map((f) => String(f.text || f).trim().toLowerCase()));
+  const added = [];
+  for (const fact of newFacts) {
+    const text = String(fact).trim().slice(0, 280);
+    if (!text || seen.has(text.toLowerCase())) continue;
+    seen.add(text.toLowerCase());
+    added.push({ text, at: Date.now() });
+  }
+  if (!added.length) return [];
+  const merged = [...existing, ...added].slice(-MAX_MEMORY_FACTS);
+  patchUserSettings(userId, { oriMemory: merged });
+  return added;
+}
+
+// Extract [[remember: ...]] tokens; returns { facts, cleaned }.
+const REMEMBER_RE = /\[\[\s*remember\s*:\s*([^\]]+?)\s*\]\]/gi;
+function extractRememberTokens(text) {
+  const facts = [];
+  const cleaned = String(text || "").replace(REMEMBER_RE, (_, fact) => {
+    facts.push(fact);
+    return "";
+  });
+  return { facts, cleaned: cleaned.replace(/[ \t]+\n/g, "\n").trimEnd() };
+}
 
 // Tool definition: Allow Ori to control the screener filters
 // Note: We are using JSON output in the response text instead of native tool calling
 // for better reliability with Gemini.
 
-function buildSystemPrompt(context) {
+function buildSystemPrompt(context, personalization = {}) {
   const {
     filters, weights, stocks, focusSymbols, availableSectors, availableIndustries,
-    activeStock, focusStocks, portfolioGoals, today, totalFiltered, activeScreener, pinnedStocks, news,
+    activeStock, focusStocks, today, totalFiltered, activeScreener, pinnedStocks, news,
     view,
   } = context || {};
+  const { username, memory } = personalization;
 
   const shown = stocks?.length || 0;
   const total = totalFiltered ?? shown;
@@ -31,8 +78,19 @@ function buildSystemPrompt(context) {
   let prompt = `You are Ori, a senior equity research analyst with deep expertise in fundamental analysis. You have access to the user's Orizen filtered stock universe.
 
 Today's date: ${today || "unknown"}.
+Market status: ${marketStatusLine()}. Factor this in when discussing prices ("as of Friday's close", "the market is open right now, intraday moves may continue", etc.).
+${username && username !== "default" ? `You are talking to **${username}**. Address them naturally by name occasionally (don't overdo it) and treat the portfolios, goals, theses and remembered facts below as theirs.` : ""}
 
 IMPORTANT: Always provide a disclaimer that this is analysis for informational purposes, not financial advice.
+${memory?.length ? `
+=== WHAT YOU REMEMBER ABOUT THIS USER (from past conversations) ===
+${memory.map((f, i) => `${i + 1}. ${f.text || f}`).join("\n")}
+Apply these consistently (risk tolerance, horizon, preferences, constraints). If the user contradicts one, follow the user and update your memory.
+` : ""}
+=== PERSISTENT MEMORY (how to remember new things) ===
+When the user states a durable preference, constraint, or fact about themselves that will matter in FUTURE conversations (e.g. "I'm a long-term investor", "I avoid tobacco stocks", "my horizon is 10+ years", "I have a high risk tolerance", "I already max out my 401k"), append a token on its own line at the very END of your reply: [[remember: <short fact>]]
+- Max 2 per reply. Only genuinely durable facts — never transient context ("user asked about NVDA today"), never things already in your memory above, never your own analysis or opinions.
+- The token is stripped before display; never mention or explain it.
 
 SCREENER CONTEXT:
 - Stocks in view: ${viewLine}
@@ -49,12 +107,12 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
   if (stocks?.length) {
     prompt += "\nSTOCK DATA:\n";
     prompt +=
-      "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score |\n";
+      "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score | Cov |\n";
     prompt +=
-      "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|\n";
+      "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|-----|\n";
     const top = stocks.slice(0, 50);
     for (const s of top) {
-      prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} |\n`;
+      prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
     }
     if (stocks.length > 50)
       prompt += `\n(Showing top 50 of ${stocks.length} by composite score)\n`;
@@ -164,14 +222,14 @@ RESPONSE GUIDELINES:
 - Keep responses focused and actionable (under 800 words unless deep analysis requested)
 - When comparing stocks, show side-by-side metrics
 
-=== ORIEN SCORE PILLAR DEFINITIONS (READ THIS CAREFULLY) ===
+=== ORIZEN SCORE PILLAR DEFINITIONS (READ THIS CAREFULLY) ===
 
 The Orizen Score is built from three pillars whose influence is controlled by the Q/V/G weights.
 
 **Q (Quality) pillar** = average rank of:
 - ROIC, ROE
 - Gross margin, Operating margin, FCF margin
-- Current ratio (higher better)
+- Current ratio (higher better, capped at 3× — hoarding liquidity earns no extra credit)
 - Net Debt/EBITDA and Debt/Equity (lower better)
 
 **V (Value) pillar** = average rank of:
@@ -185,9 +243,12 @@ The Orizen Score is built from three pillars whose influence is controlled by th
 - FCF growth (TTM)
 
 Critical mechanics Ori must understand:
-- All inputs are converted to **relative 0–1 ranks within the currently filtered set** (not absolute numbers).
-- Each pillar is the average of its components.
-- Final score = weighted average. If a stock has no data for a pillar, that weight is dropped and redistributed (this is why "Effective Weights" on cards can differ from the sliders).
+- All inputs are converted to **tie-aware 0–1 percentile ranks within the currently filtered set** (not absolute numbers).
+- **Junk-value guards** (protect against artificially inflated scores): negative P/E ranks WORST (loss-makers are not "cheap"); negative Debt/Equity (negative shareholder equity) ranks WORST and voids ROE; negative EV/EBITDA only counts as cheap when EBITDA is actually positive; ND/EBITDA is ignored when EBITDA is negative.
+- **Missing data is imputed, not ignored**: a missing input counts as rank 0.45 (slightly below the median stock). A stock with only a few good metrics can NOT ace a pillar anymore, and a stock with no growth data can NOT outscore an identical one with mediocre growth.
+- Stocks with fewer than 3 of the 16 inputs are not scored at all.
+- Final score = the user's slider weights applied to the three pillars (no weight redistribution).
+- Each stock carries a **Cov (data coverage)** value = fraction of the 16 inputs with real data. Treat low-coverage scores (< ~60%) with explicit skepticism and SAY SO when recommending such stocks — their score leans on neutral imputation, not evidence.
 
 Current slider values are provided in the context as Q / V / G.
 `;
@@ -327,7 +388,7 @@ The user has this stock open in the company-overview panel right now. Unless the
 - Quality: ROIC ${fmt(s.roic, "pct")}, ROE ${fmt(s.roe, "pct")}, ROA ${fmt(s.roa, "pct")}, Gross ${fmt(s.gross_margin, "pct")}, Op ${fmt(s.op_margin, "pct")}, Net ${fmt(s.net_margin, "pct")}, ND/EBITDA ${fmt(s.net_debt_ebitda, "r")}, D/E ${fmt(s.debt_equity, "r")}, Current ratio ${fmt(s.current_ratio, "r")}
 - Growth (TTM): Revenue ${fmt(s.revenue_growth, "pct")}, EPS ${fmt(s.eps_growth, "pct")}, FCF ${fmt(s.fcf_growth, "pct")}
 - Dividend yield: ${fmt(s.div_yield, "pct")}
-- Orizen Score: ${s.score != null ? Math.round(s.score * 100) : "—"} (Q ${s.qScore != null ? Math.round(s.qScore * 100) : "—"}, V ${s.vScore != null ? Math.round(s.vScore * 100) : "—"}, G ${s.gScore != null ? Math.round(s.gScore * 100) : "—"})
+- Orizen Score: ${s.score != null ? Math.round(s.score * 100) : "—"} (Q ${s.qScore != null ? Math.round(s.qScore * 100) : "—"}, V ${s.vScore != null ? Math.round(s.vScore * 100) : "—"}, G ${s.gScore != null ? Math.round(s.gScore * 100) : "—"})${s.dataCoverage != null ? ` · data coverage ${Math.round(s.dataCoverage * 100)}%${s.dataCoverage < 0.6 ? " (LOW — score leans on imputation, be skeptical)" : ""}` : ""}
 - RSI(10): ${rsiNote}${s.rsiTrend ? ` — ${s.rsiTrend.direction} (${s.rsiTrend.change5d >= 0 ? "+" : ""}${s.rsiTrend.change5d.toFixed(1)} over ~5 sessions)` : ""}`;
 
   if (s.performance) {
@@ -387,20 +448,65 @@ The user has this stock open in the company-overview panel right now. Unless the
   return out;
 }
 
+// Render one filter value for the prompt. Filters can be legacy flat numbers
+// ("15"), operator objects ({ op: "<=", value: 25 }), or ranges ({ op:
+// "between", min, max }) — and a cleared input leaves { op, value: "" }
+// behind, which must read as "off", not "[object Object]".
+function condText(v, defaultOp) {
+  if (v == null || v === "") return null;
+  const num = (x) => {
+    if (x == null || x === "") return null;
+    const n = Number(x);
+    return Number.isFinite(n) ? n : null;
+  };
+  if (typeof v === "object") {
+    const op = v.op || defaultOp;
+    if (op === "between" || op === "range") {
+      const lo = num(v.min);
+      const hi = num(v.max);
+      if (lo == null && hi == null) return null;
+      if (lo != null && hi != null) return `${lo}–${hi}`;
+      return lo != null ? `>= ${lo}` : `<= ${hi}`;
+    }
+    const val = num(v.value);
+    return val == null ? null : `${op} ${val}`;
+  }
+  const n = num(v);
+  return n == null ? null : `${defaultOp} ${n}`;
+}
+
 function summarizeFilters(f) {
   if (!f) return "none";
   const parts = [];
   if (f.sectors?.length) parts.push(`sectors: ${f.sectors.join(", ")}`);
-  if (f.industries?.length)
-    parts.push(`industries: ${f.industries.join(", ")}`);
-  if (f.mcapMin) parts.push(`mcap >= $${f.mcapMin}B`);
-  if (f.mcapMax) parts.push(`mcap <= $${f.mcapMax}B`);
-  if (f.roicMin) parts.push(`ROIC >= ${f.roicMin}%`);
-  if (f.peMax) parts.push(`PE <= ${f.peMax}`);
-  if (f.evEbMax) parts.push(`EV/EBITDA <= ${f.evEbMax}`);
-  if (f.fcfMin) parts.push(`FCF yield >= ${f.fcfMin}%`);
-  if (f.grossMin) parts.push(`gross margin >= ${f.grossMin}%`);
-  return parts.length ? parts.join(", ") : "default (mcap >= $2B)";
+  if (f.industries?.length) parts.push(`industries: ${f.industries.join(", ")}`);
+  if (f.pinnedOnly) parts.push("pinned only");
+  if (f.rule40Only) parts.push("Rule-of-40 only");
+  if (f.includeEtfs === false) parts.push("ETFs excluded");
+
+  const numeric = [
+    ["mcap", "mcap ($B)", ">="], ["mcapMin", "mcap ($B)", ">="], ["mcapMax", "mcap ($B)", "<="],
+    ["price", "price ($)", ">="], ["priceMin", "price ($)", ">="], ["priceMax", "price ($)", "<="],
+    ["beta", "beta", ">="], ["betaMin", "beta", ">="], ["betaMax", "beta", "<="],
+    ["volMin", "volume (M)", ">="],
+    ["grossMin", "gross margin %", ">="], ["opMin", "op margin %", ">="],
+    ["netMin", "net margin %", ">="], ["ebitdaMin", "EBITDA margin %", ">="],
+    ["fcfMargMin", "FCF margin %", ">="],
+    ["roicMin", "ROIC %", ">="], ["roeMin", "ROE %", ">="], ["roaMin", "ROA %", ">="],
+    ["revGrowthMin", "rev growth %", ">="], ["epsGrowthMin", "EPS growth %", ">="],
+    ["fcfGrowthMin", "FCF growth %", ">="], ["opIncGrowthMin", "op income growth %", ">="],
+    ["r40Min", "Rule of 40", ">="],
+    ["peMax", "P/E", "<="], ["pbMax", "P/B", "<="], ["psMax", "P/S", "<="],
+    ["evEbMax", "EV/EBITDA", "<="], ["evSMax", "EV/Sales", "<="], ["evGpMax", "EV/GP", "<="],
+    ["fcfMin", "FCF yield %", ">="], ["earningsYieldMin", "earnings yield %", ">="],
+    ["ndMax", "ND/EBITDA", "<="], ["crMin", "current ratio", ">="], ["deMax", "D/E", "<="],
+    ["divMin", "div yield %", ">="], ["payMax", "payout %", "<="],
+  ];
+  for (const [key, label, defaultOp] of numeric) {
+    const t = condText(f[key], defaultOp);
+    if (t) parts.push(`${label} ${t}`);
+  }
+  return parts.length ? parts.join(", ") : "none (full universe)";
 }
 
 // ── Gemini call with retry/backoff ─────────────────────────────────────────
@@ -481,6 +587,13 @@ async function fetchGeminiWithRetry({ apiKey, body, send }) {
 
 // ── POST /api/chat ─────────────────────────────────────────────────────────
 router.post("/chat", async (req, res) => {
+  // Validate input before opening the SSE stream — bad requests get a plain
+  // HTTP error the client can handle uniformly.
+  const rawMessage = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+  if (!rawMessage) {
+    return res.status(400).json({ error: "Message is required" });
+  }
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === "your_gemini_api_key_here") {
     return res.status(503).json({
@@ -498,12 +611,21 @@ router.post("/chat", async (req, res) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
 
   try {
-    const { sessionId, message, context } = req.body;
-    const systemPrompt = buildSystemPrompt(context);
+    const { sessionId, context } = req.body || {};
+    // Hard cap so a runaway client can't ship a megabyte into the prompt.
+    const userMessage = rawMessage.slice(0, 8000);
 
+    const systemPrompt = buildSystemPrompt(context, {
+      username: req.userId,
+      memory: getOriMemory(req.userId),
+    });
+
+    // Look the session up scoped to this user. If the id doesn't resolve (stale
+    // client state, or an id belonging to a different user), mint a fresh id —
+    // the upsert would otherwise silently overwrite the other user's session.
     let session = sessionId ? getChatSession(sessionId, req.userId) : null;
     const messages = session ? JSON.parse(session.messages) : [];
-    messages.push({ role: "user", content: message });
+    messages.push({ role: "user", content: userMessage });
 
     // Convert stored messages to Gemini format (role: 'model' instead of 'assistant')
     const geminiContents = messages.map((m) => ({
@@ -571,19 +693,40 @@ router.post("/chat", async (req, res) => {
       }
     }
 
-    messages.push({ role: "assistant", content: fullResponse });
-    const sid = sessionId || `${req.userId}_chat_${Date.now()}`;
+    // Persist any [[remember: ...]] facts Ori emitted, and store the cleaned
+    // text so recalled sessions don't re-show (or re-save) the tokens.
+    const { facts, cleaned } = extractRememberTokens(fullResponse);
+    let remembered = [];
+    if (facts.length) {
+      try {
+        remembered = saveOriMemoryFacts(req.userId, facts);
+      } catch (e) {
+        console.warn("[chat] failed to save Ori memory:", e.message);
+      }
+    }
+
+    // Only record an assistant turn if the stream actually produced text —
+    // saving empty turns corrupts the conversation context for future calls.
+    if (cleaned) {
+      messages.push({ role: "assistant", content: cleaned });
+    }
+    // Use the validated session's id (not the raw client value) so one user
+    // can never write under another user's session id.
+    const sid = session?.id || `${req.userId}_chat_${Date.now()}`;
     saveChatSession({
       id: sid,
       user_id: req.userId,
       // Keep the title from the first message; don't overwrite it on every turn
       // (a long conversation shouldn't get renamed to whatever was typed last).
-      title: session?.title || message.slice(0, 60),
+      title: session?.title || userMessage.slice(0, 60),
       messages: JSON.stringify(messages),
       created_at: session?.created_at || Date.now(),
       updated_at: Date.now(),
     });
-    send("done", { sessionId: sid });
+    send("done", {
+      sessionId: sid,
+      remembered: remembered.map((f) => f.text),
+    });
   } catch (e) {
     send("error", { message: e.message });
   }
@@ -606,6 +749,28 @@ router.get("/chat/sessions/:id", (req, res) => {
 router.delete("/chat/sessions/:id", (req, res) => {
   deleteChatSession(req.params.id, req.userId);
   res.json({ ok: true });
+});
+
+// ── Ori memory management (view / forget) ─────────────────────────────────
+router.get("/chat/memory", (req, res) => {
+  res.json({ memory: getOriMemory(req.userId) });
+});
+
+// Delete one fact by index, or all facts when no index is given.
+router.delete("/chat/memory/:index", (req, res) => {
+  const idx = parseInt(req.params.index, 10);
+  const memory = getOriMemory(req.userId);
+  if (!Number.isInteger(idx) || idx < 0 || idx >= memory.length) {
+    return res.status(404).json({ error: "No such memory" });
+  }
+  const next = memory.filter((_, i) => i !== idx);
+  patchUserSettings(req.userId, { oriMemory: next });
+  res.json({ ok: true, memory: next });
+});
+
+router.delete("/chat/memory", (req, res) => {
+  patchUserSettings(req.userId, { oriMemory: [] });
+  res.json({ ok: true, memory: [] });
 });
 
 export default router;
