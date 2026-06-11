@@ -40,7 +40,7 @@ function LinkModal({ institutions, onLink, onClose, linking }) {
       >
         <div className="flex items-center justify-between mb-1">
           <h3 className="text-sm font-semibold text-gray-100">Link an account</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-100">✕</button>
         </div>
         <p className="text-[11px] text-gray-500 mb-4">
           This is a sandbox — selecting an institution instantly creates a simulated
@@ -116,7 +116,7 @@ function TradeModal({ account, onClose, onPlaced }) {
           <h3 className="text-sm font-semibold text-gray-100">
             Trade · {account.institution} ••••{account.mask}
           </h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-100">✕</button>
         </div>
         <p className="text-[11px] text-gray-500 mb-4">
           Simulated execution: market orders fill at the latest screener price,

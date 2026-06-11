@@ -42,7 +42,7 @@ function Markdown({ text }) {
     )
     .replace(
       /^# (.+)$/gm,
-      '<h1 class="text-base font-bold text-white mt-3 mb-1">$1</h1>',
+      '<h1 class="text-base font-bold text-gray-100 mt-3 mb-1">$1</h1>',
     )
     // bold
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-gray-100">$1</strong>')

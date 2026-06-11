@@ -139,7 +139,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
       >
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-lg font-semibold">{showUsers ? "User Management" : "Account Settings"}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-white">✕</button>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-100">✕</button>
         </div>
 
         {error && (

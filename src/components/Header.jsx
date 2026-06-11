@@ -75,7 +75,7 @@ function NavButton({ active, onClick, children }) {
       className={`px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
         focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
         ${active
-          ? "text-white bg-gray-800 font-semibold"
+          ? "text-gray-100 bg-gray-800 font-semibold"
           : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/60"}`}
     >
       {children}
@@ -156,7 +156,7 @@ export default function Header({
         <OrizinLogo className="w-5 h-5" />
         <div className="flex items-baseline gap-2">
           <span
-            className="text-white text-[18px] leading-none tracking-tight"
+            className="text-gray-100 text-[18px] leading-none tracking-tight"
             style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif', fontWeight: 600 }}
           >
             Orizin
@@ -270,7 +270,7 @@ export default function Header({
                 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400`}
               title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser} (${tierLabel})` : "Account"}
             >
-              <span className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center text-[11px] font-bold text-white">
+              <span className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center text-[11px] font-bold text-gray-100">
                 {initial}
               </span>
               {/* Always-visible tier dot (emerald = admin, violet = pro, gray = free) */}

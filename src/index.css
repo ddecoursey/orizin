@@ -1,85 +1,94 @@
 @import "tailwindcss";
 
-/* Temporarily disable ALL transitions and animations while this class is on <html>.
-   Used only for the exact frame of a dark/light class flip so the color changes
-   snap instantly with zero jank or lag (no simultaneous color transitions across
-   hundreds of elements). The class is added/removed in a useLayoutEffect + double
-   rAF, so it never sticks around to break normal hovers. */
+/* Temporarily disable color transitions for the exact frame of a dark/light
+   flip so hundreds of elements snap instantly with zero jank. Added/removed in
+   a useLayoutEffect + double rAF (App.jsx), so it never sticks around to affect
+   normal hovers. Scoped to color props only — transform/opacity still animate. */
 .theme-no-transition * {
-  /* Only suppress color-related transitions during the theme flip to avoid jank on bg/text/border changes.
-     Other properties (transform, opacity, etc.) can still transition for buttons, modals, etc.
-     This is scoped to * only while the class is on <html> (temporarily during useLayoutEffect). */
   transition-property: color, background-color, border-color, text-decoration-color, fill, stroke !important;
   transition-duration: 0s !important;
   transition-timing-function: linear !important;
 }
 
+/* ── Light theme ────────────────────────────────────────────────────────────
+   We do NOT override utilities per-element (that's fragile — it misses variants
+   like hover:/group-hover:/opacity and any shade you forget, which is exactly
+   why surfaces kept rendering dark). Instead we remap the GRAY color *scale*
+   under .light. Tailwind v4 utilities resolve var(--color-gray-N) — including
+   the color-mix() used by /opacity variants — so every bg-/text-/border-/ring-/
+   from- utility AND every variant picks up the light value automatically.
 
+   The ramp is inverted to warm stone: gray-950 (page) → near-white, gray-100/200
+   (text) → near-black. The app's whole design language is "dark surface =
+   gray-950/900/800, light text = gray-100/200", so inverting the scale flips the
+   entire UI coherently — including inverted chips like `bg-gray-100 text-gray-900`
+   (which become dark-on-light → still a prominent inverted chip) — with zero
+   per-element rules. Add a new gray-using component and it themes for free. */
+.light {
+  color-scheme: light;
+  --color-gray-50:  #0c0a09;
+  --color-gray-100: #1c1917; /* primary text */
+  --color-gray-200: #292524;
+  --color-gray-300: #44403c;
+  --color-gray-400: #57534e; /* secondary text */
+  --color-gray-500: #78716c; /* muted text */
+  --color-gray-600: #a8a29e; /* faint text / placeholder */
+  --color-gray-700: #e6ddcc; /* borders */
+  --color-gray-800: #f3eee5; /* chips / inputs / row hover */
+  --color-gray-900: #ffffff; /* elevated surfaces: cards, sidebar, panels */
+  --color-gray-950: #fbf9f4; /* page background (warm off-white) */
+}
 
-/* ── Light theme overrides (applied when <html class="light"> is set) ───── */
-.light { color-scheme: light; }
-/* Two-tone light surfaces for real depth (mirrors dark mode's layered grays):
-   the page is a cool off-white, and elevated surfaces (cards, sidebar, panels,
-   header, sticky cells) are pure white so they clearly stand out. */
-.light .bg-gray-950 { background-color: #fbf9f4 !important; } /* page bg (soft warm off-white) */
-.light .bg-gray-900 { background-color: #ffffff !important; } /* cards / sidebar / panels (white) */
-.light .bg-gray-800 { background-color: #f3eee5 !important; } /* chips, input bg */
-.light .hover\:bg-gray-800:hover { background-color: #f3eee5 !important; }
-.light .hover\:bg-gray-700:hover { background-color: #ebe4d7 !important; }
-.light .bg-gray-800\/40 { background-color: rgba(235,228,215,0.5) !important; } /* row hover */
-
-/* Text — warm stone to sit naturally on the tan page */
-.light .text-white { color: #1c1917 !important; }
-.light .text-gray-100 { color: #1c1917 !important; }
-.light .text-gray-200 { color: #292524 !important; }
-.light .text-gray-300 { color: #44403c !important; }
-.light .text-gray-400 { color: #57534e !important; }
-.light .text-gray-500 { color: #78716c !important; }
-.light .text-gray-600 { color: #a8a29e !important; }
-.light .hover\:text-gray-300:hover { color: #1c1917 !important; }
-.light .hover\:text-gray-200:hover { color: #1c1917 !important; }
-/* Borders — warm neutral edge between white surfaces and the tan page */
-.light .border-gray-800 { border-color: #f0eadd !important; }
-.light .border-gray-700 { border-color: #e6ddcc !important; }
-.light .border-gray-950 { border-color: #f0eadd !important; }
-.light .placeholder-gray-600::placeholder { color: #a8a29e !important; }
-/* Blue accents — blue-400 text is too pale on white; deepen for readability
-   (fixes the "Ask Ori" button and similar accent controls). */
-.light .text-blue-400 { color: #1d4ed8 !important; }
+/* Accent colors live outside the gray ramp, so a few need explicit light values:
+   pale accent shades used as TEXT need deepening for contrast on the now-light
+   surfaces, and deep accent shades used as CHIP backgrounds need lightening.
+   This is a small, stable set — accents don't have the gray scale's per-variant
+   explosion, so enumerating them here is fine. */
+.light .text-blue-400,
 .light .text-blue-300 { color: #1d4ed8 !important; }
 .light .hover\:text-blue-300:hover { color: #1e3a8a !important; }
+.light .text-violet-200,
+.light .text-violet-300,
+.light .text-violet-400 { color: #6d28d9 !important; }
+.light .text-sky-400 { color: #0284c7 !important; }
+.light .text-emerald-300,
+.light .text-emerald-400 { color: #15803d !important; }
+.light .text-emerald-400\/80 { color: rgba(21,128,61,0.85) !important; }
+.light .text-red-300,
+.light .text-red-400 { color: #b91c1c !important; }
+.light .text-red-400\/80 { color: rgba(185,28,28,0.85) !important; }
+.light .text-amber-400 { color: #b45309 !important; }
+.light .hover\:text-amber-400:hover { color: #b45309 !important; }
+.light .text-amber-300 { color: #92400e !important; }
+
+/* Deep accent chips → soft tints (tier badges, pinned rows). */
+.light .bg-violet-900 { background-color: #ede9fe !important; }
+.light .bg-emerald-900 { background-color: #d1fae5 !important; }
+.light .bg-amber-950 { background-color: #fef3c7 !important; }
+.light .bg-amber-900\/10 { background-color: rgba(254,243,199,0.5) !important; }
+
+/* Blue accent surfaces (Ask-Ori chips, selection tints). */
 .light .bg-blue-600\/20 { background-color: rgba(37,99,235,0.12) !important; }
 .light .hover\:bg-blue-600\/40:hover { background-color: rgba(37,99,235,0.22) !important; }
 .light .bg-blue-900\/30 { background-color: rgba(37,99,235,0.12) !important; }
 .light .border-blue-800\/50 { border-color: rgba(29,78,216,0.4) !important; }
 .light .border-blue-800 { border-color: rgba(29,78,216,0.45) !important; }
-/* Inverted buttons (dark chip on light background) */
-.light .bg-gray-100 { background-color: #292524 !important; color: #faf7f0 !important; }
-.light .text-gray-900 { color: #faf7f0 !important; }
 
-/* Heatmap cells — dark-mode uses deep emerald-900/red-900 with alpha,
-   which looks awful on white. Soften to pale tints with dark text. */
+/* Heatmap cells — deep emerald/red with alpha read harsh on white; pale tints. */
 .light .bg-emerald-900\/40 { background-color: rgba(34,197,94,0.18) !important; }
 .light .bg-emerald-900\/20 { background-color: rgba(34,197,94,0.10) !important; }
-.light .bg-red-900\/40     { background-color: rgba(239,68,68,0.18) !important; }
-.light .bg-red-900\/20     { background-color: rgba(239,68,68,0.10) !important; }
-.light .text-emerald-300   { color: #15803d !important; }
-.light .text-emerald-400   { color: #15803d !important; }
-.light .text-emerald-400\/80 { color: rgba(21,128,61,0.85) !important; }
-.light .text-red-300       { color: #b91c1c !important; }
-.light .text-red-400       { color: #b91c1c !important; }
-.light .text-red-400\/80   { color: rgba(185,28,28,0.85) !important; }
+.light .bg-red-900\/40 { background-color: rgba(239,68,68,0.18) !important; }
+.light .bg-red-900\/20 { background-color: rgba(239,68,68,0.10) !important; }
+
+/* Research action buttons use a translucent blue→violet gradient; deepen the
+   label so it stays readable on the lightened gradient. */
+.light button[class*="from-blue-600/"] { color: #1e40af !important; }
 
 /* Subtle bouncing animation for the floating Ori button */
 @keyframes ori-bounce {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-12px);
-  }
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
 }
-
 .animate-ori-bounce {
   animation: ori-bounce 2.2s ease-in-out infinite;
 }
@@ -98,32 +107,6 @@
   animation-play-state: paused;
 }
 
-
-
-/* Pinned row sticky cells (amber in dark mode → soft warm yellow in light) */
-.light .bg-amber-950 { background-color: #fef3c7 !important; }
-.light .bg-amber-900\/10 { background-color: rgba(254,243,199,0.5) !important; }
-.light .text-amber-400 { color: #b45309 !important; }
-.light .hover\:text-amber-400:hover { color: #b45309 !important; }
-
-/* Scrolling news / trending ticker in footer (light mode needs readable grays on the warm page bg) */
-.light .bg-gray-950\/90 { background-color: rgba(251,249,244,0.9) !important; }
-.light .border-t.border-gray-800.bg-gray-950\/90 { background-color: rgba(251,249,244,0.9) !important; }
-.light .text-amber-300 { color: #92400e !important; } /* "Trending" label */
-.light .bg-gray-900 { background-color: #f3eee5 !important; } /* the Trending badge bg when in news */
-.light .text-gray-600:hover,
-.light .text-gray-300:hover { color: #1c1917 !important; } /* hide button and symbols on hover */
-
-/* Deep Research nav/button contrast in light (the header nav and action buttons) */
-.light .text-violet-200 { color: #5b21b6 !important; } /* better contrast for "Deep Research" label/button */
-.light button[class*="from-blue-600/"] { color: #1e40af !important; } /* general for research action buttons */
-
-/* Operator select box in filter sidebar (the small comparison dropdown) */
-.light .bg-gray-800\/80 { background-color: #f3eee5 !important; }
-.light .border-gray-700\/80 { border-color: #e6ddcc !important; }
-.light .text-gray-400 { color: #57534e !important; } /* already base but for the select */
-.light select { color: #44403c !important; } /* ensure operator text is dark in light */
-
 /* Mobile/tablet (< lg): lock the main app shell so it never scrolls.
    Only the data view (table or scorecard grid) is allowed to scroll internally.
    This prevents the whole page (header + tabs + controls + footer) from moving. */
@@ -137,19 +120,3 @@
     overflow: hidden;
   }
 }
-
-/* Additional light mode surface fixes for specific headers (deep research sub-header, portfolio section headers, etc.) */
-.light .bg-gray-950\/95 { background-color: rgba(251,249,244,0.95) !important; }
-.light .bg-gray-900\/50 { background-color: rgba(243,238,229,0.5) !important; }
-
-/* Deep Research sticky sub-header (the one right under the main top nav when a stock is selected) */
-.light .sticky.top-0.z-10.bg-gray-950\/95 { background-color: rgba(251,249,244,0.95) !important; }
-.light .sticky .text-gray-100 { color: #1c1917 !important; }
-.light .sticky .text-gray-400 { color: #57534e !important; }
-.light .sticky button.bg-gray-800 { background-color: #f3eee5 !important; color: #44403c !important; }
-.light .sticky button.bg-gray-800:hover { background-color: #ebe4d7 !important; }
-
-/* Portfolio page headers and section bars */
-.light .border-b.border-gray-800.bg-gray-950\/95 { background-color: rgba(251,249,244,0.95) !important; }
-.light .px-6.pt-4.pb-3.bg-gray-950 { background-color: #fbf9f4 !important; }
-.light .text-gray-300 { color: #44403c !important; } /* catch remaining header labels */

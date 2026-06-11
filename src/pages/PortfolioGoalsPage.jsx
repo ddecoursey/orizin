@@ -53,8 +53,8 @@ function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
         placeholder="VOO" className="font-mono uppercase bg-transparent border border-gray-700 focus:border-blue-500 rounded px-2 py-1 w-24 text-sm text-gray-100"
       />
       {open && filtered.length > 0 && createPortal(
-        <div id="ticker-dropdown-portal" style={dropdownStyle} className={theme === 'dark' ? "bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-h-52 overflow-auto text-sm py-1 text-gray-100" : "bg-white border border-gray-300 rounded-lg shadow-xl max-h-52 overflow-auto text-sm py-1 text-gray-900"}>
-          {filtered.map((sym) => (<div key={sym} onMouseDown={(e) => { e.preventDefault(); selectSymbol(sym); }} className={theme === 'dark' ? "px-3 py-1.5 cursor-pointer hover:bg-gray-800 font-mono" : "px-3 py-1.5 cursor-pointer hover:bg-gray-100 font-mono"}>{sym}</div>))}
+        <div id="ticker-dropdown-portal" style={dropdownStyle} className={theme === 'dark' ? "bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-h-52 overflow-auto text-sm py-1 text-gray-100" : "bg-white border border-stone-300 rounded-lg shadow-xl max-h-52 overflow-auto text-sm py-1 text-stone-800"}>
+          {filtered.map((sym) => (<div key={sym} onMouseDown={(e) => { e.preventDefault(); selectSymbol(sym); }} className={theme === 'dark' ? "px-3 py-1.5 cursor-pointer hover:bg-gray-800 font-mono" : "px-3 py-1.5 cursor-pointer hover:bg-stone-100 font-mono"}>{sym}</div>))}
         </div>, document.body
       )}
     </div>
@@ -128,7 +128,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
             {portfolios.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {portfolios.map((p) => (
-                  <button key={p.id} onClick={() => { setSelectedId(p.id); setEditorOpen(true); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all flex items-center gap-2 ${selectedId === p.id ? 'bg-gray-800 border-gray-600 text-white' : 'bg-gray-900 border-gray-800 hover:bg-gray-800 text-gray-300'}`}>{p.name}<span className="text-[10px] text-gray-500 tabular-nums">{formatMoney(p.totalInvested)}</span></button>
+                  <button key={p.id} onClick={() => { setSelectedId(p.id); setEditorOpen(true); }} className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-all flex items-center gap-2 ${selectedId === p.id ? 'bg-gray-800 border-gray-600 text-gray-100' : 'bg-gray-900 border-gray-800 hover:bg-gray-800 text-gray-300'}`}>{p.name}<span className="text-[10px] text-gray-500 tabular-nums">{formatMoney(p.totalInvested)}</span></button>
                 ))}
               </div>
             )}
