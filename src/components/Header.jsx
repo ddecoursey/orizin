@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import OrizenLogo from "./OrizenLogo.jsx";
+import OrizinLogo from "./OrizinLogo.jsx";
 
 // Dropdown that opens on hover (fluid) and also on click (so touch works).
 // Closing is handled by mouse-leave (with a small delay so crossing the gap to
@@ -136,15 +136,15 @@ export default function Header({
 
   return (
     <header className="bg-gray-950 border-b border-gray-800 px-3 sm:px-4 py-2 flex items-center gap-3 shrink-0 text-sm">
-      {/* Orizen logo + wordmark + tagline */}
+      {/* Orizin logo + wordmark + tagline */}
       <div className="flex items-center gap-2.5 shrink-0">
-        <OrizenLogo className="w-5 h-5" />
+        <OrizinLogo className="w-5 h-5" />
         <div className="flex items-baseline gap-2">
           <span
             className="text-white text-[18px] leading-none tracking-tight"
             style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif', fontWeight: 600 }}
           >
-            Orizen
+            Orizin
           </span>
           <span className="text-[10.5px] text-gray-500 hidden md:inline tracking-wide">
             stock recommendation engine

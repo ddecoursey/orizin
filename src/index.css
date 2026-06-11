@@ -77,12 +77,12 @@
 
 /* Right-to-left news ticker. The inner track holds two identical copies of the
    headline list, so translating it -50% loops seamlessly. */
-@keyframes orizen-marquee {
+@keyframes orizin-marquee {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }
 }
 .animate-marquee {
-  animation: orizen-marquee 240s linear infinite;
+  animation: orizin-marquee 240s linear infinite;
   will-change: transform;
 }
 .animate-marquee:hover {

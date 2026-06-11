@@ -206,7 +206,7 @@ export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }
       </div>
       {sorted.length > CARD_CAP && (
         <div className="text-center text-xs text-gray-500 py-4">
-          Showing the top {CARD_CAP} of {sorted.length} by Orizen Score — narrow your filters to surface more specific names.
+          Showing the top {CARD_CAP} of {sorted.length} by Orizin Score — narrow your filters to surface more specific names.
         </div>
       )}
     </div>

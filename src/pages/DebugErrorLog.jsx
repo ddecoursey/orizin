@@ -35,7 +35,7 @@ export default function DebugErrorLog() {
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    document.title = 'Debug • Orizen';
+    document.title = 'Debug • Orizin';
   }, []);
 
   // Gate the page on admin access — non-admins (and signed-out users) get nothing.
@@ -167,7 +167,7 @@ export default function DebugErrorLog() {
           href="/"
           className="mt-2 px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-500 transition-colors"
         >
-          Back to Orizen
+          Back to Orizin
         </a>
       </div>
     );

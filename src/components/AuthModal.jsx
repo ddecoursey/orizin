@@ -234,7 +234,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
 
             {mode === "login" && signupsEnabled && (
               <p className="text-center text-xs text-gray-500 mt-4">
-                New to Orizen?{" "}
+                New to Orizin?{" "}
                 <button onClick={() => switchMode("signup")} className="text-blue-400 hover:text-blue-300 font-medium transition-colors duration-150">
                   Create an account
                 </button>

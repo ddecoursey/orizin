@@ -1,4 +1,4 @@
-// ── Orizen Score ────────────────────────────────────────────────────────────
+// ── Orizin Score ────────────────────────────────────────────────────────────
 // Composite 0..100 score with three pillars (Quality / Value / Growth), built
 // from tie-aware percentile ranks within the currently filtered set.
 //

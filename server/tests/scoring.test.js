@@ -1,4 +1,4 @@
-// Unit tests for the Orizen scoring engine (src/lib/scoring.js).
+// Unit tests for the Orizin scoring engine (src/lib/scoring.js).
 // These encode the anti-inflation guarantees: junk values (negative P/E,
 // negative equity, negative EBITDA) can't rank as "best", and missing data
 // can't lift a stock above better-evidenced peers.

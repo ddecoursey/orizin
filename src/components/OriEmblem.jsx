@@ -1,4 +1,4 @@
-// Ori Emblem — distinct from the main Orizen product logo
+// Ori Emblem — distinct from the main Orizin product logo
 // Used for the AI analyst ("Ori") in the chat interface.
 // Keeps constellation / Orion roots but feels more focused and "guiding".
 // Different composition from the full three-star belt + horizon product mark.

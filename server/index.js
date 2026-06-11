@@ -163,7 +163,7 @@ const hasDbUsersAtStartup = db.userCount() > 0;
 // so sessions survive server restarts.
 const AUTH_SECRET = process.env.AUTH_SECRET
   || crypto.createHash('sha256')
-       .update(`orizen-session-v1:stable-dev-secret`)   // stable default for local dev
+       .update(`orizin-session-v1:stable-dev-secret`)   // stable default for local dev
        .digest('hex');
 
 // Legacy single-user mode still supported via AUTH_PASSWORD
@@ -179,7 +179,7 @@ function isAuthEnabled() {
     return legacyAuthEnabled;
   }
 }
-const COOKIE_NAME = 'orizen_auth';
+const COOKIE_NAME = 'orizin_auth';
 const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 function safeEqual(a, b) {

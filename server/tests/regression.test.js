@@ -1,4 +1,4 @@
-// Regression suite for the Orizen API surface. Spawns the real server against
+// Regression suite for the Orizin API surface. Spawns the real server against
 // a throwaway SQLite database with no FMP/Gemini keys, so every test exercises
 // the actual express stack (auth, gating, caching headers, gzip, JSON guards)
 // without spending API quota.
@@ -45,7 +45,7 @@ function cookieFrom(res) {
 }
 
 before(async () => {
-  tmpDir = mkdtempSync(path.join(tmpdir(), 'orizen-test-'));
+  tmpDir = mkdtempSync(path.join(tmpdir(), 'orizin-test-'));
   serverProc = spawn(process.execPath, [SERVER_ENTRY], {
     env: {
       ...process.env,
@@ -107,7 +107,7 @@ test('setup-first-admin creates an admin and logs them in', async () => {
   assert.equal(body.ok, true);
   assert.equal(body.isAdmin, true);
   adminCookie = cookieFrom(res);
-  assert.ok(adminCookie.startsWith('orizen_auth='));
+  assert.ok(adminCookie.startsWith('orizin_auth='));
 });
 
 test('setup-first-admin refuses once a user exists', async () => {

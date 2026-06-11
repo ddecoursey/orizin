@@ -1,6 +1,6 @@
-# Orizen
+# Orizin
 
-**Orizen** is an intelligent stock screening and analysis platform that combines fundamental financial metrics with AI-powered research assistance. Filter, analyze, and research stocks in your universe with **Ori** — an AI research analyst that provides contextual insights based on your filtered data.
+**Orizin** is an intelligent stock screening and analysis platform that combines fundamental financial metrics with AI-powered research assistance. Filter, analyze, and research stocks in your universe with **Ori** — an AI research analyst that provides contextual insights based on your filtered data.
 
 ## Features
 
@@ -79,7 +79,7 @@ npm run server       # Serves the built app at http://localhost:3001
 ## Project Structure
 
 ```
-orizen/
+orizin/
 ├── src/                           # React frontend
 │   ├── components/                # UI components (Header, Sidebar, StockTable, etc.)
 │   ├── hooks/                     # useScreener, useChat custom hooks
@@ -122,4 +122,4 @@ MIT
 
 ## Disclaimer
 
-Orizen is for informational and educational purposes only. It does not provide financial advice. Always conduct your own due diligence and consult with a financial advisor before making investment decisions.
+Orizin is for informational and educational purposes only. It does not provide financial advice. Always conduct your own due diligence and consult with a financial advisor before making investment decisions.

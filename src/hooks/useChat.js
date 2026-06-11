@@ -125,7 +125,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       availableIndustries: allIndustries,
       focusSymbols,
       scorecardDefinition: {
-        description: "The Orizen Score is a weighted average of three pillars. All inputs are tie-aware 0-1 percentile ranks within the current filtered set.",
+        description: "The Orizin Score is a weighted average of three pillars. All inputs are tie-aware 0-1 percentile ranks within the current filtered set.",
         Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
         V: "Value — average rank of: EV/GP, EV/EBITDA, P/E (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
         G: "Growth — average rank of: Revenue growth (TTM), EPS growth (TTM), FCF growth (TTM)",

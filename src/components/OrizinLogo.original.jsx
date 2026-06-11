@@ -1,8 +1,8 @@
-// ORIGINAL OrizenLogo - backed up before visual improvements (2026)
-// Clean modern Orizen space logo (constellation-inspired, Orion belt)
+// ORIGINAL OrizinLogo - backed up before visual improvements (2026)
+// Clean modern Orizin space logo (constellation-inspired, Orion belt)
 // This is the exact version before the "easier to see + horizon" tweak.
 
-export default function OrizenLogo({ className = "" }) {
+export default function OrizinLogo({ className = "" }) {
   return (
     <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       {/* Subtle nebula glow */}

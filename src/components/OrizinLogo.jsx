@@ -1,10 +1,10 @@
-// Improved Orizen logo (2026 tweak)
+// Improved Orizin logo (2026 tweak)
 // - More visually prominent / easier to read at small sizes
 // - Keeps strong Orion constellation (belt) identity
-// - Adds subtle horizon theme (nod to "Orizen" = Orion + horizon)
+// - Adds subtle horizon theme (nod to "Orizin" = Orion + horizon)
 // - Higher contrast stars + lines while staying elegant and dark-mode friendly
 
-export default function OrizenLogo({ className = "" }) {
+export default function OrizinLogo({ className = "" }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -39,7 +39,7 @@ export default function OrizenLogo({ className = "" }) {
       <line x1="6.3" y1="6.1" x2="7.5" y2="7.9" stroke="rgba(255,255,255,0.4)" strokeWidth="0.9" />
       <line x1="17.4" y1="16.6" x2="16.5" y2="14.9" stroke="rgba(255,255,255,0.4)" strokeWidth="0.9" />
 
-      {/* Subtle horizon line - nods to "Orizen" (Orion + Horizon) */}
+      {/* Subtle horizon line - nods to "Orizin" (Orion + Horizon) */}
       {/* Gentle curve suggesting stars rising over a horizon */}
       <path
         d="M4 19.5 Q8 18.8 12 19.2 Q16 18.8 20 19.5"

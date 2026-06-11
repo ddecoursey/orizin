@@ -219,7 +219,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
   }, [isAdmin]);
 
   useEffect(() => {
-    document.title = 'Orizen';
+    document.title = 'Orizin';
   }, []);
 
   useEffect(() => {
@@ -1066,7 +1066,7 @@ function WeightsPopover({ weights, setWeights }) {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 p-3 space-y-3">
             <div className="text-[10px] uppercase tracking-wider text-gray-500">
-              Orizen Score weights
+              Orizin Score weights
             </div>
             {rows.map(([k, label]) => (
               <PopoverWeightRow

@@ -10,6 +10,6 @@
   <!-- Accent stars -->
   <circle cx="7.5" cy="8" r="0.9" fill="#e0f2ff"/>
   <circle cx="24.5" cy="23.5" r="0.9" fill="#e0f2ff"/>
-  <!-- Orizen signature -->
+  <!-- Orizin signature -->
   <path d="M13.2 26.2 L18.8 29.3 M18.8 26.2 L13.2 29.3" stroke="#38bdf8" stroke-width="1.6" stroke-linecap="round"/>
 </svg>

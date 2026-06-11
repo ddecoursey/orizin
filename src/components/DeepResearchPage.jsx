@@ -197,7 +197,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <div className="text-lg font-bold font-mono text-gray-100">{fmt(row?.price, "price") ?? "—"}</div>
               {sc != null && (
                 <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  Orizen Score {sc}
+                  Orizin Score {sc}
                 </div>
               )}
             </div>

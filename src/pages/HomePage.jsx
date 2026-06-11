@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import OrizenLogo from "../components/OrizenLogo.jsx";
+import OrizinLogo from "../components/OrizinLogo.jsx";
 import AuthModal from "../components/AuthModal.jsx";
 import { PRO_PRICE_LABEL, PRO_FEATURES, FREE_FEATURES } from "../lib/billing.js";
 
-// ── Orizen landing page ─────────────────────────────────────────────────────
+// ── Orizin landing page ─────────────────────────────────────────────────────
 // Shown to signed-out visitors. Hero → stats → features → how it works →
 // pricing → closing CTA, with sign-in / create-account / subscribe entry
 // points throughout. Motion is subtle (≤300ms, eased, staggered reveals) and
@@ -64,7 +64,7 @@ const I = {
 const FEATURES = [
   {
     icon: I.filter,
-    title: "Quant screener with the Orizen Score",
+    title: "Quant screener with the Orizin Score",
     body: "Rank 8,000+ stocks on a 16-metric scorecard across Quality, Value and Growth — with your own weights, junk-data guards, and 30+ fundamental filters.",
   },
   {
@@ -126,7 +126,7 @@ export default function HomePage({ onAuthed }) {
   const [auth, setAuth] = useState({ open: false, mode: "login" });
 
   useEffect(() => {
-    document.title = "Orizen — AI-powered stock screener & research";
+    document.title = "Orizin — AI-powered stock screener & research";
   }, []);
 
   const openLogin = () => setAuth({ open: true, mode: "login" });
@@ -159,9 +159,9 @@ export default function HomePage({ onAuthed }) {
       <header className="sticky top-0 z-50 border-b border-gray-800/60 bg-gray-950/80 backdrop-blur-xl">
         <nav className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-6">
           <a href="#top" className="flex items-center gap-2.5 shrink-0">
-            <OrizenLogo className="w-6 h-6" />
+            <OrizinLogo className="w-6 h-6" />
             <span className="text-white text-lg tracking-tight" style={{ ...BRAND_FONT, fontWeight: 600 }}>
-              Orizen
+              Orizin
             </span>
           </a>
           <div className="hidden md:flex items-center gap-1 text-sm">
@@ -231,7 +231,7 @@ export default function HomePage({ onAuthed }) {
               </motion.h1>
 
               <motion.p variants={fadeUp} className="text-base sm:text-lg text-gray-400 leading-relaxed max-w-xl mb-8">
-                Orizen ranks the market on a 16-metric Quality · Value · Growth scorecard,
+                Orizin ranks the market on a 16-metric Quality · Value · Growth scorecard,
                 guards against junk data, and pairs it with Ori — an AI analyst that knows
                 your portfolio, your goals, and your theses.
               </motion.p>
@@ -263,7 +263,7 @@ export default function HomePage({ onAuthed }) {
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-gray-700" />
                     <span className="w-2.5 h-2.5 rounded-full bg-gray-700" />
-                    <span className="text-xs text-gray-500 ml-2">Orizen Screener</span>
+                    <span className="text-xs text-gray-500 ml-2">Orizin Screener</span>
                   </div>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">
                     Q 35 · V 35 · G 30
@@ -487,7 +487,7 @@ export default function HomePage({ onAuthed }) {
               The market is open. Are your numbers fresh?
             </motion.h2>
             <motion.p variants={fadeUp} className="text-gray-400 mb-8">
-              Join Orizen free and see today's highest-conviction scorecards in minutes.
+              Join Orizin free and see today's highest-conviction scorecards in minutes.
             </motion.p>
             <motion.div variants={fadeUp} className="flex flex-wrap justify-center gap-3">
               <button onClick={openSignup} className={primaryBtn + " px-7 py-3"}>
@@ -505,8 +505,8 @@ export default function HomePage({ onAuthed }) {
       <footer className="border-t border-gray-800/60">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 flex flex-col sm:flex-row items-center gap-3 text-[11px] text-gray-600">
           <div className="flex items-center gap-2">
-            <OrizenLogo className="w-4 h-4" />
-            <span>© {new Date().getFullYear()} Orizen™ · All rights reserved</span>
+            <OrizinLogo className="w-4 h-4" />
+            <span>© {new Date().getFullYear()} Orizin™ · All rights reserved</span>
           </div>
           <span className="sm:ml-auto text-center">
             For informational purposes only — not financial advice.
