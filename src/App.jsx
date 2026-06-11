@@ -544,6 +544,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
         onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
         currentUser={currentUser}
         isAdmin={isAdmin}
+        plan={plan}
         onLogout={onLogout}
         onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
         onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}

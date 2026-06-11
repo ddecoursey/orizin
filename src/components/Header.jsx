@@ -82,6 +82,7 @@ export default function Header({
   onToggleTheme,
   currentUser,
   isAdmin,
+  plan = "free",
   onLogout,
   onManageUsers,
   onAccountSettings,
@@ -133,6 +134,9 @@ export default function Header({
     currentUser && currentUser !== "default"
       ? currentUser.charAt(0).toUpperCase()
       : "•";
+
+  const tier = isAdmin ? "admin" : (String(plan || "free").toLowerCase() === "pro" ? "pro" : "free");
+  const tierLabel = tier === "admin" ? "Admin" : tier === "pro" ? "Pro" : "Free";
 
   return (
     <header className="bg-gray-950 border-b border-gray-800 px-3 sm:px-4 py-2 flex items-center gap-3 shrink-0 text-sm">
@@ -240,15 +244,24 @@ export default function Header({
         <HeaderMenu
           width="w-56"
           button={(open, toggle) => (
-            <button
-              onClick={toggle}
-              className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white transition-all
-                ${open ? "ring-2 ring-blue-400/50" : ""}
-                bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110`}
-              title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser}` : "Account"}
-            >
-              {initial}
-            </button>
+            <div className="relative group">
+              <button
+                onClick={toggle}
+                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white transition-all
+                  ${open ? "ring-2 ring-blue-400/50" : ""}
+                  bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110`}
+                title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser} (${tierLabel})` : "Account"}
+              >
+                {initial}
+              </button>
+              {/* Small tier indicator that appears on hover over the profile avatar */}
+              <div
+                className={`absolute -bottom-0.5 -right-0.5 text-[7px] leading-none px-0.5 rounded border opacity-0 group-hover:opacity-100 transition pointer-events-none select-none
+                  ${tier === "admin" ? "bg-emerald-950 border-emerald-800 text-emerald-300" : tier === "pro" ? "bg-violet-950 border-violet-800 text-violet-300" : "bg-gray-950 border-gray-700 text-gray-400"}`}
+              >
+                {tier}
+              </div>
+            </div>
           )}
         >
           {(close) => (
@@ -257,9 +270,17 @@ export default function Header({
                 <div className="text-[10px] uppercase tracking-wider text-gray-500">Signed in as</div>
                 <div className="text-sm text-gray-200 font-medium truncate flex items-center gap-1.5">
                   {currentUser && currentUser !== "default" ? currentUser : "Guest"}
-                  {isAdmin && (
-                    <span className="text-[9px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>
-                  )}
+                  <span
+                    className={`text-[9px] px-1.5 py-0.5 rounded ${
+                      tier === "admin"
+                        ? "bg-emerald-900 text-emerald-300"
+                        : tier === "pro"
+                        ? "bg-violet-900 text-violet-300"
+                        : "bg-gray-800 text-gray-500"
+                    }`}
+                  >
+                    {tier}
+                  </span>
                 </div>
               </div>
 
