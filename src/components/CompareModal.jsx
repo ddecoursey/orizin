@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
 import { fmt } from "../lib/format.js";
+import { IconCompare } from "./icons.jsx";
 
 // Metric, how to format it, and which direction is "better" (for highlighting).
 const METRICS = [
@@ -63,12 +64,12 @@ export default function CompareModal({ rows = [], universe = [], pins = [], init
   return (
     <div className="fixed inset-0 z-[80] bg-black/70 flex items-center justify-center p-3" onClick={onClose}>
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden"
+        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden oz-pop"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-          <h2 className="text-sm font-bold text-gray-100">🆚 Head-to-Head</h2>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 text-xl leading-none px-1">
+          <h2 className="text-sm font-bold text-gray-100 flex items-center gap-2"><IconCompare className="w-4 h-4 text-blue-400" /> Head-to-Head</h2>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-200 text-xl leading-none px-2 py-1 cursor-pointer">
             ×
           </button>
         </div>

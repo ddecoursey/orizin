@@ -1,5 +1,21 @@
 @import "tailwindcss";
 
+/* Temporarily disable ALL transitions and animations while this class is on <html>.
+   Used only for the exact frame of a dark/light class flip so the color changes
+   snap instantly with zero jank or lag (no simultaneous color transitions across
+   hundreds of elements). The class is added/removed in a useLayoutEffect + double
+   rAF, so it never sticks around to break normal hovers. */
+.theme-no-transition * {
+  /* Only suppress color-related transitions during the theme flip to avoid jank on bg/text/border changes.
+     Other properties (transform, opacity, etc.) can still transition for buttons, modals, etc.
+     This is scoped to * only while the class is on <html> (temporarily during useLayoutEffect). */
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke !important;
+  transition-duration: 0s !important;
+  transition-timing-function: linear !important;
+}
+
+
+
 /* ── Light theme overrides (applied when <html class="light"> is set) ───── */
 .light { color-scheme: light; }
 /* Two-tone light surfaces for real depth (mirrors dark mode's layered grays):
@@ -10,15 +26,8 @@
 .light .bg-gray-800 { background-color: #f3eee5 !important; } /* chips, input bg */
 .light .hover\:bg-gray-800:hover { background-color: #f3eee5 !important; }
 .light .hover\:bg-gray-700:hover { background-color: #ebe4d7 !important; }
-.light .bg-gray-800\/60 { background-color: rgba(243,238,229,0.7) !important; }
-.light .bg-gray-800\/50 { background-color: rgba(243,238,229,0.6) !important; }
 .light .bg-gray-800\/40 { background-color: rgba(235,228,215,0.5) !important; } /* row hover */
-.light .bg-gray-800\/30 { background-color: rgba(243,238,229,0.4) !important; }
-.light .bg-gray-950\/30 { background-color: rgba(251,249,244,0.6) !important; }
-.light .bg-gray-950\/95 { background-color: rgba(255,255,255,0.95) !important; }
-/* Loading skeletons / chart placeholder — dark translucent in dark mode reads
-   as a dark block on white, so tint it to a soft warm gray instead. */
-.light .bg-gray-900\/50 { background-color: rgba(235,228,215,0.7) !important; }
+
 /* Text — warm stone to sit naturally on the tan page */
 .light .text-white { color: #1c1917 !important; }
 .light .text-gray-100 { color: #1c1917 !important; }
@@ -97,6 +106,24 @@
 .light .text-amber-400 { color: #b45309 !important; }
 .light .hover\:text-amber-400:hover { color: #b45309 !important; }
 
+/* Scrolling news / trending ticker in footer (light mode needs readable grays on the warm page bg) */
+.light .bg-gray-950\/90 { background-color: rgba(251,249,244,0.9) !important; }
+.light .border-t.border-gray-800.bg-gray-950\/90 { background-color: rgba(251,249,244,0.9) !important; }
+.light .text-amber-300 { color: #92400e !important; } /* "Trending" label */
+.light .bg-gray-900 { background-color: #f3eee5 !important; } /* the Trending badge bg when in news */
+.light .text-gray-600:hover,
+.light .text-gray-300:hover { color: #1c1917 !important; } /* hide button and symbols on hover */
+
+/* Deep Research nav/button contrast in light (the header nav and action buttons) */
+.light .text-violet-200 { color: #5b21b6 !important; } /* better contrast for "Deep Research" label/button */
+.light button[class*="from-blue-600/"] { color: #1e40af !important; } /* general for research action buttons */
+
+/* Operator select box in filter sidebar (the small comparison dropdown) */
+.light .bg-gray-800\/80 { background-color: #f3eee5 !important; }
+.light .border-gray-700\/80 { border-color: #e6ddcc !important; }
+.light .text-gray-400 { color: #57534e !important; } /* already base but for the select */
+.light select { color: #44403c !important; } /* ensure operator text is dark in light */
+
 /* Mobile/tablet (< lg): lock the main app shell so it never scrolls.
    Only the data view (table or scorecard grid) is allowed to scroll internally.
    This prevents the whole page (header + tabs + controls + footer) from moving. */
@@ -110,3 +137,19 @@
     overflow: hidden;
   }
 }
+
+/* Additional light mode surface fixes for specific headers (deep research sub-header, portfolio section headers, etc.) */
+.light .bg-gray-950\/95 { background-color: rgba(251,249,244,0.95) !important; }
+.light .bg-gray-900\/50 { background-color: rgba(243,238,229,0.5) !important; }
+
+/* Deep Research sticky sub-header (the one right under the main top nav when a stock is selected) */
+.light .sticky.top-0.z-10.bg-gray-950\/95 { background-color: rgba(251,249,244,0.95) !important; }
+.light .sticky .text-gray-100 { color: #1c1917 !important; }
+.light .sticky .text-gray-400 { color: #57534e !important; }
+.light .sticky button.bg-gray-800 { background-color: #f3eee5 !important; color: #44403c !important; }
+.light .sticky button.bg-gray-800:hover { background-color: #ebe4d7 !important; }
+
+/* Portfolio page headers and section bars */
+.light .border-b.border-gray-800.bg-gray-950\/95 { background-color: rgba(251,249,244,0.95) !important; }
+.light .px-6.pt-4.pb-3.bg-gray-950 { background-color: #fbf9f4 !important; }
+.light .text-gray-300 { color: #44403c !important; } /* catch remaining header labels */

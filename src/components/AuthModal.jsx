@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { m, AnimatePresence, useReducedMotion } from "../lib/motion.js";
 
 // Auth dialog for the landing page: sign in, create account, or (on a fresh
 // database) first-admin setup. Same endpoints the old full-page LoginPage
@@ -103,7 +103,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
   return (
     <AnimatePresence>
       {open && (
-        <motion.div
+        <m.div
           className="fixed inset-0 z-[100] flex items-center justify-center px-4"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
@@ -117,7 +117,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
             aria-hidden="true"
           />
 
-          <motion.div
+          <m.div
             role="dialog"
             aria-modal="true"
             aria-label={heading}
@@ -252,8 +252,8 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
             <p className="text-center text-[10px] text-gray-600 mt-4">
               For informational purposes only · not financial advice
             </p>
-          </motion.div>
-        </motion.div>
+          </m.div>
+        </m.div>
       )}
     </AnimatePresence>
   );

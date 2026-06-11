@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from "react";
+import { m, useReducedMotion } from "../lib/motion.js";
 import OriEmblem from "./OriEmblem.jsx";
+import { IconResearch } from "./icons.jsx";
 import { DONATE_URL, PRO_PRICE_LABEL, PRO_FEATURES } from "../lib/billing.js";
 
 function relTime(ts) {
@@ -156,7 +158,12 @@ function ProPaywall() {
   );
 }
 
-export default function ChatPanel({ chat, canUseOri = true }) {
+// `floating` — render as a fixed overlay on ALL breakpoints instead of taking
+// a flex column. Used when both compare panes are open on the screener: three
+// static 24rem columns don't fit, the chat got pushed off-screen and its close
+// button became unreachable. Floating keeps it on top and dismissable.
+export default function ChatPanel({ chat, canUseOri = true, floating = false }) {
+  const reduce = useReducedMotion();
   const hints = pageHints(chat.view, chat.activeSymbol);
   const [input, setInput] = useState("");
   const [showRecall, setShowRecall] = useState(false);
@@ -263,12 +270,30 @@ export default function ChatPanel({ chat, canUseOri = true }) {
 
   return (
     <>
-      {/* Backdrop on tablet/phone where the sheet floats over the content */}
-      <div className="fixed inset-0 z-40 bg-black/50 touch-none lg:hidden" onClick={() => chat.setIsOpen(false)} />
-      <aside
-        className="fixed inset-x-0 bottom-0 z-50 max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700
-          lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none lg:rounded-none lg:border-t-0 lg:max-h-none lg:h-full
-          shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden"
+      {/* Backdrop on tablet/phone where the sheet floats over the content
+          (and on all sizes when the panel is in floating overlay mode) */}
+      <m.div
+        className={`fixed inset-0 z-40 bg-black/50 touch-none ${floating ? "" : "lg:hidden"}`}
+        onClick={() => chat.setIsOpen(false)}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.18 }}
+      />
+      <m.aside
+        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 18 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={reduce ? { opacity: 0 } : { opacity: 0, y: 12 }}
+        transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+        className={
+          floating
+            ? `fixed inset-x-0 bottom-0 z-50 max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700
+              lg:inset-x-auto lg:inset-y-0 lg:right-0 lg:max-h-none lg:w-96 lg:rounded-none lg:border-t-0
+              bg-gray-900 border-l border-gray-700 flex flex-col overflow-hidden`
+            : `fixed inset-x-0 bottom-0 z-50 max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700
+              lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none lg:rounded-none lg:border-t-0 lg:max-h-none lg:h-full
+              shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden`
+        }
       >
       {/* Grab handle — bottom-sheet dismiss affordance (mobile only) */}
       <button
@@ -278,6 +303,15 @@ export default function ChatPanel({ chat, canUseOri = true }) {
       />
       {/* Header */}
       <div className="relative px-3 py-2 lg:py-2.5 border-b border-gray-800 flex items-center gap-2">
+        {/* "Landing" pop — Ori arrives in the header right after the launch arc */}
+        <m.div
+          className="shrink-0"
+          initial={reduce ? false : { scale: 0, rotate: -90 }}
+          animate={{ scale: 1, rotate: 0 }}
+          transition={{ type: "spring", stiffness: 420, damping: 20, delay: 0.08 }}
+        >
+          <OriEmblem className="w-5 h-5 text-violet-400" />
+        </m.div>
         <span className="text-sm font-bold text-gray-100">Ori</span>
         <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
           {chat.stockCount} stocks in view
@@ -285,28 +319,28 @@ export default function ChatPanel({ chat, canUseOri = true }) {
         <div className="ml-auto flex gap-1">
           <button
             onClick={toggleMemory}
-            className={`text-[10px] px-1.5 py-1 rounded hover:bg-gray-800 ${showMemory ? "text-gray-200 bg-gray-800" : "text-gray-500 hover:text-gray-300"}`}
+            className={`text-[10px] px-2 py-1.5 lg:px-1.5 lg:py-1 rounded hover:bg-gray-800 cursor-pointer ${showMemory ? "text-gray-200 bg-gray-800" : "text-gray-500 hover:text-gray-300"}`}
             title="What Ori remembers about you"
           >
             Memory
           </button>
           <button
             onClick={toggleRecall}
-            className={`text-[10px] px-1.5 py-1 rounded hover:bg-gray-800 ${showRecall ? "text-gray-200 bg-gray-800" : "text-gray-500 hover:text-gray-300"}`}
+            className={`text-[10px] px-2 py-1.5 lg:px-1.5 lg:py-1 rounded hover:bg-gray-800 cursor-pointer ${showRecall ? "text-gray-200 bg-gray-800" : "text-gray-500 hover:text-gray-300"}`}
             title="Recall a past conversation"
           >
             Recall
           </button>
           <button
             onClick={chat.clearChat}
-            className="text-[10px] text-gray-500 hover:text-gray-300 px-1.5 py-1 rounded hover:bg-gray-800"
+            className="text-[10px] text-gray-500 hover:text-gray-300 px-2 py-1.5 lg:px-1.5 lg:py-1 rounded hover:bg-gray-800 cursor-pointer"
             title="Clear chat"
           >
             Clear
           </button>
           <button
             onClick={() => chat.setIsOpen(false)}
-            className="text-gray-500 hover:text-gray-300 px-1.5 text-sm"
+            className="text-gray-500 hover:text-gray-300 px-2.5 py-1 text-base lg:text-sm lg:px-1.5 cursor-pointer"
             title="Close"
           >
             ×
@@ -315,7 +349,7 @@ export default function ChatPanel({ chat, canUseOri = true }) {
 
         {/* Memory dropdown — durable facts Ori has learned about this user */}
         {showMemory && (
-          <div className="absolute right-2 top-full mt-1 w-72 max-w-[calc(100%-1rem)] max-h-64 lg:max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50">
+          <div className="absolute right-2 top-full mt-1 w-72 max-w-[calc(100%-1rem)] max-h-64 lg:max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50 oz-pop">
             <div className="px-3 py-2 flex items-center justify-between text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-800 sticky top-0 bg-gray-900">
               <span>Ori remembers</span>
               {memory.length > 0 && (
@@ -356,7 +390,7 @@ export default function ChatPanel({ chat, canUseOri = true }) {
 
         {/* Recall dropdown — past conversations (server-persisted per user) */}
         {showRecall && (
-          <div className="absolute right-2 top-full mt-1 w-72 max-w-[calc(100%-1rem)] max-h-64 lg:max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50">
+          <div className="absolute right-2 top-full mt-1 w-72 max-w-[calc(100%-1rem)] max-h-64 lg:max-h-80 overflow-y-auto bg-gray-900 border border-gray-700 rounded-lg shadow-xl z-50 oz-pop">
             <div className="px-3 py-2 text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-800 sticky top-0 bg-gray-900">
               Past conversations
             </div>
@@ -409,14 +443,15 @@ export default function ChatPanel({ chat, canUseOri = true }) {
               {hints.tagline}
             </p>
             <div className="mt-3 lg:mt-4 flex flex-col gap-1">
-              {hints.suggestions.map((q) => (
+              {hints.suggestions.map((q, qi) => (
                 <button
                   key={q}
                   onClick={() => {
                     chat.sendMessage(q);
                   }}
                   className="text-[10px] text-left text-blue-400 hover:text-blue-300 px-2 py-1
-                    bg-gray-800/50 rounded-lg hover:bg-gray-800 transition-colors"
+                    bg-gray-800/50 rounded-lg hover:bg-gray-800 transition-colors duration-150 cursor-pointer oz-msg-in py-1.5 lg:py-1"
+                  style={{ animationDelay: `${qi * 45}ms`, animationFillMode: "both" }}
                 >
                   "{q}"
                 </button>
@@ -429,7 +464,7 @@ export default function ChatPanel({ chat, canUseOri = true }) {
           <div
             key={i}
             ref={i === chat.messages.length - 1 ? lastMsgRef : null}
-            className={`flex scroll-mt-2 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+            className={`flex scroll-mt-2 oz-msg-in ${msg.role === "user" ? "justify-end" : "justify-start"}`}
           >
             <div
               className={`max-w-[90%] rounded-lg px-3 py-2 ${
@@ -457,9 +492,9 @@ export default function ChatPanel({ chat, canUseOri = true }) {
                     <div className="mt-3 pt-3 border-t border-gray-700 flex items-center gap-2">
                       <button
                         onClick={() => chat.enterDeepResearch?.(msg.deepResearch)}
-                        className="px-3 py-1.5 text-xs font-semibold rounded bg-gradient-to-br from-blue-600 to-violet-600 text-white hover:brightness-110 transition-all"
+                        className="px-3 py-1.5 text-xs font-semibold rounded bg-gradient-to-br from-blue-600 to-violet-600 text-white hover:brightness-110 transition-all duration-150 cursor-pointer flex items-center gap-1.5"
                       >
-                        🔬 Open Deep Research — {msg.deepResearch}
+                        <IconResearch className="w-3.5 h-3.5" /> Open Deep Research — {msg.deepResearch}
                       </button>
                     </div>
                   )}
@@ -529,14 +564,14 @@ export default function ChatPanel({ chat, canUseOri = true }) {
           <button
             onClick={handleSend}
             disabled={!input.trim() || chat.isStreaming || !canUseOri}
-            className="px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg
+            className="px-4 lg:px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg active:scale-95
               hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             {chat.isStreaming ? "…" : "→"}
           </button>
         </div>
       </div>
-      </aside>
+      </m.aside>
     </>
   );
 }

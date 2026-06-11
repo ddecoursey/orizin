@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
+import { IconSearch } from "./icons.jsx";
 
 // Header search across the whole universe. Selecting a result opens that
 // stock's company-overview panel (via onSelect), regardless of current filters.
@@ -60,8 +61,8 @@ export default function GlobalSearch({ stocks = [], onSelect }) {
 
   return (
     <div ref={ref} className="relative flex-1 max-w-md min-w-0">
-      <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-1.5 focus-within:border-gray-600">
-        <span className="text-gray-600 text-sm">⌕</span>
+      <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 lg:py-1.5 focus-within:border-gray-600 transition-colors duration-150">
+        <IconSearch className="w-3.5 h-3.5 text-gray-600 shrink-0" />
         <input
           value={q}
           onChange={(e) => {
@@ -79,13 +80,13 @@ export default function GlobalSearch({ stocks = [], onSelect }) {
         />
       </div>
       {open && results.length > 0 && (
-        <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl shadow-black/50 py-1 max-h-80 overflow-y-auto">
+        <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl shadow-black/50 py-1 max-h-80 overflow-y-auto oz-pop">
           {results.map((s, i) => (
             <button
               key={s.symbol}
               onMouseEnter={() => setHi(i)}
               onClick={() => choose(s)}
-              className={`w-full text-left px-3 py-1.5 flex items-center gap-2 ${
+              className={`w-full text-left px-3 py-2 lg:py-1.5 flex items-center gap-2 cursor-pointer ${
                 i === hi ? "bg-gray-800" : "hover:bg-gray-800/60"
               }`}
             >

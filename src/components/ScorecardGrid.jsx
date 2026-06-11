@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { fmt } from '../lib/format.js';
 import { SECTOR_COLORS } from '../lib/scoring.js';
+import { IconChart } from './icons.jsx';
 
 // Cards aren't virtualized (unlike the table), so cap how many DOM nodes we
 // render. The card view is a "browse the best" surface — showing the top N by
@@ -32,13 +33,13 @@ function SubChip({ label, value, colors, title }) {
 
       {title && (
         <span className="absolute top-full left-1/2 -translate-x-1/2 mt-2.5 hidden group-hover:block z-[90] pointer-events-none">
-          <div className="relative flex flex-col items-center transition-all duration-150 ease-out group-hover:opacity-100 group-hover:translate-y-0 opacity-0 -translate-y-1">
+          <div className="relative flex flex-col items-center transition-all duration-75 ease-out group-hover:opacity-100 group-hover:translate-y-0 opacity-0 -translate-y-1">
             {/* Arrow pointing up */}
             <div className="relative -mb-px h-2.5 w-4 overflow-hidden">
               <div className="absolute left-1/2 bottom-0 -translate-x-1/2 h-3 w-3 rotate-45 bg-zinc-900 border-r border-b border-white/15" />
             </div>
             {/* Tooltip body */}
-            <div className="bg-zinc-900/95 backdrop-blur-xl border border-white/15 text-gray-200 text-[10.5px] leading-relaxed px-3.5 py-2 rounded-xl shadow-2xl shadow-black/70 max-w-[260px] whitespace-normal text-left">
+            <div className="bg-zinc-900 border border-white/15 text-gray-200 text-[10.5px] leading-relaxed px-3.5 py-2 rounded-xl shadow-2xl shadow-black/70 max-w-[260px] whitespace-normal text-left">
               {title}
             </div>
           </div>
@@ -57,7 +58,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
     <div
       onClick={() => onSelectStock?.(r)}
       className={`bg-gray-900 border rounded-xl p-3.5
-        hover:border-gray-600 hover:shadow-lg hover:shadow-black/40 transition-all
+        hover:border-gray-600 hover:shadow-lg hover:shadow-black/40 transition-[border-color,box-shadow] duration-50
         ${pinned ? 'border-amber-800/60 bg-amber-950/10' : 'border-gray-800'}
         ${onSelectStock ? 'cursor-pointer' : ''}`}
       style={{ borderTop: `3px solid ${sec.bg}` }}
@@ -74,7 +75,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
             <button
               onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
               title={pinned ? 'Unpin' : 'Pin to favorites'}
-              className={`text-lg leading-none transition-colors ${
+              className={`text-lg leading-none ${
                 pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
               }`}
             >
@@ -183,7 +184,7 @@ export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }
   if (sorted.length === 0) {
     return (
       <div className="flex flex-col items-center py-16 text-gray-500">
-        <span className="text-3xl mb-3">📊</span>
+        <IconChart className="w-8 h-8 mb-3 text-gray-600" />
         <p className="font-medium text-gray-400">No results</p>
         <p className="text-xs mt-1">Loosen your filters or wait for metrics to finish loading.</p>
       </div>

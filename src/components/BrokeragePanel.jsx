@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { IconBank } from "./icons.jsx";
 
 // ── Brokerage panel (SIMULATION) ────────────────────────────────────────────
 // The account-linking + trading surface for the Portfolio page. Everything is
@@ -280,7 +281,7 @@ export default function BrokeragePanel() {
       <div className="flex items-center justify-between gap-3 mb-1">
         <button onClick={() => setExpanded((e) => !e)} className="flex items-center gap-2 text-left group">
           <h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2">
-            <span className="text-blue-400 text-lg">🏦</span> Linked Accounts
+            <IconBank className="w-4 h-4 text-blue-400" /> Linked Accounts
           </h3>
           <SimBadge />
           <span className={`text-gray-500 text-xs transition-transform ${expanded ? "rotate-180" : ""}`}>▾</span>
@@ -293,7 +294,7 @@ export default function BrokeragePanel() {
           )}
           <button
             onClick={() => setShowLink(true)}
-            className="text-xs px-3 py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium"
+            className="text-xs px-3 py-1.5 lg:py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium cursor-pointer active:scale-95 transition-transform"
           >
             + Link Account
           </button>

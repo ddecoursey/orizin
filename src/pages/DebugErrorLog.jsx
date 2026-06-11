@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { IconSignal } from '../components/icons.jsx';
 
 // Small stat tile used across the dashboard panels.
 function Tile({ label, value, sub, accent }) {
@@ -359,7 +360,7 @@ export default function DebugErrorLog() {
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-semibold flex items-center gap-2">
-                  📡 FMP API Usage
+                  <IconSignal className="w-5 h-5 text-blue-400" /> FMP API Usage
                   {stats.market && (
                     <span className={`text-xs px-2 py-0.5 rounded ${(SESSION_BADGE[stats.market.session] || SESSION_BADGE.closed).cls}`}>
                       {(SESSION_BADGE[stats.market.session] || SESSION_BADGE.closed).label}

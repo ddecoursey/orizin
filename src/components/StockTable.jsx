@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import Sparkline from "./Sparkline";
+import { IconSearch } from "./icons.jsx";
 
 const GOOD_H = new Set([
   "gross_margin",
@@ -497,17 +498,17 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                 key={r.symbol}
                 data-index={virtualRow.index}
                 ref={rowVirtualizer.measureElement}
-                className={`group border-b border-gray-800/50 hover:bg-gray-800/40 transition-colors
+                className={`group border-b border-gray-800/50 hover:bg-gray-800/40 transition-[background-color] duration-75
                   ${pinned ? "bg-amber-900/10" : ""}`}
               >
                 {/* Pin — sticky col 1 */}
                 <td
-                  className={`px-3 py-2 text-left sticky left-0 z-10 border-r border-gray-950 ${pinned ? "bg-amber-950" : "bg-gray-950"}`}
+                  className={`px-3 py-2 text-left sticky left-0 z-10 border-r border-gray-950 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-800/40"}`}
                   style={{ width: '32px', minWidth: '32px' }}
                 >
                   <button
                     onClick={() => onTogglePin(r.symbol)}
-                    className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none transition-colors ${
+                    className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
                       pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
                     }`}
                     title={pinned ? "Unpin" : "Pin"}
@@ -518,7 +519,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
 
                 {/* Symbol + name — sticky col 2 */}
                 <td
-                  className={`px-3 py-2 text-left sticky left-10 z-10 ${pinned ? "bg-amber-950" : "bg-gray-950"}`}
+                  className={`px-3 py-2 text-left sticky left-10 z-10 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-800/40"}`}
                   style={{ width: '92px', minWidth: '92px', left: '32px' }}
                 >
                   <div
@@ -532,7 +533,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                       ) : (
                         <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" title="Metrics not loaded" />
                       )}
-                      <span className="font-bold text-gray-100 text-[11.5px] group-hover/sym:text-blue-400 transition-colors">{r.symbol}</span>
+                      <span className="font-bold text-gray-100 text-[11.5px] group-hover/sym:text-blue-400">{r.symbol}</span>
                     </div>
                     <span className="text-[9.5px] text-gray-500 max-w-[130px] truncate">{r.name}</span>
                   </div>
@@ -611,7 +612,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                       onClick={() => onAskAI(r.symbol)}
                       className="opacity-100 lg:opacity-0 lg:group-hover:opacity-100 px-2 py-1 text-[9px] font-medium
                         rounded bg-blue-600/20 text-blue-400 border border-blue-800/50
-                        hover:bg-blue-600/40 transition-all whitespace-nowrap"
+                        hover:bg-blue-600/40 transition-opacity duration-75 whitespace-nowrap"
                     >
                       Ask Ori
                     </button>
@@ -630,7 +631,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
 
       {sorted.length === 0 && (
         <div className="flex flex-col items-center py-16 text-gray-500">
-          <span className="text-3xl mb-3">🔍</span>
+          <IconSearch className="w-8 h-8 mb-3 text-gray-600" />
           <p className="font-medium text-gray-400">No results</p>
           <p className="text-xs mt-1">
             Loosen your filters or wait for metrics to finish loading.

@@ -1,5 +1,15 @@
 import { useState, useRef, useEffect } from "react";
 import OrizinLogo from "./OrizinLogo.jsx";
+import {
+  IconSun,
+  IconMoon,
+  IconGear,
+  IconUsersGroup,
+  IconTerminal,
+  IconLogout,
+  IconRefresh,
+  IconChevronDown,
+} from "./icons.jsx";
 
 // Dropdown that opens on hover (fluid) and also on click (so touch works).
 // Closing is handled by mouse-leave (with a small delay so crossing the gap to
@@ -35,7 +45,7 @@ function HeaderMenu({ button, children, width = "w-56", align = "right" }) {
           className={`absolute ${align === "right" ? "right-0" : "left-0"} top-full pt-1 z-50 ${width}`}
           onMouseEnter={cancelClose}
         >
-          <div className="rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 py-1">
+          <div className="rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 py-1 oz-pop">
             {children(() => setOpen(false))}
           </div>
         </div>
@@ -49,7 +59,7 @@ function MenuItem({ onClick, disabled, children, className = "" }) {
     <button
       onClick={onClick}
       disabled={disabled}
-      className={`w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800
+      className={`w-full text-left px-3 py-2.5 lg:py-2 text-xs text-gray-300 hover:bg-gray-800 cursor-pointer
         disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${className}`}
     >
       {children}
@@ -62,7 +72,8 @@ function NavButton({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
-      className={`px-2.5 py-1 text-xs rounded-md transition-colors whitespace-nowrap
+      className={`px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
+        focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
         ${active
           ? "text-white bg-gray-800 font-semibold"
           : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/60"}`}
@@ -139,7 +150,7 @@ export default function Header({
   const tierLabel = tier === "admin" ? "Admin" : tier === "pro" ? "Pro" : "Free";
 
   return (
-    <header className="bg-gray-950 border-b border-gray-800 px-3 sm:px-4 py-2 flex items-center gap-3 shrink-0 text-sm">
+    <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex items-center gap-2 sm:gap-3 shrink-0 text-sm">
       {/* Orizin logo + wordmark + tagline */}
       <div className="flex items-center gap-2.5 shrink-0">
         <OrizinLogo className="w-5 h-5" />
@@ -158,7 +169,7 @@ export default function Header({
 
       {/* Compact status — just the dot once loaded (message on hover) */}
       <div
-        className="flex items-center gap-1.5 text-xs text-gray-400 border-l border-gray-800 pl-3 shrink-0"
+        className="flex items-center gap-1.5 text-xs text-gray-400 border-l border-gray-800 pl-2 sm:pl-3 shrink-0"
         title={status.msg}
       >
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
@@ -166,7 +177,7 @@ export default function Header({
       </div>
 
       {/* Top-level page navigation */}
-      <nav className="flex items-center gap-1 border-l border-gray-800 pl-3 shrink-0">
+      <nav className="flex items-center gap-0.5 sm:gap-1 border-l border-gray-800 pl-2 sm:pl-3 shrink-0">
         <NavButton active={currentView === 'screener'} onClick={() => onNavigate?.('screener')}>
           Screener
         </NavButton>
@@ -188,7 +199,7 @@ export default function Header({
             button={(open, toggle) => (
             <button
               onClick={toggle}
-              className={`px-1.5 py-1 text-xs transition-colors flex items-center gap-1.5 bg-transparent
+              className={`px-2 py-1.5 lg:px-1.5 lg:py-1 text-xs transition-colors flex items-center gap-1 bg-transparent cursor-pointer
                 ${open ? "text-gray-200" : "text-gray-400 hover:text-gray-200"}`}
               title="Data actions"
             >
@@ -196,7 +207,7 @@ export default function Header({
               {!isFullyEnriched && filtered.length > 0 && (
                 <span className="text-[10px] text-amber-400">({missing})</span>
               )}
-              <span className="text-gray-500 text-[10px] opacity-60">▾</span>
+              <IconChevronDown className={`w-3 h-3 text-gray-500 transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
             </button>
           )}
         >
@@ -206,8 +217,10 @@ export default function Header({
                 onClick={() => { close(); onRefresh?.(); }}
                 title="Universe Refresh: pulls full list from FMP stable stock-list + etf-list (no mcap floor), then enriches profiles. Includes all global stocks and ETFs."
               >
-                ↻ Universe Refresh
-                <span className="block text-[10px] text-gray-500 mt-0.5">
+                <span className="flex items-center gap-2">
+                  <IconRefresh className="w-3.5 h-3.5 text-gray-500 shrink-0" /> Universe Refresh
+                </span>
+                <span className="block text-[10px] text-gray-500 mt-0.5 pl-[22px]">
                   Full universe from FMP stable lists (stocks + ETFs, no floor).
                 </span>
               </MenuItem>
@@ -215,12 +228,15 @@ export default function Header({
                 onClick={() => { close(); runGather("visible"); }}
                 disabled={enrichLoading || filtered.length === 0}
               >
-                ↻ {enrichLoading
-                  ? "Gathering…"
-                  : missing > 0
-                    ? `Gather Data (${missing})`
-                    : `Re-gather visible (${filtered.length})`}
-                <span className="block text-[10px] text-gray-500 mt-0.5">
+                <span className="flex items-center gap-2">
+                  <IconRefresh className={`w-3.5 h-3.5 text-gray-500 shrink-0 ${enrichLoading ? "animate-spin" : ""}`} />
+                  {enrichLoading
+                    ? "Gathering…"
+                    : missing > 0
+                      ? `Gather Data (${missing})`
+                      : `Re-gather visible (${filtered.length})`}
+                </span>
+                <span className="block text-[10px] text-gray-500 mt-0.5 pl-[22px]">
                   {missing > 0
                     ? `Metrics, ratios, growth & DCF for the ${missing} on-screen stock${missing === 1 ? "" : "s"} missing data.`
                     : `Force-refresh the ${filtered.length} stock${filtered.length === 1 ? "" : "s"} currently on screen.`}
@@ -230,8 +246,10 @@ export default function Header({
                 onClick={() => { close(); runGather("all"); }}
                 disabled={enrichLoading || stocks.length === 0}
               >
-                ↻ Force re-gather all ({stocks.length})
-                <span className="block text-[10px] text-gray-500 mt-0.5">
+                <span className="flex items-center gap-2">
+                  <IconRefresh className="w-3.5 h-3.5 text-gray-500 shrink-0" /> Force re-gather all ({stocks.length})
+                </span>
+                <span className="block text-[10px] text-gray-500 mt-0.5 pl-[22px]">
                   Re-fetches ALL in universe (regardless of filters or screen), even ETFs.
                 </span>
               </MenuItem>
@@ -244,24 +262,24 @@ export default function Header({
         <HeaderMenu
           width="w-56"
           button={(open, toggle) => (
-            <div className="relative group">
-              <button
-                onClick={toggle}
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white transition-all
-                  ${open ? "ring-2 ring-blue-400/50" : ""}
-                  bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110`}
-                title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser} (${tierLabel})` : "Account"}
-              >
+            <button
+              onClick={toggle}
+              className={`relative w-9 h-9 lg:w-8 lg:h-8 rounded-full p-[2px] bg-gradient-to-br transition duration-150 cursor-pointer hover:brightness-110 active:scale-95
+                ${tier === "admin" ? "from-emerald-400 to-teal-500" : tier === "pro" ? "from-violet-400 to-fuchsia-500" : "from-blue-500 to-indigo-500"}
+                ${open ? "ring-2 ring-blue-400/40 ring-offset-2 ring-offset-gray-950" : ""}
+                focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400`}
+              title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser} (${tierLabel})` : "Account"}
+            >
+              <span className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center text-[11px] font-bold text-white">
                 {initial}
-              </button>
-              {/* Small tier indicator that appears on hover over the profile avatar */}
-              <div
-                className={`absolute -bottom-0.5 -right-0.5 text-[7px] leading-none px-0.5 rounded border opacity-0 group-hover:opacity-100 transition pointer-events-none select-none
-                  ${tier === "admin" ? "bg-emerald-950 border-emerald-800 text-emerald-300" : tier === "pro" ? "bg-violet-950 border-violet-800 text-violet-300" : "bg-gray-950 border-gray-700 text-gray-400"}`}
-              >
-                {tier}
-              </div>
-            </div>
+              </span>
+              {/* Always-visible tier dot (emerald = admin, violet = pro, gray = free) */}
+              <span
+                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-gray-950
+                  ${tier === "admin" ? "bg-emerald-400" : tier === "pro" ? "bg-violet-400" : "bg-gray-500"}`}
+                aria-hidden="true"
+              />
+            </button>
           )}
         >
           {(close) => (
@@ -285,18 +303,27 @@ export default function Header({
               </div>
 
               <MenuItem onClick={onToggleTheme}>
-                {theme === "dark" ? "☀  Light mode" : "☾  Dark mode"}
+                <span className="flex items-center gap-2">
+                  {theme === "dark"
+                    ? <IconSun className="w-3.5 h-3.5 text-gray-500" />
+                    : <IconMoon className="w-3.5 h-3.5 text-gray-500" />}
+                  {theme === "dark" ? "Light mode" : "Dark mode"}
+                </span>
               </MenuItem>
 
               {onAccountSettings && (
                 <MenuItem onClick={() => { close(); onAccountSettings(); }}>
-                  ⚙  Account settings
+                  <span className="flex items-center gap-2">
+                    <IconGear className="w-3.5 h-3.5 text-gray-500" /> Account settings
+                  </span>
                 </MenuItem>
               )}
 
               {isAdmin && onManageUsers && (
                 <MenuItem onClick={() => { close(); onManageUsers(); }}>
-                  👥  User management
+                  <span className="flex items-center gap-2">
+                    <IconUsersGroup className="w-3.5 h-3.5 text-gray-500" /> User management
+                  </span>
                 </MenuItem>
               )}
 
@@ -306,9 +333,11 @@ export default function Header({
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={close}
-                  className="block w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                  className="block w-full text-left px-3 py-2.5 lg:py-2 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
                 >
-                  🐞  Debug log
+                  <span className="flex items-center gap-2">
+                    <IconTerminal className="w-3.5 h-3.5 text-gray-500" /> Debug log
+                  </span>
                 </a>
               )}
 
@@ -317,7 +346,9 @@ export default function Header({
                   onClick={() => { close(); onLogout(); }}
                   className="text-red-300 hover:bg-red-950/40 border-t border-gray-800"
                 >
-                  ⏻  Logout
+                  <span className="flex items-center gap-2">
+                    <IconLogout className="w-3.5 h-3.5" /> Logout
+                  </span>
                 </MenuItem>
               )}
             </>

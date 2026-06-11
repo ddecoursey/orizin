@@ -1,5 +1,6 @@
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
+import { IconResearch, IconRefresh } from "./icons.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
@@ -64,7 +65,7 @@ const FORM_COLORS = {
 function Panel({ title, tier, children, span = 1, soon = false }) {
   return (
     <section
-      className={`bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col ${
+      className={`bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col transition-colors duration-200 hover:border-gray-700/80 ${
         span === 2 ? "md:col-span-2" : ""
       } ${span === 3 ? "md:col-span-2 xl:col-span-3" : ""}`}
     >
@@ -129,8 +130,8 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   if (!symbol) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center text-gray-500 px-6">
-        <div className="text-center mb-5">
-          <p className="text-2xl mb-2">🔬</p>
+        <div className="text-center mb-5 oz-fade-rise">
+          <IconResearch className="w-10 h-10 mx-auto mb-3 text-violet-400/80" />
           <p className="text-sm font-semibold text-gray-300">Deep Research</p>
           <p className="text-xs mt-1 text-gray-500">Search for any stock or ETF to open its in-depth research page.</p>
         </div>
@@ -153,11 +154,11 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   return (
     <div className="flex-1 overflow-y-auto overscroll-contain bg-gray-950">
       {/* Sticky page header */}
-      <div className="sticky top-0 z-10 bg-gray-950/95 backdrop-blur border-b border-gray-800 px-4 sm:px-6 py-3">
-        <div className="flex items-center gap-3">
+      <div className="sticky top-0 z-10 bg-gray-950 border-b border-gray-800 px-4 sm:px-6 py-3">
+        <div className="flex items-center gap-3 flex-wrap gap-y-2">
           <button
             onClick={onBack}
-            className="shrink-0 text-xs text-gray-400 hover:text-gray-100 px-2 py-1 rounded-md hover:bg-gray-800 transition-colors"
+            className="shrink-0 text-xs text-gray-400 hover:text-gray-100 px-2.5 py-1.5 lg:px-2 lg:py-1 rounded-md hover:bg-gray-800 transition-colors cursor-pointer"
             title="Back to screener"
           >
             ← Back
@@ -188,7 +189,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             <div className="text-xs text-gray-400 truncate">{row?.name || profile?.companyName || ""}</div>
           </div>
 
-          <div className="ml-auto flex items-center gap-4 shrink-0">
+          <div className="ml-auto flex items-center gap-2.5 sm:gap-4 shrink-0">
             {/* Switch to another stock without leaving Deep Research */}
             <div className="hidden md:block w-56">
               <GlobalSearch stocks={stocks} onSelect={handleSearch} />
@@ -205,17 +206,17 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <button
                 onClick={() => onRegather(symbol)}
                 disabled={regathering}
-                className="text-xs font-semibold px-3 py-1.5 rounded-md bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5"
+                className="text-xs font-semibold px-3 py-2 lg:py-1.5 rounded-md bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
                 title="Re-fetch all data for this stock from FMP"
               >
-                <span className={regathering ? "inline-block animate-spin" : ""}>↻</span>
+                <IconRefresh className={`w-3.5 h-3.5 ${regathering ? "animate-spin" : ""}`} />
                 {regathering ? "Gathering…" : "Re-gather"}
               </button>
             )}
             {onAskOri && (
               <button
                 onClick={() => onAskOri(symbol)}
-                className="text-xs font-semibold px-3 py-1.5 rounded-md bg-gradient-to-br from-blue-600/30 to-violet-600/30 text-violet-200 border border-violet-800/50 hover:brightness-125 transition-all"
+                className="text-xs font-semibold px-3 py-2 lg:py-1.5 rounded-md bg-gradient-to-br from-blue-600/30 to-violet-600/30 text-violet-200 border border-violet-800/50 hover:brightness-125 transition-all active:scale-95 cursor-pointer"
               >
                 Ask Ori
               </button>
@@ -226,7 +227,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
 
       <div className="p-4 sm:p-6 space-y-6">
         {/* Price + RSI chart alongside the company profile, under the name bar */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise">
           <section className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-2">
               Price &amp; RSI
@@ -274,7 +275,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
         </div>
 
         {/* ── TIER 1 ─────────────────────────────────────────────────────── */}
-        <div>
+        <div className="oz-fade-rise" style={{ animationDelay: "60ms" }}>
           <h2 className="text-xs uppercase tracking-[0.15em] font-bold text-gray-500 mb-3">
             Tier 1 · Valuation & Quality
           </h2>
@@ -331,7 +332,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
         </div>
 
         {/* ── TIER 2 ─────────────────────────────────────────────────────── */}
-        <div>
+        <div className="oz-fade-rise" style={{ animationDelay: "120ms" }}>
           <h2 className="text-xs uppercase tracking-[0.15em] font-bold text-gray-500 mb-3">
             Tier 2 · Financial Statements & Estimates
           </h2>
@@ -438,7 +439,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
         </div>
 
         {/* ── TIER 3 ─────────────────────────────────────────────────────── */}
-        <div>
+        <div className="oz-fade-rise" style={{ animationDelay: "180ms" }}>
           <h2 className="text-xs uppercase tracking-[0.15em] font-bold text-gray-500 mb-3">
             Tier 3 · Ownership, Peers & Growth
           </h2>
@@ -509,7 +510,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                     <button
                       key={p.symbol}
                       onClick={() => onSelectSymbol?.(p.symbol)}
-                      className="w-full flex items-center text-[11px] py-1 border-b border-gray-800/50 hover:bg-gray-800/40 rounded transition-colors text-left"
+                      className="w-full flex items-center text-[11px] py-1.5 lg:py-1 border-b border-gray-800/50 hover:bg-gray-800/40 rounded transition-colors text-left cursor-pointer"
                       title={p.name || p.symbol}
                     >
                       <span className="w-16 font-bold text-gray-200">{p.symbol}</span>

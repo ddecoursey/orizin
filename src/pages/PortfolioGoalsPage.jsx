@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { usePortfolioGoals } from '../hooks/usePortfolioGoals.js';
 import BrokeragePanel from '../components/BrokeragePanel.jsx';
+import { IconPie } from '../components/icons.jsx';
 
 function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
   const [inputValue, setInputValue] = useState(value || '');
@@ -87,10 +88,10 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">
-      <div className="flex items-center justify-between border-b border-gray-800 px-6 py-4 shrink-0 bg-gray-950/95 backdrop-blur">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-4 sm:px-6 py-3 sm:py-4 shrink-0 bg-gray-950">
         <div><h1 className="text-xl font-semibold tracking-tight">Portfolio</h1><p className="text-xs text-gray-500 mt-0.5">Your holdings, goals and theses are sent to Ori automatically. Changes save as you type.</p></div>
-        <div className="flex items-center gap-6">
-          <button onClick={toggleGoals} className="text-xs px-3 py-1.5 rounded-lg border border-gray-800 bg-gray-900/50 hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-2">
+        <div className="flex items-center gap-3 sm:gap-6">
+          <button onClick={toggleGoals} className="text-xs px-3 py-2 lg:py-1.5 rounded-lg border border-gray-800 bg-gray-900/50 hover:bg-gray-800 text-gray-400 hover:text-gray-200 transition-colors flex items-center gap-2 cursor-pointer">
             {goalsVisible ? 'Hide Goals & Theses' : 'Show Goals & Theses'} <span className="opacity-50">{goalsVisible ? '→' : '←'}</span>
           </button>
           <div className="text-right"><div className="text-[10px] uppercase tracking-widest text-gray-500">Total Portfolio Value</div><div className="text-2xl font-semibold tabular-nums text-emerald-400">{formatMoney(grandTotal)}</div></div>
@@ -100,15 +101,15 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
         <div className="flex-1 flex flex-col border-r border-gray-800 min-h-0 overflow-hidden">
           <div className="px-6 pt-4 pb-3 flex items-center justify-between shrink-0 border-b border-gray-800 bg-gray-950">
             <div className="text-sm font-semibold text-gray-300">Your Portfolios</div>
-            <button onClick={handleAddPortfolio} className="text-xs px-3 py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium">+ New Portfolio</button>
+            <button onClick={handleAddPortfolio} className="text-xs px-3 py-1.5 lg:py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium cursor-pointer active:scale-95 transition-transform">+ New Portfolio</button>
           </div>
           <div className="flex-1 overflow-auto p-6 space-y-6 text-gray-200">
             {overallAllocations.length > 0 && (
-              <div className="rounded-2xl border border-gray-800 bg-gray-900/50 p-5 mb-8">
-                <div className="flex items-center justify-between mb-4"><h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2"><span className="text-blue-400 text-lg">📊</span>Combined Allocation</h3><div className="text-[10px] text-gray-500 uppercase tracking-widest">Across all {portfolios.length} portfolios</div></div>
+              <div className="rounded-2xl border border-gray-800 bg-gray-900/50 p-5 mb-8 oz-fade-rise">
+                <div className="flex items-center justify-between mb-4"><h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2"><IconPie className="w-4 h-4 text-blue-400" />Combined Allocation</h3><div className="text-[10px] text-gray-500 uppercase tracking-widest">Across all {portfolios.length} portfolios</div></div>
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
                   {overallAllocations.slice(0, allocationLimit).map((alloc) => (
-                    <div key={alloc.ticker} onClick={() => handleTickerClick(alloc.ticker)} className={`bg-gray-950 border rounded-xl p-3 flex flex-col gap-1 transition-all ${alloc.ticker !== 'MISC' ? 'cursor-pointer hover:bg-gray-900' : ''} ${detailStock?.symbol === alloc.ticker ? 'border-blue-500 ring-1 ring-blue-500/50' : 'border-gray-800'}`}>
+                    <div key={alloc.ticker} onClick={() => handleTickerClick(alloc.ticker)} className={`bg-gray-950 border rounded-xl p-3 flex flex-col gap-1 transition-all duration-200 ${alloc.ticker !== 'MISC' ? 'cursor-pointer hover:bg-gray-900 hover:-translate-y-0.5 hover:border-gray-700' : ''} ${detailStock?.symbol === alloc.ticker ? 'border-blue-500 ring-1 ring-blue-500/50' : 'border-gray-800'}`}>
                       <div className="flex items-center justify-between"><span className="font-mono font-bold text-gray-100">{alloc.ticker}</span><span className="text-emerald-400 font-mono text-xs">{formatPercent(alloc.overallPercent)}</span></div>
                       <div className="text-[10px] text-gray-500 tabular-nums">{formatMoney(alloc.dollars)}</div>
                       <div className="w-full bg-gray-800 h-1 rounded-full mt-1 overflow-hidden"><div className="bg-blue-500 h-full rounded-full" style={{ width: `${Math.min(100, alloc.overallPercent)}%` }} /></div>
@@ -157,7 +158,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
                   <button onClick={() => { if (confirm(`Delete portfolio "${selectedPortfolio.name}"?`)) deletePortfolio(selectedPortfolio.id); }} className="ml-auto px-3 py-2 text-sm text-red-400 hover:text-red-300 border border-red-900/60 rounded-lg">Delete Portfolio</button>
                 </div>
                 <div>
-                  <div className="flex items-center justify-between mb-2"><div className="text-sm font-medium text-gray-300">Holdings</div><button onClick={handleAddHolding} className="text-sm px-3 py-1 rounded-md bg-gray-800 hover:bg-gray-700 border border-gray-700 flex items-center gap-1">+ Add Holding</button></div>
+                  <div className="flex items-center justify-between mb-2"><div className="text-sm font-medium text-gray-300">Holdings</div><button onClick={handleAddHolding} className="text-sm px-3 py-1.5 lg:py-1 rounded-md bg-gray-800 hover:bg-gray-700 border border-gray-700 flex items-center gap-1 cursor-pointer">+ Add Holding</button></div>
                   <div className="border border-gray-800 rounded-xl overflow-hidden bg-gray-950">
                     <table className="w-full text-sm">
                       <thead className="text-gray-400"><tr className="border-b border-gray-800"><th className="text-left pl-4 py-2 font-normal text-xs">Ticker</th><th className="text-right pr-4 py-2 font-normal text-xs w-28">% of Portfolio</th><th className="text-right pr-4 py-2 font-normal text-xs w-32">Dollar Amount</th><th className="w-8"></th></tr></thead>
@@ -170,7 +171,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
                             </td>
                             <td className="pr-4 py-2"><div className="flex justify-end items-center gap-1"><input type="number" step="0.01" value={h.percent != null ? h.percent : ''} onChange={(e) => updateHolding(selectedPortfolio.id, idx, 'percent', e.target.value)} className="w-20 text-right bg-gray-900 border border-gray-700 focus:border-blue-500 rounded px-2 py-1 text-sm tabular-nums text-gray-100" /><span className="text-gray-500 text-xs">%</span></div></td>
                             <td className="pr-4 py-2"><div className="flex justify-end items-center gap-1"><span className="text-gray-500 text-xs">$</span><input type="number" step="0.01" value={h.dollars != null ? h.dollars : ''} onChange={(e) => updateHolding(selectedPortfolio.id, idx, 'dollars', e.target.value)} className="w-28 text-right bg-gray-900 border border-gray-700 focus:border-blue-500 rounded px-2 py-1 text-sm tabular-nums text-gray-100" /></div></td>
-                            <td className="pr-2 text-right"><button onClick={() => deleteHolding(selectedPortfolio.id, idx)} className="text-gray-500 hover:text-red-400 px-1 text-lg leading-none">×</button></td>
+                            <td className="pr-2 text-right"><button onClick={() => deleteHolding(selectedPortfolio.id, idx)} className="text-gray-500 hover:text-red-400 px-2 py-1 text-lg leading-none cursor-pointer">×</button></td>
                           </tr>
                         ))}
                         {/* Mandatory MISC row */}
@@ -203,7 +204,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
           </div>
         </div>
         {goalsVisible && (
-          <div className="w-full lg:w-96 xl:w-[420px] flex flex-col border-t lg:border-t-0 lg:border-l border-gray-800 bg-gray-900/30 min-h-0 shrink-0 animate-in slide-in-from-right duration-300">
+          <div className="w-full lg:w-96 xl:w-[420px] flex flex-col border-t lg:border-t-0 lg:border-l border-gray-800 bg-gray-900/30 min-h-0 shrink-0 oz-pane-in">
             <div className="px-5 pt-4 pb-3 border-b border-gray-800 shrink-0">
               <div className="text-sm font-semibold text-gray-300">Goals &amp; Theses</div>
               <p className="text-[10px] text-gray-500 mt-1 leading-snug">Sent to Ori automatically for context.</p>
@@ -213,7 +214,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Investment Goals</div>
-                  <button onClick={() => addGoal('')} className="text-xs px-2.5 py-1 rounded bg-violet-600 hover:bg-violet-500 text-white font-medium">+ Add</button>
+                  <button onClick={() => addGoal('')} className="text-xs px-2.5 py-1.5 lg:py-1 rounded bg-violet-600 hover:bg-violet-500 text-white font-medium cursor-pointer">+ Add</button>
                 </div>
                 <p className="text-[10px] text-gray-500 leading-snug">What you want your investing to achieve (e.g. timelines, income, risk).</p>
                 {goals.length === 0 && <div className="text-gray-500 text-sm py-2">No goals yet.</div>}
@@ -229,7 +230,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="text-xs font-semibold uppercase tracking-wider text-gray-400">Investment Theses</div>
-                  <button onClick={() => addThesis('')} className="text-xs px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium">+ Add</button>
+                  <button onClick={() => addThesis('')} className="text-xs px-2.5 py-1.5 lg:py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium cursor-pointer">+ Add</button>
                 </div>
                 <p className="text-[10px] text-gray-500 leading-snug">Convictions about specific companies or trends that steer Ori's thinking (e.g. "HOOD will grow as younger investors mature", "TSLA has a 10-yr edge from robotaxi + humanoids + space data centers").</p>
                 {theses.length === 0 && <div className="text-gray-500 text-sm py-2">No theses yet.</div>}

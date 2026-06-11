@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
-import Starfield from "./components/Starfield";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from "react";
+import { LazyMotion, domAnimation, m, useReducedMotion } from "./lib/motion.js";
+import OriEmblem from "./components/OriEmblem.jsx";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
 import { useStockDetail } from "./hooks/useStockDetail.js";
@@ -97,6 +98,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
   // Ori access: Pro plan or admin. The server enforces this on /api/chat too —
   // this flag just drives the paywall UI.
   const canUseOri = isAdmin || plan === "pro";
+  // Gate framer transitions for users who prefer reduced motion (the CSS
+  // micro-animations are gated in index.css via the same media query).
+  const reduceMotion = useReducedMotion();
   const user = currentUser || "default";
   const themeKey = `theme:${user}`;
   const sidebarKey = `sidebarCollapsed:${user}`;
@@ -186,6 +190,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
   // True once theme/sidebar have been reconciled with the server, so the
   // initial local values can't clobber server-side prefs before hydration.
   const settingsHydrated = useRef(false);
+  const prevThemeRef = useRef(null);
 
   // Hydrate theme + sidebar from the server (follows the account across
   // devices). If absent server-side, migrate the current local values up once.
@@ -222,10 +227,43 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
     document.title = 'Orizin';
   }, []);
 
-  useEffect(() => {
-    document.documentElement.classList.toggle("light", theme === "light");
+  // Use layout effect so the .light class is applied synchronously before the browser paints.
+  // Only add the .theme-no-transition suppressor when we are *actually switching*
+  // themes (compare to prev). This prevents it from running on initial mount or
+  // unrelated re-renders, so normal hovers (header buttons, table rows, modals,
+  // etc.) are never suppressed. The suppressor only lives ~2 frames (double rAF)
+  // during a real flip, making theme switch instant with no jank. Scoped in CSS
+  // to only color props so other animations (e.g. button scales, modal fades)
+  // are unaffected.
+  useLayoutEffect(() => {
+    const html = document.documentElement;
+    const prev = prevThemeRef.current;
+    const isActualSwitch = prev !== null && prev !== theme;
+
+    if (isActualSwitch) {
+      html.classList.add('theme-no-transition');
+    }
+
+    html.classList.toggle("light", theme === "light");
     localStorage.setItem(themeKey, theme);
     if (settingsHydrated.current) patchUserSettings({ theme });
+
+    prevThemeRef.current = theme;
+
+    if (isActualSwitch) {
+      let raf2;
+      const raf1 = requestAnimationFrame(() => {
+        raf2 = requestAnimationFrame(() => {
+          html.classList.remove('theme-no-transition');
+        });
+      });
+
+      return () => {
+        cancelAnimationFrame(raf1);
+        if (raf2) cancelAnimationFrame(raf2);
+        html.classList.remove('theme-no-transition');
+      };
+    }
   }, [theme, themeKey]);
   const {
     stocks,
@@ -524,7 +562,27 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
     }
   };
 
+  // Ori launch: clicking the floating button plays a short "fly up into the
+  // panel" arc before the chat opens. Reduced-motion users get an instant open.
+  const [oriLaunching, setOriLaunching] = useState(false);
+  const oriLaunchTimer = useRef(null);
+  const launchOri = () => {
+    if (chat.isOpen || oriLaunching) return;
+    if (reduceMotion) {
+      chat.setIsOpen(true);
+      return;
+    }
+    setOriLaunching(true);
+    oriLaunchTimer.current = setTimeout(() => {
+      chat.setIsOpen(true);
+      setOriLaunching(false);
+    }, 560);
+  };
+
+  useEffect(() => () => clearTimeout(oriLaunchTimer.current), []);
+
   return (
+    <LazyMotion features={domAnimation} strict>
     <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       <Header
         status={status}
@@ -561,9 +619,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
 
       <ProgressBar progress={loadProgress} label={enrichLoading ? "Enriching…" : "Refreshing universe…"} onCancel={cancelOperation} />
 
-      {/* Very subtle starfield background (dark mode only) */}
-      {theme === "dark" && <Starfield />}
-
       <div className="flex flex-1 overflow-hidden min-h-0">
         {currentView === 'screener' && (
           <Sidebar
@@ -576,6 +631,14 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
           />
         )}
 
+        {/* Plain container for the main view. Removed the framer-motion m.div + AnimatePresence
+            wrapper (which was promoting the entire subtree — including the virtualized table — to a
+            single GPU compositing layer). This was causing:
+            - Laggy/stuttery hover on table rows (every mouse move repainted the whole layer)
+            - Laggy theme switches (toggling .light forced a massive synchronous repaint of the giant layer)
+            - Cursor / UI freezes during the repaint
+            The cross-fade between views is sacrificed for snappy interactions and correct theming.
+            (The ori button, chat panel, and landing page still use motion where appropriate.) */}
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
           {currentView === 'deep-research' ? (
             <DeepResearchPage
@@ -859,23 +922,66 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
       <div
         className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
           ${chat.isOpen ? 'right-6' : detailStock2 ? 'right-6 lg:right-[49.5rem]' : detailStock ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
-          ${chat.isOpen ? 'hidden' : 'block animate-ori-bounce'}`}
+          ${chat.isOpen ? 'hidden' : oriLaunching ? 'block' : 'block animate-ori-float'}`}
       >
-        <button
-          onClick={() => chat.setIsOpen(!chat.isOpen)}
-          className="w-12 h-12 rounded-full shadow-lg flex items-center justify-center text-sm font-semibold transition-all bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-white hover:brightness-110 hover:scale-105 shadow-blue-500/30"
+        <m.button
+          onClick={launchOri}
+          whileHover={reduceMotion || oriLaunching ? undefined : { scale: 1.05 }}
+          whileTap={reduceMotion || oriLaunching ? undefined : { scale: 0.95 }}
+          animate={
+            oriLaunching
+              ? {
+                  // Anticipation squash, then swing left and arc up-right —
+                  // toward where the chat panel slides in — shrinking and
+                  // fading out like a launch into orbit.
+                  x: [0, 0, -26, 14, 64],
+                  y: [0, 8, -48, -160, -270],
+                  scale: [1, 0.9, 1.1, 0.65, 0.16],
+                  rotate: [0, -4, -22, 10, 34],
+                  opacity: [1, 1, 1, 0.95, 0],
+                }
+              : { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }
+          }
+          transition={
+            oriLaunching
+              ? { duration: 0.58, times: [0, 0.16, 0.42, 0.74, 1], ease: "easeIn" }
+              : { duration: 0.15 }
+          }
+          className="group flex items-center gap-1.5 h-12 pl-3 pr-4 rounded-full cursor-pointer
+            bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-white
+            ring-1 ring-white/25 animate-ori-glow shadow-lg shadow-indigo-500/30
+            focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
           title="Open Ori Chat"
+          aria-label="Open Ori Chat"
         >
-          <span 
+          <OriEmblem className="w-6 h-6" />
+          <span
             className="text-[13px] font-semibold tracking-[1px]"
-            style={{ 
-              fontFamily: '"Space Grotesk", system-ui, sans-serif', 
-              fontWeight: 600 
+            style={{
+              fontFamily: '"Space Grotesk", system-ui, sans-serif',
+              fontWeight: 600,
             }}
           >
             Ori
           </span>
-        </button>
+        </m.button>
+
+        {/* Star trail left behind during the launch */}
+        {oriLaunching &&
+          [0, 1, 2].map((i) => (
+            <m.span
+              key={i}
+              className="absolute left-1/2 top-1/2 w-1.5 h-1.5 rounded-full bg-violet-300 pointer-events-none"
+              initial={{ opacity: 0, x: 0, y: 0, scale: 1 }}
+              animate={{
+                opacity: [0, 0.9, 0],
+                x: [0, -16 - i * 9, 34 - i * 14],
+                y: [0, -55 - i * 28, -165 - i * 45],
+                scale: [1, 0.8, 0.25],
+              }}
+              transition={{ duration: 0.5, delay: 0.12 + i * 0.07, ease: "easeIn" }}
+            />
+          ))}
       </div>
 
       {showUsersModal && (
@@ -906,6 +1012,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
         />
       )}
     </div>
+    </LazyMotion>
   );
 }
 

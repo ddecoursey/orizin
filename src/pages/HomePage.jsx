@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { LazyMotion, domAnimation, m, useReducedMotion } from "../lib/motion.js";
 import OrizinLogo from "../components/OrizinLogo.jsx";
 import AuthModal from "../components/AuthModal.jsx";
 import { PRO_PRICE_LABEL, PRO_FEATURES, FREE_FEATURES } from "../lib/billing.js";
@@ -154,6 +154,7 @@ export default function HomePage({ onAuthed }) {
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400";
 
   return (
+    <LazyMotion features={domAnimation} strict>
     <div className="min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
       {/* ── Nav ───────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 border-b border-gray-800/60 bg-gray-950/80 backdrop-blur-xl">
@@ -189,13 +190,13 @@ export default function HomePage({ onAuthed }) {
         <section className="relative">
           {/* Ambient gradient field — slow, subtle, GPU-cheap */}
           <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-            <motion.div
+            <m.div
               className="absolute -top-48 left-1/2 -translate-x-1/2 w-[52rem] h-[52rem] rounded-full
                 bg-gradient-to-br from-blue-600/20 via-indigo-600/10 to-violet-600/15 blur-3xl"
               animate={reduce ? undefined : { scale: [1, 1.06, 1], opacity: [0.8, 1, 0.8] }}
               transition={{ duration: 14, repeat: Infinity, ease: "easeInOut" }}
             />
-            <motion.div
+            <m.div
               className="absolute top-1/3 -right-40 w-[30rem] h-[30rem] rounded-full bg-violet-600/10 blur-3xl"
               animate={reduce ? undefined : { y: [0, -24, 0] }}
               transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
@@ -213,13 +214,13 @@ export default function HomePage({ onAuthed }) {
           </div>
 
           <div className="relative max-w-6xl mx-auto px-4 sm:px-6 pt-16 pb-20 lg:pt-24 lg:pb-28 grid lg:grid-cols-[1.05fr_0.95fr] gap-12 lg:gap-10 items-center">
-            <motion.div variants={stagger} initial="hidden" animate="show">
-              <motion.div variants={fadeUp} className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-gray-700/80 bg-gray-900/60 text-[11px] text-gray-400 mb-6">
+            <m.div variants={stagger} initial="hidden" animate="show">
+              <m.div variants={fadeUp} className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-gray-700/80 bg-gray-900/60 text-[11px] text-gray-400 mb-6">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                 Live market data through every trading session
-              </motion.div>
+              </m.div>
 
-              <motion.h1
+              <m.h1
                 variants={fadeUp}
                 className="text-4xl sm:text-5xl lg:text-[3.4rem] leading-[1.08] tracking-tight text-white mb-5"
                 style={{ ...BRAND_FONT, fontWeight: 700 }}
@@ -228,30 +229,30 @@ export default function HomePage({ onAuthed }) {
                 <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-violet-400">
                   not just stocks that screen well.
                 </span>
-              </motion.h1>
+              </m.h1>
 
-              <motion.p variants={fadeUp} className="text-base sm:text-lg text-gray-400 leading-relaxed max-w-xl mb-8">
+              <m.p variants={fadeUp} className="text-base sm:text-lg text-gray-400 leading-relaxed max-w-xl mb-8">
                 Orizin ranks the market on a 16-metric Quality · Value · Growth scorecard,
                 guards against junk data, and pairs it with Ori — an AI analyst that knows
                 your portfolio, your goals, and your theses.
-              </motion.p>
+              </m.p>
 
-              <motion.div variants={fadeUp} className="flex flex-wrap items-center gap-3">
+              <m.div variants={fadeUp} className="flex flex-wrap items-center gap-3">
                 <button onClick={openSignup} className={primaryBtn + " px-6 py-3"}>
                   Get started free {I.arrow}
                 </button>
                 <a href="#pricing" className={ghostBtn + " px-5 py-3"}>
                   See pricing
                 </a>
-              </motion.div>
+              </m.div>
 
-              <motion.p variants={fadeUp} className="text-[11px] text-gray-600 mt-4">
+              <m.p variants={fadeUp} className="text-[11px] text-gray-600 mt-4">
                 Free forever for screening &amp; research · No card required
-              </motion.p>
-            </motion.div>
+              </m.p>
+            </m.div>
 
             {/* Product preview — stylized screener card + Ori insight */}
-            <motion.div
+            <m.div
               className="relative"
               aria-hidden="true"
               initial={reduce ? { opacity: 0 } : { opacity: 0, y: 32 }}
@@ -274,7 +275,7 @@ export default function HomePage({ onAuthed }) {
                     <span>Symbol</span><span>Trend</span><span className="text-right">Coverage</span><span className="text-right">Score</span>
                   </div>
                   {MOCK_ROWS.map((r, i) => (
-                    <motion.div
+                    <m.div
                       key={r.sym}
                       className="grid grid-cols-[64px_1fr_88px_96px] items-center gap-3 py-2.5 border-t border-gray-800/60"
                       initial={reduce ? { opacity: 0 } : { opacity: 0, x: 16 }}
@@ -287,13 +288,13 @@ export default function HomePage({ onAuthed }) {
                       </svg>
                       <span className="text-right text-[11px] text-gray-500 tabular-nums">100%</span>
                       <div className="flex justify-end"><ScoreBar value={r.score} /></div>
-                    </motion.div>
+                    </m.div>
                   ))}
                 </div>
               </div>
 
               {/* Ori insight card overlapping the screener */}
-              <motion.div
+              <m.div
                 className="absolute -bottom-8 -left-3 sm:-left-8 max-w-[280px] rounded-xl border border-violet-800/50
                   bg-gray-900/90 backdrop-blur-xl p-3.5 shadow-xl shadow-violet-950/40"
                 initial={reduce ? { opacity: 0 } : { opacity: 0, y: 16 }}
@@ -310,14 +311,14 @@ export default function HomePage({ onAuthed }) {
                   NBIX scores 74 with full data coverage — strong ROIC and clean balance
                   sheet, but you're already 18% biotech. Want lower-overlap ideas?
                 </p>
-              </motion.div>
-            </motion.div>
+              </m.div>
+            </m.div>
           </div>
         </section>
 
         {/* ── Stats strip ─────────────────────────────────────────────────── */}
         <section className="border-y border-gray-800/60 bg-gray-900/30">
-          <motion.div
+          <m.div
             className="max-w-6xl mx-auto px-4 sm:px-6 py-8 grid grid-cols-2 md:grid-cols-4 gap-6"
             variants={stagger}
             initial="hidden"
@@ -330,27 +331,27 @@ export default function HomePage({ onAuthed }) {
               ["~30 min", "quote freshness, market hours"],
               ["1", "AI analyst on your side"],
             ].map(([big, small]) => (
-              <motion.div key={small} variants={fadeUp} className="text-center">
+              <m.div key={small} variants={fadeUp} className="text-center">
                 <div className="text-2xl sm:text-3xl text-white tabular-nums" style={{ ...BRAND_FONT, fontWeight: 700 }}>{big}</div>
                 <div className="text-xs text-gray-500 mt-1">{small}</div>
-              </motion.div>
+              </m.div>
             ))}
-          </motion.div>
+          </m.div>
         </section>
 
         {/* ── Features ────────────────────────────────────────────────────── */}
         <section id="features" className="max-w-6xl mx-auto px-4 sm:px-6 py-20 lg:py-24 scroll-mt-14">
-          <motion.div variants={stagger} initial="hidden" whileInView="show" viewport={inView} className="text-center mb-12">
-            <motion.h2 variants={fadeUp} className="text-3xl sm:text-4xl text-white tracking-tight mb-3" style={{ ...BRAND_FONT, fontWeight: 700 }}>
+          <m.div variants={stagger} initial="hidden" whileInView="show" viewport={inView} className="text-center mb-12">
+            <m.h2 variants={fadeUp} className="text-3xl sm:text-4xl text-white tracking-tight mb-3" style={{ ...BRAND_FONT, fontWeight: 700 }}>
               Everything between idea and conviction
-            </motion.h2>
-            <motion.p variants={fadeUp} className="text-gray-400 max-w-2xl mx-auto">
+            </m.h2>
+            <m.p variants={fadeUp} className="text-gray-400 max-w-2xl mx-auto">
               One workspace for screening, research, and portfolio thinking — built so the
               numbers you act on are fresh, complete, and honest.
-            </motion.p>
-          </motion.div>
+            </m.p>
+          </m.div>
 
-          <motion.div
+          <m.div
             className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4"
             variants={stagger}
             initial="hidden"
@@ -358,7 +359,7 @@ export default function HomePage({ onAuthed }) {
             viewport={inView}
           >
             {FEATURES.map((f) => (
-              <motion.div
+              <m.div
                 key={f.title}
                 variants={fadeUp}
                 whileHover={reduce ? undefined : { y: -4 }}
@@ -377,38 +378,38 @@ export default function HomePage({ onAuthed }) {
                 </div>
                 <h3 className="text-sm font-semibold text-gray-100 mb-1.5">{f.title}</h3>
                 <p className="text-[13px] text-gray-400 leading-relaxed">{f.body}</p>
-              </motion.div>
+              </m.div>
             ))}
-          </motion.div>
+          </m.div>
         </section>
 
         {/* ── How it works ────────────────────────────────────────────────── */}
         <section id="how" className="border-y border-gray-800/60 bg-gray-900/30 scroll-mt-14">
           <div className="max-w-6xl mx-auto px-4 sm:px-6 py-20">
-            <motion.div variants={stagger} initial="hidden" whileInView="show" viewport={inView} className="grid md:grid-cols-3 gap-8">
+            <m.div variants={stagger} initial="hidden" whileInView="show" viewport={inView} className="grid md:grid-cols-3 gap-8">
               {STEPS.map((s) => (
-                <motion.div key={s.n} variants={fadeUp} className="relative">
+                <m.div key={s.n} variants={fadeUp} className="relative">
                   <div className="text-5xl font-black text-gray-800/80 mb-2 select-none" style={BRAND_FONT}>{s.n}</div>
                   <h3 className="text-base font-semibold text-gray-100 mb-1.5">{s.title}</h3>
                   <p className="text-sm text-gray-400 leading-relaxed">{s.body}</p>
-                </motion.div>
+                </m.div>
               ))}
-            </motion.div>
+            </m.div>
           </div>
         </section>
 
         {/* ── Pricing ─────────────────────────────────────────────────────── */}
         <section id="pricing" className="max-w-5xl mx-auto px-4 sm:px-6 py-20 lg:py-24 scroll-mt-14">
-          <motion.div variants={stagger} initial="hidden" whileInView="show" viewport={inView} className="text-center mb-12">
-            <motion.h2 variants={fadeUp} className="text-3xl sm:text-4xl text-white tracking-tight mb-3" style={{ ...BRAND_FONT, fontWeight: 700 }}>
+          <m.div variants={stagger} initial="hidden" whileInView="show" viewport={inView} className="text-center mb-12">
+            <m.h2 variants={fadeUp} className="text-3xl sm:text-4xl text-white tracking-tight mb-3" style={{ ...BRAND_FONT, fontWeight: 700 }}>
               Simple pricing
-            </motion.h2>
-            <motion.p variants={fadeUp} className="text-gray-400">
+            </m.h2>
+            <m.p variants={fadeUp} className="text-gray-400">
               Screen and research free, forever. Add Ori when you want an analyst in the room.
-            </motion.p>
-          </motion.div>
+            </m.p>
+          </m.div>
 
-          <motion.div
+          <m.div
             className="grid md:grid-cols-2 gap-5 max-w-3xl mx-auto items-stretch"
             variants={stagger}
             initial="hidden"
@@ -416,7 +417,7 @@ export default function HomePage({ onAuthed }) {
             viewport={inView}
           >
             {/* Free */}
-            <motion.div variants={fadeUp} className="rounded-2xl border border-gray-800 bg-gray-900/50 p-6 flex flex-col">
+            <m.div variants={fadeUp} className="rounded-2xl border border-gray-800 bg-gray-900/50 p-6 flex flex-col">
               <h3 className="text-sm font-semibold text-gray-300 mb-1">Free</h3>
               <div className="flex items-baseline gap-1 mb-4">
                 <span className="text-4xl text-white" style={{ ...BRAND_FONT, fontWeight: 700 }}>$0</span>
@@ -433,10 +434,10 @@ export default function HomePage({ onAuthed }) {
               <button onClick={openSignup} className={ghostBtn + " w-full mt-auto py-2.5"}>
                 Create free account
               </button>
-            </motion.div>
+            </m.div>
 
             {/* Pro */}
-            <motion.div
+            <m.div
               variants={fadeUp}
               className="relative rounded-2xl border border-violet-700/60 bg-gradient-to-b from-violet-950/40 to-gray-900/60 p-6 flex flex-col shadow-xl shadow-violet-950/30"
             >
@@ -467,8 +468,8 @@ export default function HomePage({ onAuthed }) {
               <button onClick={openSignup} className={primaryBtn + " w-full mt-auto py-2.5"}>
                 Start with Pro {I.arrow}
               </button>
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         </section>
 
         {/* ── Closing CTA ─────────────────────────────────────────────────── */}
@@ -476,28 +477,28 @@ export default function HomePage({ onAuthed }) {
           <div className="pointer-events-none absolute inset-0" aria-hidden="true">
             <div className="absolute -bottom-32 left-1/2 -translate-x-1/2 w-[40rem] h-[24rem] rounded-full bg-gradient-to-t from-blue-600/15 to-violet-600/10 blur-3xl" />
           </div>
-          <motion.div
+          <m.div
             className="relative max-w-3xl mx-auto px-4 sm:px-6 py-20 text-center"
             variants={stagger}
             initial="hidden"
             whileInView="show"
             viewport={inView}
           >
-            <motion.h2 variants={fadeUp} className="text-3xl sm:text-4xl text-white tracking-tight mb-4" style={{ ...BRAND_FONT, fontWeight: 700 }}>
+            <m.h2 variants={fadeUp} className="text-3xl sm:text-4xl text-white tracking-tight mb-4" style={{ ...BRAND_FONT, fontWeight: 700 }}>
               The market is open. Are your numbers fresh?
-            </motion.h2>
-            <motion.p variants={fadeUp} className="text-gray-400 mb-8">
+            </m.h2>
+            <m.p variants={fadeUp} className="text-gray-400 mb-8">
               Join Orizin free and see today's highest-conviction scorecards in minutes.
-            </motion.p>
-            <motion.div variants={fadeUp} className="flex flex-wrap justify-center gap-3">
+            </m.p>
+            <m.div variants={fadeUp} className="flex flex-wrap justify-center gap-3">
               <button onClick={openSignup} className={primaryBtn + " px-7 py-3"}>
                 Get started free {I.arrow}
               </button>
               <button onClick={openLogin} className={ghostBtn + " px-6 py-3"}>
                 Sign in
               </button>
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         </section>
       </main>
 
@@ -521,5 +522,6 @@ export default function HomePage({ onAuthed }) {
         onSuccess={onAuthed}
       />
     </div>
+    </LazyMotion>
   );
 }

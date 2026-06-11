@@ -4,6 +4,11 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    // The main app chunk is ~540KB minified (158KB gzip) by design — the data
+    // grid, charts and motion runtime ship together for signed-in users.
+    chunkSizeWarningLimit: 600,
+  },
   server: {
     host: '0.0.0.0', // Listen on all interfaces so it's reachable from outside the container
     watch: {

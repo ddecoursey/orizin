@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
+import { IconResearch, IconCompare } from "./icons.jsx";
 
 const shortDate = (d) => {
   if (!d) return "";
@@ -698,7 +699,7 @@ export default function StockDetailModal({
       <aside
         className="fixed inset-y-0 right-0 z-40 w-full max-w-md shadow-2xl
           lg:static lg:z-auto lg:w-96 lg:max-w-none lg:shadow-none
-          shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden"
+          shrink-0 bg-gray-900 border-l border-gray-800 flex flex-col overflow-hidden oz-pane-in"
       >
         {/* Header */}
         <div className="bg-gray-900 border-b border-gray-800 px-4 py-3 flex items-start justify-between gap-3 shrink-0">
@@ -737,7 +738,7 @@ export default function StockDetailModal({
             </div>
             <button
               onClick={onClose}
-              className="text-gray-500 hover:text-gray-200 text-2xl leading-none px-1"
+              className="text-gray-500 hover:text-gray-200 text-2xl leading-none px-2 py-0.5 cursor-pointer"
               title="Close"
             >
               ×
@@ -751,24 +752,24 @@ export default function StockDetailModal({
             {onDeepResearch && (
               <button
                 onClick={onDeepResearch}
-                className="flex-1 py-1 rounded-md text-[11px] font-semibold bg-gradient-to-br from-blue-600/25 to-violet-600/25 text-violet-200 border border-violet-800/50 hover:brightness-125 transition-all"
+                className="flex-1 py-1.5 lg:py-1 rounded-md text-[11px] font-semibold bg-gradient-to-br from-blue-600/25 to-violet-600/25 text-violet-200 border border-violet-800/50 hover:brightness-125 transition-all active:scale-[0.98] cursor-pointer"
               >
-                🔬 Deep Research
+                <span className="flex items-center justify-center gap-1.5"><IconResearch className="w-3.5 h-3.5" /> Deep Research</span>
               </button>
             )}
             {onCompare ? (
               <button
                 onClick={onCompare}
-                className="flex-1 py-1 rounded-md text-[11px] font-semibold bg-blue-600/20 text-blue-300 border border-blue-800/50 hover:bg-blue-600/30 transition-colors"
+                className="flex-1 py-1.5 lg:py-1 rounded-md text-[11px] font-semibold bg-blue-600/20 text-blue-300 border border-blue-800/50 hover:bg-blue-600/30 transition-all active:scale-[0.98] cursor-pointer"
               >
-                🆚 Compare
+                <span className="flex items-center justify-center gap-1.5"><IconCompare className="w-3.5 h-3.5" /> Compare</span>
               </button>
             ) : onStartCompare && !comparePicking ? (
               <button
                 onClick={onStartCompare}
-                className="flex-1 py-1 rounded-md text-[11px] font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-colors"
+                className="flex-1 py-1.5 lg:py-1 rounded-md text-[11px] font-medium bg-gray-800 text-gray-300 border border-gray-700 hover:bg-gray-700 transition-all active:scale-[0.98] cursor-pointer"
               >
-                🆚 Compare
+                <span className="flex items-center justify-center gap-1.5"><IconCompare className="w-3.5 h-3.5" /> Compare</span>
               </button>
             ) : null}
           </div>
