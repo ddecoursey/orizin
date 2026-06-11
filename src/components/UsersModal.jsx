@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
+import { DONATE_URL, PRO_PRICE_LABEL } from "../lib/billing.js";
 
 // `mode` controls which surface this modal shows:
-//   'account' → personal Account Settings (change your password)
-//   'users'   → admin User Management (add/remove users, grant admin)
-export default function UsersModal({ onClose, currentUser, isAdmin = false, mode = 'account' }) {
+//   'account' → personal Account Settings (plan + change your password)
+//   'users'   → admin User Management (add/remove users, grant admin, set plan)
+export default function UsersModal({ onClose, currentUser, isAdmin = false, plan = 'free', mode = 'account' }) {
   const showUsers = mode === 'users' && isAdmin;
   const showAccount = mode === 'account';
   const [users, setUsers] = useState([]);
@@ -70,13 +71,13 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, mode
     setAdding(false);
   }
 
-  async function toggleAdmin(username, makeAdmin) {
+  async function patchUser(username, body) {
     setError("");
     try {
       const res = await fetch(`/api/users/${encodeURIComponent(username)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isAdmin: makeAdmin }),
+        body: JSON.stringify(body),
       });
       const text = await res.text();
       let data;
@@ -87,6 +88,9 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, mode
       setError(e.message);
     }
   }
+
+  const toggleAdmin = (username, makeAdmin) => patchUser(username, { isAdmin: makeAdmin });
+  const setPlan = (username, plan) => patchUser(username, { plan });
 
   async function deleteUser(username) {
     if (!confirm(`Delete user "${username}"?`)) return;
@@ -190,13 +194,23 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, mode
               ) : (
                 <div className="space-y-1">
                   {users.map(u => (
-                    <div key={u.username} className="flex items-center justify-between bg-gray-950 border border-gray-800 rounded px-3 py-1.5 text-sm">
-                      <div>
-                        <span className="font-medium">{u.username}</span>
+                    <div key={u.username} className="flex items-center justify-between gap-2 bg-gray-950 border border-gray-800 rounded px-3 py-1.5 text-sm">
+                      <div className="min-w-0">
+                        <span className="font-medium truncate">{u.username}</span>
                         {u.is_admin && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>}
+                        <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded ${u.plan === 'pro' ? 'bg-violet-900 text-violet-300' : 'bg-gray-800 text-gray-500'}`}>
+                          {u.plan === 'pro' ? 'PRO' : 'free'}
+                        </span>
                         {u.username === currentUser && <span className="text-xs text-blue-400 ml-2">(you)</span>}
                       </div>
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 shrink-0">
+                        <button
+                          onClick={() => setPlan(u.username, u.plan === 'pro' ? 'free' : 'pro')}
+                          className="text-xs text-gray-400 hover:text-violet-300"
+                          title="Toggle the paid plan after the user's payment arrives"
+                        >
+                          {u.plan === 'pro' ? 'Downgrade' : 'Set Pro'}
+                        </button>
                         {u.username !== currentUser && (
                           <button
                             onClick={() => toggleAdmin(u.username, !u.is_admin)}
@@ -220,6 +234,35 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, mode
               )}
             </div>
           </>
+        )}
+
+        {/* Account mode: current plan + upgrade path */}
+        {showAccount && (
+          <div className="mb-6">
+            <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Your Plan</div>
+            <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <span className={`text-sm font-bold ${(plan === 'pro' || isAdmin) ? 'text-violet-300' : 'text-gray-200'}`}>
+                  {isAdmin ? 'Admin (full access)' : plan === 'pro' ? 'Pro' : 'Free'}
+                </span>
+                {!isAdmin && plan !== 'pro' && (
+                  <a
+                    href={DONATE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-semibold px-3 py-1.5 rounded-md text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all"
+                  >
+                    Upgrade — {PRO_PRICE_LABEL}
+                  </a>
+                )}
+              </div>
+              <p className="text-[11px] text-gray-500 mt-2 leading-snug">
+                {isAdmin || plan === 'pro'
+                  ? 'You have full access to Ori, the AI analyst.'
+                  : `Free includes the full screener, Deep Research, and portfolio tools. Pro (${PRO_PRICE_LABEL}) unlocks Ori. Pay via the upgrade link with your account email in the note, and your plan is activated by the admin.`}
+              </p>
+            </div>
+          </div>
         )}
 
         {/* Change own password */}

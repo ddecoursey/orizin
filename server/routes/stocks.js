@@ -65,6 +65,13 @@ import {
   fetchRatios,
   fetchProfile,
   profileToRow,
+  fetchIncomeStatements,
+  fetchBalanceSheets,
+  fetchCashFlows,
+  fetchSecFilings,
+  fetchExecutiveCompensation,
+  fetchStockPeers,
+  fetchGrowthHistory,
   fetchScreenerStocks,
   fetchDCF,
   fetchPriceTarget,
@@ -982,6 +989,104 @@ router.get("/news", async (req, res) => {
       fetchGeneralNews({ limit }), force
     );
     res.json({ news });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Deep Research endpoints ────────────────────────────────────────────────
+// Financial statements (income + balance + cash flow), SEC filings, executive
+// compensation, peers, and multi-year growth. All cached through the two-level
+// detail cache (memory + SQLite) so reopening a stock costs zero FMP calls.
+
+// GET /api/stocks/statements/:symbol?period=annual|quarter
+router.get("/stocks/statements/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const period = req.query.period === "quarter" ? "quarter" : "annual";
+  const force = req.query.force === '1' || req.query.force === 'true';
+  const TTL = 24 * 60 * 60 * 1000; // statements change quarterly at most
+  try {
+    const [income, balance, cashflow] = await Promise.all([
+      cachedDetail(`stmt-inc:${symbol}:${period}`, TTL, () => fetchIncomeStatements(symbol, { period }), force),
+      cachedDetail(`stmt-bal:${symbol}:${period}`, TTL, () => fetchBalanceSheets(symbol, { period }), force),
+      cachedDetail(`stmt-cf:${symbol}:${period}`, TTL, () => fetchCashFlows(symbol, { period }), force),
+    ]);
+    res.json({ symbol, period, income, balance, cashflow });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/stocks/filings/:symbol — recent SEC filings with links. Cached 12h.
+router.get("/stocks/filings/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const filings = await cachedDetail(`filings:${symbol}`, 12 * 60 * 60 * 1000, () =>
+      fetchSecFilings(symbol, { limit: 20 }), force
+    );
+    res.json({ symbol, filings });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/stocks/exec-comp/:symbol — named-executive pay. Cached 7d (annual data).
+router.get("/stocks/exec-comp/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const compensation = await cachedDetail(`execcomp:${symbol}`, 7 * 24 * 60 * 60 * 1000, () =>
+      fetchExecutiveCompensation(symbol), force
+    );
+    res.json({ symbol, compensation });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/stocks/peers/:symbol — peer list enriched with local screener
+// metrics (P/E, mcap, sector) when the peer is in our universe. Peer list
+// cached 7d; the metric join is a free local read so it's always current.
+router.get("/stocks/peers/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const peers = await cachedDetail(`peers:${symbol}`, 7 * 24 * 60 * 60 * 1000, () =>
+      fetchStockPeers(symbol), force
+    );
+    const enriched = (peers || []).map((p) => {
+      const row = getStock(p.symbol);
+      return row
+        ? {
+            ...p,
+            inUniverse: true,
+            mcap: row.mcap ?? p.mcap,
+            price: row.price ?? p.price,
+            sector: row.sector ?? null,
+            pe: row.pe ?? null,
+            ev_ebitda: row.ev_ebitda ?? null,
+            roic: row.roic ?? null,
+            gross_margin: row.gross_margin ?? null,
+            revenue_growth: row.revenue_growth ?? null,
+          }
+        : { ...p, inUniverse: false };
+    });
+    res.json({ symbol, peers: enriched });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/stocks/growth-history/:symbol — multi-year growth table. Cached 24h.
+router.get("/stocks/growth-history/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  const force = req.query.force === '1' || req.query.force === 'true';
+  try {
+    const growth = await cachedDetail(`growthhist:${symbol}`, 24 * 60 * 60 * 1000, () =>
+      fetchGrowthHistory(symbol), force
+    );
+    res.json({ symbol, growth });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

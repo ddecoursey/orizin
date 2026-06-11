@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { usePortfolioGoals } from '../hooks/usePortfolioGoals.js';
+import BrokeragePanel from '../components/BrokeragePanel.jsx';
 
 function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
   const [inputValue, setInputValue] = useState(value || '');
@@ -119,6 +120,10 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
                 )}
               </div>
             )}
+            {/* Brokerage scaffolding: simulated account linking + order tickets,
+                ready for real Plaid/Alpaca providers server-side. */}
+            <BrokeragePanel />
+
             {portfolios.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {portfolios.map((p) => (

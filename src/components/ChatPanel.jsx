@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import OriEmblem from "./OriEmblem.jsx";
+import { DONATE_URL, PRO_PRICE_LABEL, PRO_FEATURES } from "../lib/billing.js";
 
 function relTime(ts) {
   if (!ts) return "";
@@ -117,7 +118,45 @@ function pageHints(view, symbol) {
   };
 }
 
-export default function ChatPanel({ chat }) {
+// Upgrade card shown to free-tier users in place of the chat. Payment is
+// manual for now: pay via the donate link, then the admin flips the account
+// to Pro (User Management) — no card data ever touches this app.
+function ProPaywall() {
+  return (
+    <div className="m-3 rounded-xl border border-violet-800/50 bg-gradient-to-b from-violet-950/40 to-gray-900 p-4">
+      <div className="flex items-center gap-2 mb-2">
+        <OriEmblem className="w-7 h-7 text-violet-400" />
+        <div>
+          <div className="text-sm font-bold text-gray-100">Unlock Ori with Pro</div>
+          <div className="text-[11px] text-violet-300 font-semibold">{PRO_PRICE_LABEL}</div>
+        </div>
+      </div>
+      <ul className="space-y-1 mb-3">
+        {PRO_FEATURES.map((feat) => (
+          <li key={feat} className="text-[11px] text-gray-300 flex items-start gap-1.5">
+            <span className="text-violet-400 shrink-0">✦</span>
+            <span>{feat}</span>
+          </li>
+        ))}
+      </ul>
+      <a
+        href={DONATE_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block w-full text-center px-3 py-2 rounded-lg text-xs font-semibold text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all"
+      >
+        Upgrade — pay {PRO_PRICE_LABEL} via PayPal
+      </a>
+      <p className="text-[10px] text-gray-500 mt-2 leading-snug">
+        After paying, your account is upgraded by the administrator (usually
+        within a day). Include your account email in the payment note so we
+        know it's you.
+      </p>
+    </div>
+  );
+}
+
+export default function ChatPanel({ chat, canUseOri = true }) {
   const hints = pageHints(chat.view, chat.activeSymbol);
   const [input, setInput] = useState("");
   const [showRecall, setShowRecall] = useState(false);
@@ -359,7 +398,8 @@ export default function ChatPanel({ chat }) {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-2 lg:py-3 space-y-2 lg:space-y-3">
-        {chat.messages.length === 0 && (
+        {!canUseOri && <ProPaywall />}
+        {canUseOri && chat.messages.length === 0 && (
           <div className="text-center py-6 lg:py-10 text-gray-600">
             <OriEmblem className="w-10 h-10 mx-auto mb-2 text-violet-400/90" />
             <p className="text-xs font-medium text-gray-500 mb-1">
@@ -480,15 +520,15 @@ export default function ChatPanel({ chat }) {
               setHistIdx(null);
             }}
             onKeyDown={handleInputKeyDown}
-            placeholder="Ask about your stocks…"
-            disabled={chat.isStreaming}
+            placeholder={canUseOri ? "Ask about your stocks…" : "Ori is a Pro feature — upgrade to chat"}
+            disabled={chat.isStreaming || !canUseOri}
             className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2
               text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-blue-500
               disabled:opacity-50"
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || chat.isStreaming}
+            disabled={!input.trim() || chat.isStreaming || !canUseOri}
             className="px-3 py-2 bg-blue-600 text-white text-xs font-medium rounded-lg
               hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >

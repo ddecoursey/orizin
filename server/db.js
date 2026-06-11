@@ -146,7 +146,42 @@ try {
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     created_at    INTEGER,
-    is_admin      INTEGER DEFAULT 0
+    is_admin      INTEGER DEFAULT 0,
+    email         TEXT,
+    plan          TEXT DEFAULT 'free',   -- 'free' | 'pro'
+    plan_updated_at INTEGER
+  );
+
+  -- Brokerage scaffolding: linked external accounts (Plaid-style) and order
+  -- tickets (Alpaca-style). provider='simulated' until real integrations land.
+  CREATE TABLE IF NOT EXISTS linked_accounts (
+    id             TEXT PRIMARY KEY,        -- acct_<random>
+    user_id        TEXT NOT NULL,
+    provider       TEXT NOT NULL DEFAULT 'simulated',
+    institution_id TEXT,
+    institution    TEXT,
+    account_name   TEXT,
+    account_mask   TEXT,
+    status         TEXT DEFAULT 'linked',
+    cash           REAL DEFAULT 0,
+    holdings       TEXT DEFAULT '[]',       -- JSON [{ symbol, qty, avg_cost }]
+    created_at     INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS brokerage_orders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT NOT NULL,
+    account_id  TEXT NOT NULL,
+    symbol      TEXT NOT NULL,
+    side        TEXT NOT NULL,              -- 'buy' | 'sell'
+    qty         REAL NOT NULL,
+    type        TEXT NOT NULL DEFAULT 'market',  -- 'market' | 'limit'
+    limit_price REAL,
+    status      TEXT NOT NULL DEFAULT 'pending', -- pending|filled|cancelled|rejected
+    fill_price  REAL,
+    simulated   INTEGER DEFAULT 1,
+    created_at  INTEGER,
+    updated_at  INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS user_settings (
@@ -226,17 +261,30 @@ try {
   process.exit(1);
 }
 
-// Migrate users table if it was added later
+// Migrate users table if it was added later, and add account-system columns
+// (email login + free/pro plan) on databases created before they existed.
 try {
   const userCols = new Set(
     db.prepare("PRAGMA table_info(users)").all().map((r) => r.name),
   );
-  if (!userCols.has('username')) {
-    // Table didn't exist or is very old — the CREATE TABLE above should have handled it
-    console.log('[db] Users table ready');
+  const USER_COLS = [
+    ["email", "TEXT"],
+    ["plan", "TEXT DEFAULT 'free'"],
+    ["plan_updated_at", "INTEGER"],
+  ];
+  for (const [name, type] of USER_COLS) {
+    if (userCols.size > 0 && !userCols.has(name)) {
+      db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+      console.log(`[db] Migration: added column "${name}" to users`);
+    }
   }
+  // Partial unique index: many NULL emails are fine (legacy username-only
+  // accounts), but a real email may belong to only one account.
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_linked_accounts_user ON linked_accounts(user_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_brokerage_orders_user ON brokerage_orders(user_id, created_at DESC);`);
 } catch (e) {
-  // Ignore — table creation above should cover it
+  console.error('[db] users/brokerage migration failed:', e.message);
 }
 
 // Ensure the per-user chat index exists (covers fresh DBs created with the column
@@ -789,43 +837,76 @@ export function deleteChatSession(id, userId = 'default') {
 // ── User management (for secure multi-user auth) ───────────────────────────
 
 const insertUser = db.prepare(`
-  INSERT INTO users (username, password_hash, created_at, is_admin)
-  VALUES (?, ?, ?, ?)
+  INSERT INTO users (username, password_hash, created_at, is_admin, email, plan, plan_updated_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?)
 `);
 
 const getUserByUsernameStmt = db.prepare(`
   SELECT * FROM users WHERE username = ?
 `);
 
+const getUserByEmailStmt = db.prepare(`
+  SELECT * FROM users WHERE email = ? COLLATE NOCASE
+`);
+
 export function getUserByUsername(username) {
   return getUserByUsernameStmt.get(username);
 }
 
-export function createUser(username, password, isAdmin = false) {
+export function getUserByEmail(email) {
+  if (!email) return undefined;
+  return getUserByEmailStmt.get(String(email).trim());
+}
+
+export function createUser(username, password, isAdmin = false, email = null, plan = 'free') {
   const hash = bcrypt.hashSync(password, 10);
   const now = Date.now();
   try {
-    insertUser.run(username, hash, now, isAdmin ? 1 : 0);
+    insertUser.run(
+      username,
+      hash,
+      now,
+      isAdmin ? 1 : 0,
+      email ? String(email).trim().toLowerCase() : null,
+      plan === 'pro' ? 'pro' : 'free',
+      now,
+    );
     return { success: true };
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      return { success: false, error: 'Username already exists' };
+      return { success: false, error: 'An account with that username or email already exists' };
     }
     return { success: false, error: err.message };
   }
 }
 
-
-
-export function verifyUserPassword(username, password) {
-  const user = getUserByUsername(username);
+// Accepts a username OR an email as the identifier.
+export function verifyUserPassword(identifier, password) {
+  const user = getUserByUsername(identifier) || getUserByEmail(identifier);
   if (!user) return null;
   const valid = bcrypt.compareSync(password, user.password_hash);
-  return valid ? { id: user.id, username: user.username, isAdmin: !!user.is_admin } : null;
+  return valid
+    ? {
+        id: user.id,
+        username: user.username,
+        isAdmin: !!user.is_admin,
+        plan: user.plan === 'pro' ? 'pro' : 'free',
+      }
+    : null;
+}
+
+export function setUserPlan(username, plan) {
+  const next = plan === 'pro' ? 'pro' : 'free';
+  const info = db
+    .prepare('UPDATE users SET plan = ?, plan_updated_at = ? WHERE username = ?')
+    .run(next, Date.now(), username);
+  return info.changes > 0;
 }
 
 export function listUsers() {
-  return db.prepare('SELECT id, username, created_at, is_admin FROM users ORDER BY created_at').all();
+  return db
+    .prepare('SELECT id, username, email, plan, created_at, is_admin FROM users ORDER BY created_at')
+    .all();
 }
 
 export function userCount() {

@@ -15,6 +15,8 @@ router.get("/users", (req, res) => {
 
   const users = db.listUsers().map(u => ({
     username: u.username,
+    email: u.email || null,
+    plan: u.plan === 'pro' ? 'pro' : 'free',
     created_at: u.created_at,
     is_admin: !!u.is_admin
   }));
@@ -52,7 +54,9 @@ router.post("/users", (req, res) => {
   }
 });
 
-// PATCH /api/users/:username - Promote/demote a user's admin role (admin only)
+// PATCH /api/users/:username - Update a user's admin role and/or plan (admin only).
+// Body may contain { isAdmin } and/or { plan: 'free'|'pro' } — the plan switch
+// is how a paid (donate-link) subscription gets activated for now.
 router.patch("/users/:username", (req, res) => {
   try {
     const currentUser = db.getUserByUsername(req.userId);
@@ -61,21 +65,37 @@ router.patch("/users/:username", (req, res) => {
     }
 
     const username = req.params.username;
-    const isAdmin = !!(req.body && req.body.isAdmin);
-
     const target = db.getUserByUsername(username);
     if (!target) {
       return res.status(404).json({ error: "User not found" });
     }
 
-    // Don't allow removing the last remaining admin (would lock everyone out
-    // of user management).
-    if (!isAdmin && target.is_admin && db.adminCount() <= 1) {
-      return res.status(400).json({ error: "Cannot remove the last admin" });
+    const body = req.body || {};
+
+    if ('plan' in body) {
+      if (!['free', 'pro'].includes(body.plan)) {
+        return res.status(400).json({ error: "plan must be 'free' or 'pro'" });
+      }
+      db.setUserPlan(username, body.plan);
     }
 
-    db.setUserAdmin(username, isAdmin);
-    res.json({ ok: true, username, isAdmin });
+    if ('isAdmin' in body) {
+      const isAdmin = !!body.isAdmin;
+      // Don't allow removing the last remaining admin (would lock everyone out
+      // of user management).
+      if (!isAdmin && target.is_admin && db.adminCount() <= 1) {
+        return res.status(400).json({ error: "Cannot remove the last admin" });
+      }
+      db.setUserAdmin(username, isAdmin);
+    }
+
+    const updated = db.getUserByUsername(username);
+    res.json({
+      ok: true,
+      username,
+      isAdmin: !!updated.is_admin,
+      plan: updated.plan === 'pro' ? 'pro' : 'free',
+    });
   } catch (err) {
     console.error("[users] PATCH error:", err);
     res.status(500).json({ error: "Failed to update user" });

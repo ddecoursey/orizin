@@ -181,6 +181,13 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
   const sanitizedUrl = url.replace(/apikey=[^&]+/, 'apikey=***');
   const endpoint = endpointOf(url);
 
+  // Fail fast when no key is configured — every call would 401 anyway, and
+  // this keeps tests/dev-without-keys hermetic (no pointless network round
+  // trips, no retry storms).
+  if (!KEY()) {
+    throw new Error("FMP_API_KEY not configured");
+  }
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     await rateGate();
 
@@ -937,6 +944,158 @@ export async function fetchStockNews(symbol, { limit = 20 } = {}) {
       .filter((a) => a.title && a.url);
   } catch (e) {
     console.warn(`[FMP] stock-news ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// ── Deep Research fetchers (statements, filings, comp, peers, growth) ──────
+// All trimmed to the fields the Deep Research page renders, with `??`
+// fallbacks for FMP's occasional field-name drift, and [] on any failure so
+// the page degrades to its placeholder instead of erroring.
+
+export async function fetchIncomeStatements(symbol, { period = "annual", limit = 5 } = {}) {
+  const url = `${BASE}/income-statement?symbol=${symbol}&period=${period}&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map((d) => ({
+      date: d.date ?? null,
+      fiscalYear: d.fiscalYear ?? d.calendarYear ?? null,
+      revenue: n(d.revenue),
+      gross_profit: n(d.grossProfit),
+      operating_income: n(d.operatingIncome),
+      net_income: n(d.netIncome),
+      eps: n(d.epsDiluted ?? d.epsdiluted ?? d.eps),
+      ebitda: n(d.ebitda),
+    }));
+  } catch (e) {
+    console.warn(`[FMP] income-statement ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+export async function fetchBalanceSheets(symbol, { period = "annual", limit = 5 } = {}) {
+  const url = `${BASE}/balance-sheet-statement?symbol=${symbol}&period=${period}&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map((d) => ({
+      date: d.date ?? null,
+      fiscalYear: d.fiscalYear ?? d.calendarYear ?? null,
+      cash_and_st_investments: n(d.cashAndShortTermInvestments ?? d.cashAndCashEquivalents),
+      total_assets: n(d.totalAssets),
+      total_debt: n(d.totalDebt),
+      net_debt: n(d.netDebt),
+      total_liabilities: n(d.totalLiabilities),
+      total_equity: n(d.totalStockholdersEquity ?? d.totalEquity),
+    }));
+  } catch (e) {
+    console.warn(`[FMP] balance-sheet ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+export async function fetchCashFlows(symbol, { period = "annual", limit = 5 } = {}) {
+  const url = `${BASE}/cash-flow-statement?symbol=${symbol}&period=${period}&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map((d) => ({
+      date: d.date ?? null,
+      fiscalYear: d.fiscalYear ?? d.calendarYear ?? null,
+      operating_cash_flow: n(d.operatingCashFlow ?? d.netCashProvidedByOperatingActivities),
+      capex: n(d.capitalExpenditure),
+      free_cash_flow: n(d.freeCashFlow),
+      dividends_paid: n(d.commonDividendsPaid ?? d.dividendsPaid),
+      net_change_in_cash: n(d.netChangeInCash),
+    }));
+  } catch (e) {
+    console.warn(`[FMP] cash-flow ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Recent SEC filings (10-K / 10-Q / 8-K / …) with links to the documents.
+export async function fetchSecFilings(symbol, { limit = 20 } = {}) {
+  const to = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 548 * 24 * 3600 * 1000).toISOString().slice(0, 10); // ~18 months
+  const url = `${BASE}/sec-filings-search/symbol?symbol=${symbol}&from=${from}&to=${to}&page=0&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.slice(0, limit).map((f) => ({
+      date: (f.filingDate ?? f.filedDate ?? f.acceptedDate ?? "").slice(0, 10) || null,
+      form: f.formType ?? f.type ?? null,
+      link: f.finalLink ?? f.link ?? null,
+    })).filter((f) => f.form);
+  } catch (e) {
+    console.warn(`[FMP] sec-filings ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Named-executive compensation (latest reported years).
+export async function fetchExecutiveCompensation(symbol, { limit = 12 } = {}) {
+  const url = `${BASE}/governance-executive-compensation?symbol=${symbol}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((c) => ({
+        name: c.nameAndPosition ?? c.name ?? null,
+        year: n(c.year),
+        salary: n(c.salary),
+        bonus: n(c.bonus),
+        stock_awards: n(c.stockAward ?? c.stock_awards),
+        total: n(c.total),
+      }))
+      .filter((c) => c.name)
+      .sort((a, b) => (b.year || 0) - (a.year || 0))
+      .slice(0, limit);
+  } catch (e) {
+    console.warn(`[FMP] exec-comp ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Closest sector/size peers, for the side-by-side comparison panel.
+export async function fetchStockPeers(symbol) {
+  const url = `${BASE}/stock-peers?symbol=${symbol}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((p) => ({
+        symbol: p.symbol ?? null,
+        name: p.companyName ?? p.name ?? null,
+        price: n(p.price),
+        mcap: n(p.mktCap ?? p.marketCap),
+      }))
+      .filter((p) => p.symbol && p.symbol !== symbol)
+      .slice(0, 12);
+  } catch (e) {
+    console.warn(`[FMP] stock-peers ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Multi-year growth rates (revenue / EPS / FCF / op income), newest first.
+export async function fetchGrowthHistory(symbol, { limit = 6 } = {}) {
+  const url = `${BASE}/financial-growth?symbol=${symbol}&period=annual&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map((d) => ({
+      date: d.date ?? null,
+      fiscalYear: d.fiscalYear ?? d.calendarYear ?? null,
+      revenue_growth: n(d.revenueGrowth),
+      eps_growth: n(d.epsgrowth ?? d.epsGrowth),
+      fcf_growth: n(d.freeCashFlowGrowth),
+      op_income_growth: n(d.operatingIncomeGrowth),
+      net_income_growth: n(d.netIncomeGrowth),
+    }));
+  } catch (e) {
+    console.warn(`[FMP] growth-history ${symbol}:`, e.message);
     return [];
   }
 }

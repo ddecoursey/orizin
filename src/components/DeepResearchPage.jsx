@@ -2,6 +2,53 @@ import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
+import { useDeepResearch } from "../hooks/useDeepResearch.js";
+
+// Compact period-columns table for financial statements: one row per line
+// item, one column per fiscal year (newest first, up to `maxCols`).
+function StatementTable({ periods, lines, maxCols = 4 }) {
+  const cols = (periods || []).slice(0, maxCols);
+  if (!cols.length) return null;
+  const yearOf = (p) => p.fiscalYear || (p.date ? String(p.date).slice(0, 4) : "—");
+  return (
+    <div className="overflow-x-auto -mx-1 px-1">
+      <table className="w-full text-[11px]">
+        <thead>
+          <tr className="text-gray-500">
+            <th className="text-left font-medium py-1 pr-2"> </th>
+            {cols.map((p, i) => (
+              <th key={i} className="text-right font-semibold py-1 pl-3 whitespace-nowrap">{yearOf(p)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map(([label, key, type]) => (
+            <tr key={key} className="border-t border-gray-800/50">
+              <td className="py-1.5 pr-2 text-gray-500 whitespace-nowrap">{label}</td>
+              {cols.map((p, i) => {
+                const v = p[key];
+                const f = fmt(v, type);
+                const neg = typeof v === "number" && v < 0;
+                return (
+                  <td key={i} className={`py-1.5 pl-3 text-right font-mono whitespace-nowrap ${neg ? "text-red-400" : "text-gray-200"}`}>
+                    {f ?? <span className="text-gray-600">—</span>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const FORM_COLORS = {
+  "10-K": "bg-violet-900/50 text-violet-300",
+  "10-Q": "bg-blue-900/50 text-blue-300",
+  "8-K": "bg-amber-900/50 text-amber-300",
+  "4": "bg-gray-800 text-gray-400",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Deep Research — a comprehensive, single-stock research surface. This is the
@@ -69,6 +116,11 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
   const { profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart } = detail;
+
+  // Deep-research-only data (statements, filings, comp, peers, growth) — owned
+  // here since nothing outside this page needs it. Server caches make
+  // re-opening a symbol free.
+  const deep = useDeepResearch(symbol);
 
   const handleSearch = (stock) => {
     if (stock?.symbol) onSelectSymbol?.(stock.symbol);
@@ -284,14 +336,63 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             Tier 2 · Financial Statements & Estimates
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            <Panel title="Income Statement" tier="T2" soon>
-              <Placeholder note="Annual & quarterly income statements (revenue, margins, EPS) will appear here." />
+            <Panel title="Income Statement (annual)" tier="T2">
+              {deep.loadingStatements ? (
+                <Placeholder note="Loading income statement…" />
+              ) : deep.statements?.income?.length ? (
+                <StatementTable
+                  periods={deep.statements.income}
+                  lines={[
+                    ["Revenue", "revenue", "money"],
+                    ["Gross Profit", "gross_profit", "money"],
+                    ["Op Income", "operating_income", "money"],
+                    ["EBITDA", "ebitda", "money"],
+                    ["Net Income", "net_income", "money"],
+                    ["EPS (dil.)", "eps", "ratio"],
+                  ]}
+                />
+              ) : (
+                <Placeholder note="No income statement data available for this symbol." />
+              )}
             </Panel>
-            <Panel title="Balance Sheet" tier="T2" soon>
-              <Placeholder note="Assets, liabilities, equity, cash & debt over time." />
+
+            <Panel title="Balance Sheet (annual)" tier="T2">
+              {deep.loadingStatements ? (
+                <Placeholder note="Loading balance sheet…" />
+              ) : deep.statements?.balance?.length ? (
+                <StatementTable
+                  periods={deep.statements.balance}
+                  lines={[
+                    ["Cash & ST Inv", "cash_and_st_investments", "money"],
+                    ["Total Assets", "total_assets", "money"],
+                    ["Total Debt", "total_debt", "money"],
+                    ["Net Debt", "net_debt", "money"],
+                    ["Liabilities", "total_liabilities", "money"],
+                    ["Equity", "total_equity", "money"],
+                  ]}
+                />
+              ) : (
+                <Placeholder note="No balance sheet data available for this symbol." />
+              )}
             </Panel>
-            <Panel title="Cash Flow Statement" tier="T2" soon>
-              <Placeholder note="Operating, investing & financing cash flows; capex and FCF." />
+
+            <Panel title="Cash Flow (annual)" tier="T2">
+              {deep.loadingStatements ? (
+                <Placeholder note="Loading cash flow statement…" />
+              ) : deep.statements?.cashflow?.length ? (
+                <StatementTable
+                  periods={deep.statements.cashflow}
+                  lines={[
+                    ["Operating CF", "operating_cash_flow", "money"],
+                    ["CapEx", "capex", "money"],
+                    ["Free Cash Flow", "free_cash_flow", "money"],
+                    ["Dividends Paid", "dividends_paid", "money"],
+                    ["Net Δ Cash", "net_change_in_cash", "money"],
+                  ]}
+                />
+              ) : (
+                <Placeholder note="No cash flow data available for this symbol." />
+              )}
             </Panel>
 
             <Panel title="Price Target Consensus" tier="T2" span={1}>
@@ -308,8 +409,30 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               )}
             </Panel>
 
-            <Panel title="Latest SEC Filings" tier="T2" span={2} soon>
-              <Placeholder note="Recent 10-K / 10-Q / 8-K filings with links to the source documents." />
+            <Panel title="Latest SEC Filings" tier="T2" span={2}>
+              {deep.loadingFilings ? (
+                <Placeholder note="Loading SEC filings…" />
+              ) : deep.filings?.length ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 max-h-56 overflow-y-auto">
+                  {deep.filings.slice(0, 14).map((f, i) => (
+                    <div key={i} className="flex items-center gap-2 py-1.5 border-b border-gray-800/50 text-[11px]">
+                      <span className="text-gray-500 font-mono w-[74px] shrink-0">{f.date || "—"}</span>
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold shrink-0 ${FORM_COLORS[f.form] || "bg-gray-800 text-gray-400"}`}>
+                        {f.form}
+                      </span>
+                      {f.link ? (
+                        <a href={f.link} target="_blank" rel="noopener noreferrer" className="ml-auto text-blue-400 hover:text-blue-300 shrink-0">
+                          View →
+                        </a>
+                      ) : (
+                        <span className="ml-auto text-gray-700">—</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Placeholder note="No recent SEC filings found for this symbol (foreign issuers may file elsewhere)." />
+              )}
             </Panel>
           </div>
         </div>
@@ -346,16 +469,80 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               )}
             </Panel>
 
-            <Panel title="Executive Compensation" tier="T3" span={1} soon>
-              <Placeholder note="Named-executive pay (salary, bonus, equity) and trends." />
+            <Panel title="Executive Compensation" tier="T3" span={1}>
+              {deep.loadingExecComp ? (
+                <Placeholder note="Loading executive compensation…" />
+              ) : deep.execComp?.length ? (
+                <div className="space-y-1.5 max-h-64 overflow-y-auto">
+                  {deep.execComp.slice(0, 8).map((c, i) => (
+                    <div key={i} className="flex items-center justify-between gap-2 text-[10px] border-b border-gray-800/50 pb-1">
+                      <div className="min-w-0">
+                        <div className="text-gray-300 truncate" title={c.name || ""}>{c.name || "—"}</div>
+                        <div className="text-gray-600">{c.year || ""}</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-gray-200 font-mono">{fmt(c.total, "money") ?? "—"}</div>
+                        <div className="text-gray-600 font-mono">
+                          {c.salary != null ? `${fmt(c.salary, "money")} salary` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Placeholder note="No executive compensation data for this symbol." />
+              )}
             </Panel>
 
-            <Panel title="Peer Comparison" tier="T3" span={1} soon>
-              <Placeholder note="Side-by-side valuation & quality vs. closest sector peers." />
+            <Panel title="Peer Comparison" tier="T3" span={1}>
+              {deep.loadingPeers ? (
+                <Placeholder note="Loading peers…" />
+              ) : deep.peers?.length ? (
+                <div className="space-y-1 max-h-64 overflow-y-auto">
+                  <div className="flex items-center text-[9px] uppercase tracking-wider text-gray-600 pb-1">
+                    <span className="w-16">Sym</span>
+                    <span className="flex-1 text-right">MCap</span>
+                    <span className="w-14 text-right">P/E</span>
+                    <span className="w-14 text-right">ROIC</span>
+                  </div>
+                  {deep.peers.slice(0, 10).map((p) => (
+                    <button
+                      key={p.symbol}
+                      onClick={() => onSelectSymbol?.(p.symbol)}
+                      className="w-full flex items-center text-[11px] py-1 border-b border-gray-800/50 hover:bg-gray-800/40 rounded transition-colors text-left"
+                      title={p.name || p.symbol}
+                    >
+                      <span className="w-16 font-bold text-gray-200">{p.symbol}</span>
+                      <span className="flex-1 text-right font-mono text-gray-400">{fmt(p.mcap, "money") ?? "—"}</span>
+                      <span className="w-14 text-right font-mono text-gray-400">{fmt(p.pe, "x") ?? "—"}</span>
+                      <span className="w-14 text-right font-mono text-gray-400">{fmt(p.roic, "pct") ?? "—"}</span>
+                    </button>
+                  ))}
+                  <div className="text-[9px] text-gray-600 pt-1">Click a peer to open its Deep Research page.</div>
+                </div>
+              ) : (
+                <Placeholder note="No peer list available for this symbol." />
+              )}
             </Panel>
 
-            <Panel title="Financial Statement Growth" tier="T3" span={3} soon>
-              <Placeholder note="Multi-year growth rates for revenue, EPS, FCF, operating income and more." />
+            <Panel title="Financial Statement Growth" tier="T3" span={3}>
+              {deep.loadingGrowth ? (
+                <Placeholder note="Loading growth history…" />
+              ) : deep.growthHistory?.length ? (
+                <StatementTable
+                  periods={deep.growthHistory}
+                  maxCols={6}
+                  lines={[
+                    ["Revenue Growth", "revenue_growth", "pct"],
+                    ["EPS Growth", "eps_growth", "pct"],
+                    ["FCF Growth", "fcf_growth", "pct"],
+                    ["Op Income Growth", "op_income_growth", "pct"],
+                    ["Net Income Growth", "net_income_growth", "pct"],
+                  ]}
+                />
+              ) : (
+                <Placeholder note="No multi-year growth data for this symbol." />
+              )}
             </Panel>
           </div>
         </div>
@@ -373,7 +560,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
         </section>
 
         <div className="text-center text-[10px] text-gray-600 pt-2 pb-6">
-          Deep Research is being expanded — more data is added to each tier over time.
+          Data from Financial Modeling Prep · statements & filings cached server-side and refreshed daily.
         </div>
       </div>
     </div>

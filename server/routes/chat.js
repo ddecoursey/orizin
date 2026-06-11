@@ -6,11 +6,27 @@ import {
   deleteChatSession,
   getUserSettings,
   patchUserSettings,
+  getUserByUsername,
 } from "../db.js";
 import { fmt } from "./prompt-helpers.js";
 import { marketStatusLine } from "../marketHours.js";
 
 const router = Router();
+
+// ── Plan gating ─────────────────────────────────────────────────────────────
+// Ori (the chat itself) is the Pro-tier feature: free accounts get the full
+// screener/research experience, Pro ($10/month) unlocks Ori. Admins always
+// have access, as do the legacy single-user/env-auth modes (no user rows).
+function hasOriAccess(userId) {
+  if (!userId || userId === "default") return true; // auth disabled (local dev)
+  try {
+    const user = getUserByUsername(userId);
+    if (!user) return true; // legacy AUTH_PASSWORD session — no DB user rows
+    return !!user.is_admin || user.plan === "pro";
+  } catch {
+    return false;
+  }
+}
 
 // ── Ori's persistent per-user memory ───────────────────────────────────────
 // Durable facts Ori has learned about the user (risk tolerance, horizon,
@@ -592,6 +608,13 @@ router.post("/chat", async (req, res) => {
   const rawMessage = typeof req.body?.message === "string" ? req.body.message.trim() : "";
   if (!rawMessage) {
     return res.status(400).json({ error: "Message is required" });
+  }
+
+  if (!hasOriAccess(req.userId)) {
+    return res.status(402).json({
+      error: "Ori is a Pro feature. Upgrade for $10/month to chat with Ori.",
+      code: "upgrade_required",
+    });
   }
 
   const apiKey = process.env.GEMINI_API_KEY;

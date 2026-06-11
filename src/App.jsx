@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from "react";
 import Starfield from "./components/Starfield";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
@@ -12,7 +12,9 @@ import StockTable from "./components/StockTable.jsx";
 import ScorecardGrid from "./components/ScorecardGrid.jsx";
 import ProgressBar from "./components/ProgressBar.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
-import LoginPage from "./pages/LoginPage.jsx";
+// Lazy: the landing page (and framer-motion with it) is only downloaded by
+// signed-out visitors — signed-in users go straight to the app bundle.
+const HomePage = lazy(() => import("./pages/HomePage.jsx"));
 import UsersModal from "./components/UsersModal.jsx";
 import StockDetailModal from "./components/StockDetailModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
@@ -28,6 +30,7 @@ export default function App() {
   const [authState, setAuthState] = useState("checking");
   const [currentUser, setCurrentUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [plan, setPlan] = useState("free");
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -39,6 +42,7 @@ export default function App() {
         const data = await r.json().catch(() => ({}));
         setCurrentUser(data.user || "default");
         setIsAdmin(!!data.isAdmin);
+        setPlan(data.plan === "pro" ? "pro" : "free");
         setAuthState("authed");
       })
       .catch(() => setAuthState("login"));
@@ -52,9 +56,11 @@ export default function App() {
       const data = await r.json();
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
+      setPlan(data.plan === "pro" ? "pro" : "free");
     } catch {
       setCurrentUser("default");
       setIsAdmin(false);
+      setPlan("free");
     }
     setAuthState("authed");
   }
@@ -74,14 +80,23 @@ export default function App() {
     return <div className="h-screen bg-gray-950" />;
   }
   if (authState === "login") {
-    return <LoginPage onSuccess={handleLoginSuccess} />;
+    // Signed-out visitors land on the marketing page (hero, features,
+    // pricing) with sign-in / create-account / subscribe entry points.
+    return (
+      <Suspense fallback={<div className="h-screen bg-gray-950" />}>
+        <HomePage onAuthed={handleLoginSuccess} />
+      </Suspense>
+    );
   }
   // key forces MainApp to remount when the user changes, so all the
   // localStorage-backed state (pins, tabs, theme) re-reads under the new key.
-  return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} onLogout={handleLogout} />;
+  return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} plan={plan} onLogout={handleLogout} />;
 }
 
-function MainApp({ currentUser, isAdmin, onLogout }) {
+function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
+  // Ori access: Pro plan or admin. The server enforces this on /api/chat too —
+  // this flag just drives the paywall UI.
+  const canUseOri = isAdmin || plan === "pro";
   const user = currentUser || "default";
   const themeKey = `theme:${user}`;
   const sidebarKey = `sidebarCollapsed:${user}`;
@@ -834,7 +849,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
           />
         )}
 
-        {chat.isOpen && <ChatPanel chat={chat} />}
+        {chat.isOpen && <ChatPanel chat={chat} canUseOri={canUseOri} />}
       </div>
 
       <Footer news={news} />
@@ -867,6 +882,7 @@ function MainApp({ currentUser, isAdmin, onLogout }) {
           onClose={() => setShowUsersModal(false)}
           currentUser={currentUser}
           isAdmin={isAdmin}
+          plan={plan}
           mode={usersModalMode}
         />
       )}

@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
+import { DONATE_URL } from "../lib/billing.js";
 
 // Slim app footer: trademark, contact, donation, and social links.
 const CONTACT_EMAIL = "dl.decour@gmail.com";
-const DONATE_URL =
-  "https://www.paypal.com/donate/?business=WSFPNM5GZ25GU&no_recurring=0&item_name=Hope+you+found+it+useful%21&currency_code=USD";
 // Socials go nowhere for now — wire up real URLs later.
 const SOCIALS = [
   { name: "X", href: "#", icon: XIcon },

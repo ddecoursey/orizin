@@ -11,6 +11,7 @@ import stocksRouter, { getDetailCacheStats } from './routes/stocks.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
+import brokerageRouter from './routes/brokerage.js';
 import * as db from './db.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
@@ -39,7 +40,11 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'"], // Allow for Vite dev + inline scripts if needed
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      // Google Fonts: the stylesheet comes from fonts.googleapis.com and the
+      // font files from fonts.gstatic.com — without these the brand font
+      // (Space Grotesk, linked in index.html) was silently blocked in prod.
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
       imgSrc: ["'self'", "data:", "https:"],
     },
   },
@@ -72,10 +77,13 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-// Rate limit login attempts (protect against brute force)
+// Rate limit auth attempts (protect against brute force). Strict in
+// production; relaxed outside it so local development and the regression
+// suite (dozens of login/signup calls from one IP) don't trip it.
+const isProd = process.env.NODE_ENV === 'production' || !!process.env.RAILWAY_ENVIRONMENT;
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // limit each IP to 10 login requests per window
+  max: isProd ? 10 : 1000,
   message: { error: 'Too many login attempts. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -238,11 +246,12 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
 
   let match = null;
 
-  // Prefer database users (hashed passwords) when available
+  // Prefer database users (hashed passwords); the identifier may be a
+  // username or an email address.
   try {
     const dbUser = db.verifyUserPassword(username, password);
     if (dbUser) {
-      match = { user: dbUser.username, isAdmin: !!dbUser.isAdmin };
+      match = { user: dbUser.username, isAdmin: !!dbUser.isAdmin, plan: dbUser.plan || 'free' };
     }
   } catch (e) {
     console.error('[auth] Error verifying user from DB:', e.message);
@@ -252,7 +261,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   const hasUsersNow = (db.userCount?.() ?? 0) > 0;
   if (!match && !hasUsersNow && AUTH_PASSWORD) {
     if (safeEqual(username, AUTH_USER) && safeEqual(password, AUTH_PASSWORD)) {
-      match = { user: AUTH_USER, isAdmin: true };
+      match = { user: AUTH_USER, isAdmin: true, plan: 'pro' };
     }
   }
 
@@ -269,7 +278,47 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
     maxAgeMs: SESSION_MAX_AGE_MS,
     secure: req.secure,
   }));
-  res.json({ ok: true, user: match.user, isAdmin: !!match.isAdmin });
+  res.json({ ok: true, user: match.user, isAdmin: !!match.isAdmin, plan: match.plan });
+});
+
+// Self-service account creation (email + password). The very first account on
+// an empty database must go through /setup-first-admin instead, so a fresh
+// deployment can't be claimed by a random visitor signing up as a normal user.
+// Disable entirely with SIGNUPS_ENABLED=false.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+app.post('/api/auth/signup', loginLimiter, (req, res) => {
+  if (process.env.SIGNUPS_ENABLED === 'false') {
+    return res.status(403).json({ error: 'Sign-ups are disabled. Contact the administrator for an account.' });
+  }
+  if ((db.userCount?.() ?? 0) === 0) {
+    return res.status(400).json({ error: 'No accounts exist yet — use the first-admin setup instead.' });
+  }
+
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'A valid email address is required' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  if (db.getUserByEmail(email) || db.getUserByUsername(email)) {
+    return res.status(400).json({ error: 'An account with that email already exists' });
+  }
+
+  // Email doubles as the username/login identifier for self-service accounts.
+  const result = db.createUser(email, password, false, email, 'free');
+  if (!result.success) {
+    return res.status(400).json({ error: result.error || 'Failed to create account' });
+  }
+
+  const token = signToken({ user: email, isAdmin: false, exp: Date.now() + SESSION_MAX_AGE_MS });
+  res.set('Set-Cookie', buildCookie(COOKIE_NAME, token, {
+    maxAgeMs: SESSION_MAX_AGE_MS,
+    secure: req.secure,
+  }));
+  res.json({ ok: true, user: email, isAdmin: false, plan: 'free' });
 });
 
 app.post('/api/auth/logout', (req, res) => {
@@ -282,27 +331,37 @@ app.post('/api/auth/logout', (req, res) => {
 
 app.get('/api/auth/me', (req, res) => {
   const currentlyAuthEnabled = isAuthEnabled();
-  if (!currentlyAuthEnabled) return res.json({ user: 'default', authenticated: true, authEnabled: false });
+  if (!currentlyAuthEnabled) {
+    return res.json({ user: 'default', authenticated: true, authEnabled: false, plan: 'pro', isAdmin: true });
+  }
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ authenticated: false, authEnabled: true });
 
   // Prefer the isAdmin flag that was embedded in the token at login time.
   // Fall back to a DB lookup only if it's missing (old tokens).
-  let isAdmin = typeof payload.isAdmin === 'boolean' 
-    ? payload.isAdmin 
+  let isAdmin = typeof payload.isAdmin === 'boolean'
+    ? payload.isAdmin
     : false;
 
-  if (typeof payload.isAdmin !== 'boolean') {
-    try {
-      const dbUser = db.getUserByUsername(payload.user);
-      isAdmin = !!(dbUser && dbUser.is_admin);
-    } catch (e) {
-      console.error('[auth] Error looking up user in /me:', e.message);
+  // Plan is always read fresh — it changes when the admin activates a paid
+  // account, and the user shouldn't have to log out/in to get Ori.
+  let plan = 'free';
+  let email = null;
+  try {
+    const dbUser = db.getUserByUsername(payload.user);
+    if (dbUser) {
+      plan = dbUser.plan === 'pro' ? 'pro' : 'free';
+      email = dbUser.email || null;
+      if (typeof payload.isAdmin !== 'boolean') isAdmin = !!dbUser.is_admin;
+    } else if (typeof payload.isAdmin === 'boolean' && payload.isAdmin) {
+      plan = 'pro'; // legacy env-auth admin
     }
+  } catch (e) {
+    console.error('[auth] Error looking up user in /me:', e.message);
   }
 
-  res.json({ user: payload.user, isAdmin, authenticated: true, authEnabled: true });
+  res.json({ user: payload.user, isAdmin, plan, email, authenticated: true, authEnabled: true });
 });
 
 // Public status endpoint — used by the login page to decide whether to show
@@ -313,6 +372,7 @@ app.get('/api/auth/status', (req, res) => {
     needsSetup: userCount === 0,
     authEnabled: isAuthEnabled(),
     hasUsers: userCount > 0,
+    signupsEnabled: process.env.SIGNUPS_ENABLED !== 'false' && userCount > 0,
   });
 });
 
@@ -384,6 +444,7 @@ app.use('/api', stocksRouter);
 app.use('/api', chatRouter);
 app.use('/api', usersRouter);
 app.use('/api', settingsRouter);
+app.use('/api', brokerageRouter);
 
 // Global error handler for all /api routes — ensures we never return HTML.
 // (Express identifies error middleware by arity, so the 4th param stays.)

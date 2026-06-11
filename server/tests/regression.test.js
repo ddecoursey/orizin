@@ -290,12 +290,56 @@ test('chat requires a message and a configured key', async () => {
   });
   assert.equal(noMsg.status, 400);
 
+  // Admins bypass the plan gate, so with no Gemini key configured they reach
+  // the 503 "key not configured" check.
   const noKey = await fetch(api('/api/chat'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ message: 'hello' }),
+  });
+  assert.equal(noKey.status, 503);
+});
+
+test('Ori is gated behind the Pro plan (402 for free users, open after upgrade)', async () => {
+  // viewer is a free-tier non-admin → 402 with upgrade code.
+  const gated = await fetch(api('/api/chat'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie: userCookie },
     body: JSON.stringify({ message: 'hello' }),
   });
-  assert.equal(noKey.status, 503);
+  assert.equal(gated.status, 402);
+  const body = await json(gated);
+  assert.equal(body.code, 'upgrade_required');
+
+  // Admin flips the plan to pro (the manual donate-link activation step)…
+  const patch = await fetch(api('/api/users/viewer'), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ plan: 'pro' }),
+  });
+  assert.equal((await json(patch)).plan, 'pro');
+
+  // …and the same user now clears the gate (503 = stopped at the missing
+  // Gemini key, i.e. past the paywall).
+  const opened = await fetch(api('/api/chat'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ message: 'hello' }),
+  });
+  assert.equal(opened.status, 503);
+
+  // Restore to free for the remaining tests, and reject junk plans.
+  await fetch(api('/api/users/viewer'), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ plan: 'free' }),
+  });
+  const junk = await fetch(api('/api/users/viewer'), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ plan: 'enterprise' }),
+  });
+  assert.equal(junk.status, 400);
 });
 
 test('chat sessions list is per user and empty initially', async () => {
@@ -412,6 +456,175 @@ test('unknown API routes return JSON 404, never HTML', async () => {
   assert.equal(res.status, 404);
   const body = await json(res);
   assert.equal(body.error, 'API route not found');
+});
+
+// ── Account creation (email signup) ─────────────────────────────────────────
+
+test('auth status advertises signupsEnabled once users exist', async () => {
+  const body = await json(await fetch(api('/api/auth/status')));
+  assert.equal(body.signupsEnabled, true);
+});
+
+test('email signup creates a free account and logs it in', async () => {
+  const badEmail = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'not-an-email', password: 'longenough1' }),
+  });
+  assert.equal(badEmail.status, 400);
+
+  const shortPw = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'new@example.com', password: 'short' }),
+  });
+  assert.equal(shortPw.status, 400);
+
+  const ok = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'New@Example.com', password: 'longenough1' }),
+  });
+  const body = await json(ok);
+  assert.equal(ok.status, 200);
+  assert.equal(body.user, 'new@example.com'); // normalized to lowercase
+  assert.equal(body.plan, 'free');
+  const signupCookie = cookieFrom(ok);
+
+  const me = await json(await fetch(api('/api/auth/me'), { headers: { cookie: signupCookie } }));
+  assert.equal(me.user, 'new@example.com');
+  assert.equal(me.plan, 'free');
+  assert.equal(me.isAdmin, false);
+
+  // Duplicate (case-insensitive) is rejected.
+  const dup = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'NEW@example.com', password: 'longenough1' }),
+  });
+  assert.equal(dup.status, 400);
+
+  // And login works with the email as the identifier.
+  const login = await fetch(api('/api/auth/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: 'new@example.com', password: 'longenough1' }),
+  });
+  assert.equal(login.status, 200);
+});
+
+// ── Deep Research endpoints (degrade cleanly without an FMP key) ────────────
+
+test('deep research endpoints return empty datasets without an FMP key', async () => {
+  const stmts = await json(await fetch(api('/api/stocks/statements/AAPL'), { headers: { cookie: userCookie } }));
+  assert.deepEqual(stmts.income, []);
+  assert.deepEqual(stmts.balance, []);
+  assert.deepEqual(stmts.cashflow, []);
+
+  const filings = await json(await fetch(api('/api/stocks/filings/AAPL'), { headers: { cookie: userCookie } }));
+  assert.deepEqual(filings.filings, []);
+
+  const comp = await json(await fetch(api('/api/stocks/exec-comp/AAPL'), { headers: { cookie: userCookie } }));
+  assert.deepEqual(comp.compensation, []);
+
+  const peers = await json(await fetch(api('/api/stocks/peers/AAPL'), { headers: { cookie: userCookie } }));
+  assert.deepEqual(peers.peers, []);
+
+  const growth = await json(await fetch(api('/api/stocks/growth-history/AAPL'), { headers: { cookie: userCookie } }));
+  assert.deepEqual(growth.growth, []);
+});
+
+// ── Brokerage scaffolding (simulated provider) ──────────────────────────────
+
+let brokerageAccountId = null;
+
+test('brokerage institutions list reports the simulated provider', async () => {
+  const body = await json(await fetch(api('/api/brokerage/institutions'), { headers: { cookie: userCookie } }));
+  assert.equal(body.simulated, true);
+  assert.ok(body.institutions.length >= 4);
+});
+
+test('linking a simulated account creates a sandbox with cash', async () => {
+  const res = await fetch(api('/api/brokerage/link'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ institutionId: 'robinhood' }),
+  });
+  const body = await json(res);
+  assert.equal(res.status, 200);
+  assert.equal(body.simulated, true);
+  assert.equal(body.account.institution, 'Robinhood');
+  assert.ok(body.account.cash > 0);
+  brokerageAccountId = body.account.id;
+
+  const unknown = await fetch(api('/api/brokerage/link'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ institutionId: 'not-a-bank' }),
+  });
+  assert.equal(unknown.status, 400);
+
+  const accounts = await json(await fetch(api('/api/brokerage/accounts'), { headers: { cookie: userCookie } }));
+  assert.equal(accounts.accounts.length, 1);
+  assert.ok(Array.isArray(accounts.accounts[0].positions));
+
+  // Other users can't see or trade this account.
+  const adminView = await json(await fetch(api('/api/brokerage/accounts'), { headers: { cookie: adminCookie } }));
+  assert.equal(adminView.accounts.length, 0);
+});
+
+test('limit orders queue as pending and can be cancelled', async () => {
+  const place = await fetch(api('/api/brokerage/orders'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ accountId: brokerageAccountId, symbol: 'AAPL', side: 'buy', qty: 5, type: 'limit', limitPrice: 150 }),
+  });
+  const placed = await json(place);
+  assert.equal(place.status, 200);
+  assert.equal(placed.order.status, 'pending');
+
+  const orders = await json(await fetch(api('/api/brokerage/orders'), { headers: { cookie: userCookie } }));
+  assert.ok(orders.orders.some((o) => o.id === placed.order.id));
+
+  const cancel = await fetch(api(`/api/brokerage/orders/${placed.order.id}`), {
+    method: 'DELETE',
+    headers: { cookie: userCookie },
+  });
+  assert.equal((await json(cancel)).order.status, 'cancelled');
+
+  // A second cancel is rejected (not pending anymore).
+  const again = await fetch(api(`/api/brokerage/orders/${placed.order.id}`), {
+    method: 'DELETE',
+    headers: { cookie: userCookie },
+  });
+  assert.equal(again.status, 400);
+});
+
+test('market orders without a live price are rejected; account access is scoped', async () => {
+  // Empty stocks table → no live price → simulated market order rejects.
+  const res = await fetch(api('/api/brokerage/orders'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ accountId: brokerageAccountId, symbol: 'ZZZQ', side: 'buy', qty: 1, type: 'market' }),
+  });
+  assert.equal(res.status, 400);
+  const body = await json(res);
+  assert.equal(body.order.status, 'rejected');
+
+  // Another user can't trade on this account id.
+  const foreign = await fetch(api('/api/brokerage/orders'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ accountId: brokerageAccountId, symbol: 'AAPL', side: 'buy', qty: 1, type: 'market' }),
+  });
+  assert.equal(foreign.status, 404);
+
+  // Unlink cleans up.
+  const del = await fetch(api(`/api/brokerage/accounts/${brokerageAccountId}`), {
+    method: 'DELETE',
+    headers: { cookie: userCookie },
+  });
+  assert.equal((await json(del)).ok, true);
 });
 
 // ── Market hours (pure unit tests, DST both sides) ──────────────────────────
