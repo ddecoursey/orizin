@@ -1,6 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from "react";
-import { LazyMotion, domAnimation, m, useReducedMotion } from "./lib/motion.js";
-import OriEmblem from "./components/OriEmblem.jsx";
+import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from "./lib/motion.js";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
 import { useStockDetail } from "./hooks/useStockDetail.js";
@@ -143,6 +142,18 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
     setDetailStock(null);
     setDetailStock2(null);
     setCurrentView("deep-research");
+  };
+
+  // Top-nav navigation. The quick-overview company panes are a screener feature,
+  // so leaving for Deep Research closes them (they shouldn't carry over, and
+  // Deep Research owns the full width).
+  const navigateTo = (view) => {
+    if (view === "deep-research") {
+      setDetailStock(null);
+      setDetailStock2(null);
+      setPickingSecond(false);
+    }
+    setCurrentView(view);
   };
 
   // Track whether enough time has passed to show the full error UI.
@@ -562,24 +573,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
     }
   };
 
-  // Ori launch: clicking the floating button plays a short "fly up into the
-  // panel" arc before the chat opens. Reduced-motion users get an instant open.
-  const [oriLaunching, setOriLaunching] = useState(false);
-  const oriLaunchTimer = useRef(null);
+  // Ori launch: just open the chat. The planet's orbit-out is driven by the
+  // AnimatePresence exit on the floating button (the mirror image of its
+  // orbit-in entry), so opening and closing animate identically in reverse.
   const launchOri = () => {
-    if (chat.isOpen || oriLaunching) return;
-    if (reduceMotion) {
-      chat.setIsOpen(true);
-      return;
-    }
-    setOriLaunching(true);
-    oriLaunchTimer.current = setTimeout(() => {
-      chat.setIsOpen(true);
-      setOriLaunching(false);
-    }, 560);
+    if (chat.isOpen) return;
+    chat.setIsOpen(true);
   };
-
-  useEffect(() => () => clearTimeout(oriLaunchTimer.current), []);
 
   return (
     <LazyMotion features={domAnimation} strict>
@@ -607,7 +607,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
         onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
         onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}
         currentView={currentView}
-        onNavigate={setCurrentView}
+        onNavigate={navigateTo}
         stocks={stocks}
         onSearchSelect={handleSearchSelect}
         portfolioSummary={{
@@ -852,7 +852,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
           )}
         </div>
 
-        {detailRow && (
+        {currentView !== 'deep-research' && detailRow && (
           <StockDetailModal
             row={detailRow}
             symbol={detailStock?.symbol}
@@ -885,7 +885,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
           />
         )}
 
-        {detailRow2 && (
+        {currentView !== 'deep-research' && detailRow2 && (
           <StockDetailModal
             row={detailRow2}
             symbol={detailStock2?.symbol}
@@ -913,76 +913,124 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
           />
         )}
 
-        {chat.isOpen && <ChatPanel chat={chat} canUseOri={canUseOri} />}
+        {chat.isOpen && (
+          <ChatPanel chat={chat} canUseOri={canUseOri} floating={!!(detailStock && detailStock2)} />
+        )}
       </div>
 
       <Footer news={news} />
 
-      {/* Floating Ori button — slides left to clear the detail pane (w-96) when it's open. */}
-      <div
-        className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
-          ${chat.isOpen ? 'right-6' : detailStock2 ? 'right-6 lg:right-[49.5rem]' : detailStock ? 'right-6 lg:right-[25.5rem]' : 'right-6'}
-          ${chat.isOpen ? 'hidden' : oriLaunching ? 'block' : 'block animate-ori-float'}`}
-      >
-        <m.button
-          onClick={launchOri}
-          whileHover={reduceMotion || oriLaunching ? undefined : { scale: 1.05 }}
-          whileTap={reduceMotion || oriLaunching ? undefined : { scale: 0.95 }}
-          animate={
-            oriLaunching
-              ? {
-                  // Anticipation squash, then swing left and arc up-right —
-                  // toward where the chat panel slides in — shrinking and
-                  // fading out like a launch into orbit.
-                  x: [0, 0, -26, 14, 64],
-                  y: [0, 8, -48, -160, -270],
-                  scale: [1, 0.9, 1.1, 0.65, 0.16],
-                  rotate: [0, -4, -22, 10, 34],
-                  opacity: [1, 1, 1, 0.95, 0],
-                }
-              : { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 }
-          }
-          transition={
-            oriLaunching
-              ? { duration: 0.58, times: [0, 0.16, 0.42, 0.74, 1], ease: "easeIn" }
-              : { duration: 0.15 }
-          }
-          className="group flex items-center gap-1.5 h-12 pl-3 pr-4 rounded-full cursor-pointer
-            bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 text-white
-            ring-1 ring-white/25 animate-ori-glow shadow-lg shadow-indigo-500/30
-            focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
-          title="Open Ori Chat"
-          aria-label="Open Ori Chat"
-        >
-          <OriEmblem className="w-6 h-6" />
-          <span
-            className="text-[13px] font-semibold tracking-[1px]"
-            style={{
-              fontFamily: '"Space Grotesk", system-ui, sans-serif',
-              fontWeight: 600,
-            }}
+      {/* Floating Ori button — a little planet that orbits up into the chat panel
+          on open and settles back down from orbit on close. Slides left to clear
+          the company detail pane(s) when open. */}
+      <AnimatePresence>
+        {!chat.isOpen && (
+          <m.div
+            key="ori-fab"
+            className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
+              ${detailStock2 ? 'right-6 lg:right-[49.5rem]' : detailStock ? 'right-6 lg:right-[25.5rem]' : 'right-6'}`}
+            // Open and close are mirror images: the planet orbits in from the
+            // upper-right on mount (close) and orbits back out the same way on
+            // unmount (open), using the same spring.
+            initial={reduceMotion ? false : { opacity: 0, scale: 0.2, x: 70, y: -210, rotate: 40 }}
+            animate={{ opacity: 1, scale: 1, x: 0, y: 0, rotate: 0 }}
+            exit={reduceMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, scale: 0.2, x: 70, y: -210, rotate: 40 }}
+            transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 170, damping: 18, mass: 0.9 }}
           >
-            Ori
-          </span>
-        </m.button>
+            <m.button
+              onClick={launchOri}
+              whileHover={reduceMotion ? undefined : { scale: 1.1 }}
+              whileTap={reduceMotion ? undefined : { scale: 0.92 }}
+              animate={reduceMotion ? { y: 0 } : { y: [0, -6, 0] }}
+              transition={reduceMotion ? { duration: 0 } : { y: { duration: 3.6, repeat: Infinity, ease: "easeInOut" } }}
+              className="group relative grid place-items-center w-16 h-16 cursor-pointer rounded-full
+                focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
+              title="Ask Ori — your AI analyst"
+              aria-label="Ask Ori — open the AI chat"
+            >
+              {/* Pulsing aura — draws the eye to the button */}
+              {!reduceMotion && (
+                <m.span
+                  aria-hidden="true"
+                  className="absolute -inset-1.5 -z-10 rounded-full"
+                  style={{ background: "radial-gradient(circle, rgba(129,140,248,0.6) 0%, rgba(129,140,248,0) 70%)" }}
+                  animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.85, 0.4] }}
+                  transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
+                />
+              )}
 
-        {/* Star trail left behind during the launch */}
-        {oriLaunching &&
-          [0, 1, 2].map((i) => (
-            <m.span
-              key={i}
-              className="absolute left-1/2 top-1/2 w-1.5 h-1.5 rounded-full bg-violet-300 pointer-events-none"
-              initial={{ opacity: 0, x: 0, y: 0, scale: 1 }}
-              animate={{
-                opacity: [0, 0.9, 0],
-                x: [0, -16 - i * 9, 34 - i * 14],
-                y: [0, -55 - i * 28, -165 - i * 45],
-                scale: [1, 0.8, 0.25],
-              }}
-              transition={{ duration: 0.5, delay: 0.12 + i * 0.07, ease: "easeIn" }}
-            />
-          ))}
-      </div>
+              {/* Orbital ring (behind the planet) */}
+              <svg
+                viewBox="0 0 64 64"
+                className="absolute inset-0 h-full w-full overflow-visible pointer-events-none"
+                fill="none"
+              >
+                <ellipse
+                  cx="32" cy="32" rx="30" ry="8.5"
+                  transform="rotate(-22 32 32)"
+                  stroke="rgba(165,180,252,0.75)" strokeWidth="2.5"
+                />
+              </svg>
+
+              {/* Planet sphere with the Ori wordmark on its face */}
+              <span
+                className="relative grid h-12 w-12 place-items-center rounded-full shadow-lg shadow-indigo-500/40 ring-1 ring-white/25 transition-shadow duration-300 group-hover:shadow-indigo-400/70"
+                style={{ background: "radial-gradient(circle at 34% 28%, #e0e7ff 0%, #a5b4fc 30%, #6366f1 62%, #3730a3 100%)" }}
+              >
+                {/* sphere sheen — light from the upper-left */}
+                <span className="absolute left-[18%] top-[16%] h-3.5 w-3.5 rounded-full bg-white/55 blur-[1px]" />
+                {/* Ori wordmark with a soft glow */}
+                <span
+                  className="relative text-[12.5px] font-bold tracking-[0.5px] text-white"
+                  style={{
+                    fontFamily: '"Space Grotesk", system-ui, sans-serif',
+                    textShadow: "0 0 7px rgba(199,210,254,0.85), 0 1px 2px rgba(49,46,129,0.85)",
+                  }}
+                >
+                  Ori
+                </span>
+              </span>
+
+              {/* Moon orbiting the planet */}
+              <m.span
+                aria-hidden="true"
+                className="absolute left-1/2 top-1/2 h-2.5 w-2.5 rounded-full bg-white shadow ring-1 ring-indigo-400/70"
+                style={{ marginLeft: "-5px", marginTop: "-5px" }}
+                animate={
+                  reduceMotion
+                    ? { x: 17, y: -11 }
+                    : {
+                        x: [28, 23, 5, -16, -28, -23, -5, 16, 28],
+                        y: [-11, 0, 11, 16, 11, 0, -11, -16, -11],
+                        scale: [0.8, 0.95, 1.15, 1.2, 1.1, 0.95, 0.8, 0.72, 0.8],
+                        opacity: [0.75, 0.9, 1, 1, 1, 0.9, 0.75, 0.7, 0.75],
+                      }
+                }
+                transition={reduceMotion ? { duration: 0 } : { duration: 7, repeat: Infinity, ease: "linear" }}
+              />
+
+              {/* AI sparkles — twinkle to signal "AI" */}
+              {!reduceMotion &&
+                [
+                  { cls: "right-0.5 top-0", delay: 0, peak: 1 },
+                  { cls: "left-1 bottom-1.5", delay: 1.2, peak: 0.75 },
+                ].map((sp, i) => (
+                  <m.span
+                    key={i}
+                    aria-hidden="true"
+                    className={`absolute ${sp.cls} text-violet-100`}
+                    animate={{ scale: [0, sp.peak, 0], opacity: [0, 1, 0], rotate: [0, 90, 0] }}
+                    transition={{ duration: 2.2, repeat: Infinity, delay: sp.delay, ease: "easeInOut" }}
+                  >
+                    <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="currentColor">
+                      <path d="M6 0c.4 2.8 1.2 3.6 4 4-2.8.4-3.6 1.2-4 4-.4-2.8-1.2-3.6-4-4 2.8-.4 3.6-1.2 4-4Z" />
+                    </svg>
+                  </m.span>
+                ))}
+            </m.button>
+          </m.div>
+        )}
+      </AnimatePresence>
 
       {showUsersModal && (
         <UsersModal

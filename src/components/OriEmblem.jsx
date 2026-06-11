@@ -1,40 +1,26 @@
-// Ori Emblem — distinct from the main Orizin product logo
-// Used for the AI analyst ("Ori") in the chat interface.
-// Keeps constellation / Orion roots but feels more focused and "guiding".
-// Different composition from the full three-star belt + horizon product mark.
-
+// Ori Emblem — a small ringed planet/moon (distinct from the Orizin product
+// logo). Used for the AI analyst ("Ori"). Self-contained indigo palette so it
+// reads on the gradient Ori button, on dark panels, and on light surfaces.
 export default function OriEmblem({ className = "" }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      {/* Softer, more focused cosmic glow — slightly more indigo/violet to differentiate from main brand */}
-      <circle cx="12" cy="10.5" r="9.2" className="text-indigo-400/20" fill="currentColor" stroke="none" />
-      <circle cx="12" cy="10.5" r="6.5" className="text-violet-500/25" fill="currentColor" stroke="none" />
-
-      {/* Central "guiding" star — larger and more prominent (the insight / analysis core) */}
-      <circle cx="12" cy="10" r="1.6" fill="currentColor" className="text-white" stroke="none" />
-
-      {/* Two supporting stars — arranged more vertically / thoughtfully (not the classic belt alignment) */}
-      <circle cx="8.8" cy="7.2" r="0.95" fill="currentColor" className="text-white/90" stroke="none" />
-      <circle cx="15.2" cy="13" r="0.95" fill="currentColor" className="text-white/90" stroke="none" />
-
-      {/* Subtle "insight beam" — vertical line suggesting analysis / guidance reaching downward */}
-      <line x1="12" y1="11.8" x2="12" y2="17" stroke="rgba(167,139,250,0.55)" strokeWidth="1.1" />
-
-      {/* Minimal constellation connections — different rhythm from the main logo */}
-      <line x1="9.4" y1="7.9" x2="11.3" y2="9.5" stroke="rgba(255,255,255,0.55)" strokeWidth="0.9" />
-      <line x1="12.7" y1="10.6" x2="14.6" y2="12.5" stroke="rgba(255,255,255,0.55)" strokeWidth="0.9" />
-
-      {/* Very faint outer "witness" stars */}
-      <circle cx="6.5" cy="14.5" r="0.5" fill="currentColor" className="text-white/50" stroke="none" />
-      <circle cx="17.8" cy="6.8" r="0.5" fill="currentColor" className="text-white/50" stroke="none" />
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden="true">
+      {/* Orbital ring — tilted ellipse behind the planet */}
+      <ellipse
+        cx="12" cy="12" rx="11" ry="3.9"
+        transform="rotate(-24 12 12)"
+        stroke="rgba(255,255,255,0.7)" strokeWidth="1.2" fill="none"
+      />
+      {/* Planet body */}
+      <circle cx="12" cy="12" r="6" fill="#c7d2fe" />
+      {/* Sphere sheen — light from the upper-left */}
+      <circle cx="9.9" cy="9.9" r="3.3" fill="#ffffff" opacity="0.7" />
+      {/* Night side / terminator for depth (right half) */}
+      <path d="M12 6 A6 6 0 0 1 12 18 Z" fill="#3730a3" opacity="0.5" />
+      {/* Craters */}
+      <circle cx="13.6" cy="10.9" r="0.85" fill="#6366f1" opacity="0.55" />
+      <circle cx="10.6" cy="13.9" r="0.55" fill="#6366f1" opacity="0.5" />
+      {/* A small moon riding the ring */}
+      <circle cx="21" cy="9.3" r="1.1" fill="#ffffff" stroke="#6366f1" strokeWidth="0.5" />
     </svg>
   );
 }
