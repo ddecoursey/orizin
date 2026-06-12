@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
-import { DONATE_URL, PRO_PRICE_LABEL } from "../lib/billing.js";
+import { PRO_PRICE_LABEL } from "../lib/billing.js";
 
 // `mode` controls which surface this modal shows:
 //   'account' → personal Account Settings (plan + change your password)
 //   'users'   → admin User Management (add/remove users, grant admin, set plan)
-export default function UsersModal({ onClose, currentUser, isAdmin = false, plan = 'free', mode = 'account' }) {
+export default function UsersModal({ onClose, currentUser, isAdmin = false, plan = 'free', mode = 'account', onAuthRefresh, onUpgradeToPro }) {
   const showUsers = mode === 'users' && isAdmin;
   const showAccount = mode === 'account';
   const [users, setUsers] = useState([]);
@@ -17,6 +17,8 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
   const [changingPassword, setChangingPassword] = useState(false);
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
+  const [subStatus, setSubStatus] = useState(null); // { plan, status, subscriptionId }
+  const [canceling, setCanceling] = useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -39,6 +41,43 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
     if (showUsers) loadUsers();
     else setLoading(false);
   }, [showUsers]);
+
+  // Account mode: load the current user's subscription status (for the Cancel UI).
+  useEffect(() => {
+    if (!showAccount) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/billing/status");
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!cancelled) setSubStatus(d);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [showAccount]);
+
+  async function cancelSubscription() {
+    if (!confirm("Cancel your Pro subscription? It won't renew, and you'll keep Pro until the end of your current billing period.")) return;
+    setCanceling(true);
+    setError("");
+    try {
+      const res = await fetch("/api/billing/cancel", { method: "POST" });
+      const text = await res.text();
+      let data; try { data = JSON.parse(text); } catch { data = {}; }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setSubStatus((s) => ({
+        ...(s || {}),
+        plan: data.plan,
+        status: data.status || "CANCELLED",
+        proUntil: data.proUntil ?? (s?.proUntil ?? null),
+      }));
+      onAuthRefresh && onAuthRefresh();
+    } catch (e) {
+      setError(e.message);
+    }
+    setCanceling(false);
+  }
 
 
   async function addUser() {
@@ -241,25 +280,46 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
           <div className="mb-6">
             <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Your Plan</div>
             <div className="bg-gray-950 border border-gray-800 rounded-lg p-3">
-              <div className="flex items-center justify-between">
-                <span className={`text-sm font-bold ${(plan === 'pro' || isAdmin) ? 'text-violet-300' : 'text-gray-200'}`}>
-                  {isAdmin ? 'Admin (full access)' : plan === 'pro' ? 'Pro' : 'Free'}
-                </span>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <span className={`text-sm font-bold ${(plan === 'pro' || isAdmin) ? 'text-violet-300' : 'text-gray-200'}`}>
+                    {isAdmin ? 'Admin (full access)' : plan === 'pro' ? 'Pro' : 'Free'}
+                  </span>
+                  {!isAdmin && subStatus?.proUntil && (
+                    <div className="text-[11px] text-gray-500 mt-0.5">
+                      {['ACTIVE', 'APPROVED'].includes(String(subStatus.status || '').toUpperCase())
+                        ? `Renews ${new Date(subStatus.proUntil).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`
+                        : `Pro until ${new Date(subStatus.proUntil).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })} · won't renew`}
+                    </div>
+                  )}
+                </div>
+
+                {/* Free → upgrade via the real PayPal checkout modal */}
                 {!isAdmin && plan !== 'pro' && (
-                  <a
-                    href={DONATE_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs font-semibold px-3 py-1.5 rounded-md text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all"
+                  <button
+                    onClick={() => onUpgradeToPro && onUpgradeToPro()}
+                    className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-md text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all"
                   >
                     Upgrade — {PRO_PRICE_LABEL}
-                  </a>
+                  </button>
+                )}
+
+                {/* Pro with an ACTIVE subscription → cancel (won't renew, keeps grace) */}
+                {!isAdmin && plan === 'pro' && subStatus?.subscriptionId &&
+                  ['ACTIVE', 'APPROVED'].includes(String(subStatus.status || '').toUpperCase()) && (
+                  <button
+                    onClick={cancelSubscription}
+                    disabled={canceling}
+                    className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-md border border-gray-700 text-gray-300 hover:bg-gray-800 disabled:opacity-50 transition-colors"
+                  >
+                    {canceling ? "Cancelling…" : "Cancel subscription"}
+                  </button>
                 )}
               </div>
               <p className="text-[11px] text-gray-500 mt-2 leading-snug">
                 {isAdmin || plan === 'pro'
                   ? 'You have full access to Ori, the AI analyst.'
-                  : `Free includes the full screener, Deep Research, and portfolio tools. Pro (${PRO_PRICE_LABEL}) unlocks Ori. Pay via the upgrade link with your account email in the note, and your plan is activated by the admin.`}
+                  : `Free includes the full screener, Deep Research, and portfolio tools. Pro (${PRO_PRICE_LABEL}) unlocks Ori — the portfolio-aware AI analyst.`}
               </p>
             </div>
           </div>

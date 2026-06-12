@@ -3,10 +3,23 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- maximum-scale=1 stops iOS Safari's harsh auto-zoom when focusing inputs;
+         viewport-fit=cover lets the app fill the whole screen (incl. notch/home-bar areas). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" />
+    <!-- PayPal SDK (SANDBOX for testing) - load once per page.
+         Using sandbox client-id below. For live, replace with your production client-id.
+         Sandbox business login: sb-bq43fr51595302@business.example.com
+         Password: (&48zV[5
+         API / Secret provided for reference (use in dashboard for creating buttons). -->
+    <script
+      src="https://www.paypal.com/sdk/js?client-id=AS2IeUIiIcKbdU1M73IGSPkycpaCV1T3h8T9PvxvSvJTPrXmnBoROTXppx3FCW4ffsPxjpEB_LRSjQC8&vault=true&intent=subscription&disable-funding=card,credit,venmo"
+      data-sdk-integration-source="button-factory"
+      crossorigin="anonymous"
+      async>
+    </script>
     <title>Orizin</title>
   </head>
   <body>

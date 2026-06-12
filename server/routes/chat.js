@@ -7,6 +7,7 @@ import {
   getUserSettings,
   patchUserSettings,
   getUserByUsername,
+  reconcileUserPlan,
 } from "../db.js";
 import { fmt } from "./prompt-helpers.js";
 import { marketStatusLine } from "../marketHours.js";
@@ -20,7 +21,7 @@ const router = Router();
 function hasOriAccess(userId) {
   if (!userId || userId === "default") return true; // auth disabled (local dev)
   try {
-    const user = getUserByUsername(userId);
+    const user = reconcileUserPlan(userId) || getUserByUsername(userId);
     if (!user) return true; // legacy AUTH_PASSWORD session — no DB user rows
     return !!user.is_admin || user.plan === "pro";
   } catch {

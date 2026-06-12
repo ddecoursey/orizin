@@ -149,7 +149,11 @@ try {
     is_admin      INTEGER DEFAULT 0,
     email         TEXT,
     plan          TEXT DEFAULT 'free',   -- 'free' | 'pro'
-    plan_updated_at INTEGER
+    plan_updated_at INTEGER,
+    paypal_subscription_id TEXT,         -- PayPal Subscriptions API id (I-XXXXXXXX)
+    subscription_status TEXT,            -- PayPal status: ACTIVE | CANCELLED | SUSPENDED | EXPIRED
+    subscription_updated_at INTEGER,
+    pro_until INTEGER                    -- grace: Pro access stays until this time after cancellation
   );
 
   -- Brokerage scaffolding: linked external accounts (Plaid-style) and order
@@ -271,6 +275,10 @@ try {
     ["email", "TEXT"],
     ["plan", "TEXT DEFAULT 'free'"],
     ["plan_updated_at", "INTEGER"],
+    ["paypal_subscription_id", "TEXT"],
+    ["subscription_status", "TEXT"],
+    ["subscription_updated_at", "INTEGER"],
+    ["pro_until", "INTEGER"],
   ];
   for (const [name, type] of USER_COLS) {
     if (userCols.size > 0 && !userCols.has(name)) {
@@ -901,6 +909,80 @@ export function setUserPlan(username, plan) {
     .prepare('UPDATE users SET plan = ?, plan_updated_at = ? WHERE username = ?')
     .run(next, Date.now(), username);
   return info.changes > 0;
+}
+
+// ── PayPal subscription state → plan, with a post-cancellation grace period ───
+//   ACTIVE / APPROVED      → Pro (pro_until tracks the current period end).
+//   CANCELLED / SUSPENDED  → Pro until `pro_until` (the paid-through date), then
+//                            Free. PayPal billing has already stopped.
+//   EXPIRED                → Free immediately.
+// `proUntil` (ms) is PayPal's billing_info.next_billing_time (end of the paid
+// period). Pass `undefined` to keep the stored value; pass null to clear it.
+const ACTIVE_SUB_STATUSES = new Set(['ACTIVE', 'APPROVED']);
+
+export function setUserSubscription(username, { subscriptionId, status = null, proUntil } = {}) {
+  const u = getUserByUsername(username);
+  if (!u) return false;
+
+  const s = String(status || '').toUpperCase();
+  const now = Date.now();
+  const nextProUntil = proUntil === undefined ? (u.pro_until ?? null) : (proUntil || null);
+  const nextSubId = subscriptionId === undefined ? (u.paypal_subscription_id ?? null) : (subscriptionId || null);
+
+  let plan;
+  if (ACTIVE_SUB_STATUSES.has(s)) plan = 'pro';
+  else if (s === 'EXPIRED') plan = 'free';
+  else plan = nextProUntil && nextProUntil > now ? 'pro' : 'free'; // CANCELLED/SUSPENDED → grace
+
+  const finalProUntil = plan === 'pro' ? nextProUntil : null;
+
+  const info = db
+    .prepare(
+      `UPDATE users
+         SET paypal_subscription_id = ?, subscription_status = ?, subscription_updated_at = ?,
+             pro_until = ?, plan = ?, plan_updated_at = ?
+       WHERE username = ?`,
+    )
+    .run(nextSubId, status, now, finalProUntil, plan, now, username);
+  return info.changes > 0;
+}
+
+export function getUserBySubscriptionId(subscriptionId) {
+  if (!subscriptionId) return undefined;
+  return db.prepare('SELECT * FROM users WHERE paypal_subscription_id = ?').get(subscriptionId);
+}
+
+// Lazily downgrade a single user whose post-cancellation grace has ended. Call
+// before reading a plan for access decisions (/auth/me, the chat gate).
+export function reconcileUserPlan(username) {
+  const u = getUserByUsername(username);
+  if (!u) return u;
+  const lapsed =
+    u.plan === 'pro' &&
+    u.pro_until &&
+    u.pro_until < Date.now() &&
+    !ACTIVE_SUB_STATUSES.has(String(u.subscription_status || '').toUpperCase());
+  if (lapsed) {
+    db.prepare('UPDATE users SET plan = ?, plan_updated_at = ? WHERE username = ?')
+      .run('free', Date.now(), username);
+    return getUserByUsername(username);
+  }
+  return u;
+}
+
+// Sweep: downgrade everyone whose grace has ended (covers users who never hit
+// /auth/me). Cheap UPDATE; run on an interval.
+export function expireLapsedPro() {
+  const now = Date.now();
+  const info = db
+    .prepare(
+      `UPDATE users
+         SET plan = 'free', plan_updated_at = ?
+       WHERE plan = 'pro' AND pro_until IS NOT NULL AND pro_until < ?
+         AND (subscription_status IS NULL OR subscription_status NOT IN ('ACTIVE', 'APPROVED'))`,
+    )
+    .run(now, now);
+  return info.changes;
 }
 
 export function listUsers() {

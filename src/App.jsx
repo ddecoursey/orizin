@@ -21,6 +21,7 @@ import CompareModal from "./components/CompareModal.jsx";
 import PortfolioGoalsPage from "./pages/PortfolioGoalsPage.jsx";
 import DeepResearchPage from "./components/DeepResearchPage.jsx";
 import Footer from "./components/Footer.jsx";
+import UpgradeModal from "./components/UpgradeModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 
 export default function App() {
@@ -65,6 +66,21 @@ export default function App() {
     setAuthState("authed");
   }
 
+  // Re-read the session after a plan change (subscribe / cancel) so Pro unlocks
+  // or locks immediately, without a full page reload.
+  async function refreshAuth() {
+    try {
+      const r = await fetch("/api/auth/me");
+      if (!r.ok) return;
+      const data = await r.json();
+      setCurrentUser(data.user || "default");
+      setIsAdmin(!!data.isAdmin);
+      setPlan(data.plan === "pro" ? "pro" : "free");
+    } catch {
+      /* ignore — keep current state */
+    }
+  }
+
   async function handleLogout() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
@@ -90,10 +106,10 @@ export default function App() {
   }
   // key forces MainApp to remount when the user changes, so all the
   // localStorage-backed state (pins, tabs, theme) re-reads under the new key.
-  return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} plan={plan} onLogout={handleLogout} />;
+  return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} plan={plan} onLogout={handleLogout} onAuthRefresh={refreshAuth} />;
 }
 
-function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
+function MainApp({ currentUser, isAdmin, plan = "free", onLogout, onAuthRefresh }) {
   // Ori access: Pro plan or admin. The server enforces this on /api/chat too —
   // this flag just drives the paywall UI.
   const canUseOri = isAdmin || plan === "pro";
@@ -112,6 +128,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
   // 'account' (personal settings) | 'users' (admin user management)
   const [usersModalMode, setUsersModalMode] = useState('account');
   const [showCompare, setShowCompare] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const openUpgradeModal = () => setShowUpgradeModal(true);
   const [detailStock, setDetailStock] = useState(null);
   const [detailStock2, setDetailStock2] = useState(null);
   const [pickingSecond, setPickingSecond] = useState(false);
@@ -123,6 +141,18 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
   const bScrollRef = useRef(null);
   const scrollSyncingRef = useRef(false);
   const news = useNews();
+
+  // Track small screens so compare switches from side-by-side panes (desktop)
+  // to a single full-screen comparison modal (mobile/tablet).
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023px)");
+    const onChange = () => setIsMobile(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
 
   // Portfolio & Goals (always loaded so it can be sent to Ori chat context)
   const portfolioGoals = usePortfolioGoals();
@@ -189,13 +219,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
     );
   };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    // Mobile/tablet: the filter panel is an overlay, so start it OPEN — filters
+    // dominate the small screen and are the first thing users want. The saved
+    // preference governs only the desktop column.
+    if (typeof window !== "undefined" && window.innerWidth < 1024) return false;
     const explicit = localStorage.getItem(sidebarKey);
     if (explicit != null) return explicit === "1";
     const legacy = localStorage.getItem("sidebarCollapsed");
     if (legacy != null) return legacy === "1";
-    // No saved preference yet → collapse by default on tablet/narrow screens
-    // so the filter panel doesn't steal width from the table.
-    return typeof window !== "undefined" && window.innerWidth < 1024;
+    return false;
   });
 
   // True once theme/sidebar have been reconciled with the server, so the
@@ -213,8 +245,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
       const patch = {};
       if (typeof server.theme === "string") setTheme(server.theme);
       else patch.theme = theme;
-      if (typeof server.sidebarCollapsed === "boolean") setSidebarCollapsed(server.sidebarCollapsed);
-      else patch.sidebarCollapsed = sidebarCollapsed;
+      if (typeof server.sidebarCollapsed === "boolean") {
+        // Don't let the saved (desktop) preference auto-collapse the mobile
+        // overlay — mobile always starts with filters open.
+        if (typeof window !== "undefined" && window.innerWidth >= 1024) {
+          setSidebarCollapsed(server.sidebarCollapsed);
+        }
+      } else {
+        patch.sidebarCollapsed = sidebarCollapsed;
+      }
       if (Object.keys(patch).length) patchUserSettings(patch);
       settingsHydrated.current = true;
     })();
@@ -606,6 +645,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
         onLogout={onLogout}
         onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
         onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}
+        onUpgradeToPro={openUpgradeModal}
         currentView={currentView}
         onNavigate={navigateTo}
         stocks={stocks}
@@ -872,7 +912,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
             loadingAi={detail.loadingAi}
             loadingInsider={detail.loadingInsider}
             comparePicking={pickingSecond}
-            onStartCompare={!detailStock2 ? () => setPickingSecond(true) : null}
+            onStartCompare={!detailStock2 ? (isMobile ? () => setShowCompare(true) : () => setPickingSecond(true)) : null}
             onCancelCompare={() => setPickingSecond(false)}
             onPickSecond={pickSecondBySymbol}
             onCompare={detailStock2 ? () => setShowCompare(true) : null}
@@ -885,7 +925,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
           />
         )}
 
-        {currentView !== 'deep-research' && detailRow2 && (
+        {!isMobile && currentView !== 'deep-research' && detailRow2 && (
           <StockDetailModal
             row={detailRow2}
             symbol={detailStock2?.symbol}
@@ -914,7 +954,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
         )}
 
         {chat.isOpen && (
-          <ChatPanel chat={chat} canUseOri={canUseOri} floating={!!(detailStock && detailStock2)} />
+          <ChatPanel chat={chat} canUseOri={canUseOri} floating={!!(detailStock && detailStock2)} onUpgradeToPro={openUpgradeModal} />
         )}
       </div>
 
@@ -1039,6 +1079,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
           isAdmin={isAdmin}
           plan={plan}
           mode={usersModalMode}
+          onAuthRefresh={onAuthRefresh}
+          onUpgradeToPro={() => { setShowUsersModal(false); openUpgradeModal(); }}
         />
       )}
 
@@ -1056,6 +1098,17 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout }) {
             chat.sendMessage(
               `Compare ${a} and ${b} head-to-head given my current Q/V/G weights — valuation, quality, growth, balance sheet, and which is the better buy right now and why.`,
             );
+          }}
+        />
+      )}
+
+      {showUpgradeModal && (
+        <UpgradeModal
+          onClose={() => setShowUpgradeModal(false)}
+          onSuccess={() => {
+            // Server already granted Pro (verified the subscription). Re-read the
+            // session so the UI unlocks Ori immediately.
+            onAuthRefresh?.();
           }}
         />
       )}
