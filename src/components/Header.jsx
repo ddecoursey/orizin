@@ -57,7 +57,12 @@ function HeaderMenu({ button, children, width = "w-56", align = "right" }) {
 function MenuItem({ onClick, disabled, children, className = "" }) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (onClick) onClick(e);
+      }}
       disabled={disabled}
       className={`w-full text-left px-3 py-2.5 lg:py-2 text-xs text-gray-300 hover:bg-gray-800 cursor-pointer
         disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${className}`}
@@ -97,6 +102,7 @@ export default function Header({
   onLogout,
   onManageUsers,
   onAccountSettings,
+  onUpgradeToPro,
   currentView = 'screener',
   onNavigate,
   stocks = [],
@@ -156,7 +162,7 @@ export default function Header({
         <OrizinLogo className="w-5 h-5" />
         <div className="flex items-baseline gap-2">
           <span
-            className="text-gray-100 text-[18px] leading-none tracking-tight"
+            className="hidden sm:inline text-gray-100 text-[18px] leading-none tracking-tight"
             style={{ fontFamily: '"Space Grotesk", system-ui, sans-serif', fontWeight: 600 }}
           >
             Orizin
@@ -310,6 +316,18 @@ export default function Header({
                   {theme === "dark" ? "Light mode" : "Dark mode"}
                 </span>
               </MenuItem>
+
+              {/* Upgrade to Pro - only for free users */}
+              {!isAdmin && plan !== "pro" && onUpgradeToPro && (
+                <MenuItem 
+                  onClick={() => { close(); onUpgradeToPro(); }}
+                  className="text-violet-300 hover:bg-violet-950/40"
+                >
+                  <span className="flex items-center gap-2">
+                    ⬆ Upgrade to Pro — $10/mo
+                  </span>
+                </MenuItem>
+              )}
 
               {onAccountSettings && (
                 <MenuItem onClick={() => { close(); onAccountSettings(); }}>

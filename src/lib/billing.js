@@ -1,10 +1,9 @@
-// Billing constants — single source of truth for the upgrade flow.
-// Payment is currently manual: the user pays via the donate link and the
-// admin flips their account to Pro in User Management. When a real payment
-// processor (Stripe etc.) lands, this is the only place the link changes.
-
-export const DONATE_URL =
-  "https://www.paypal.com/donate/?business=WSFPNM5GZ25GU&no_recurring=0&item_name=Orizin+Pro+subscription&currency_code=USD";
+// Billing constants — copy + feature lists for the upgrade flow.
+//
+// The PayPal client id, plan id, and environment (sandbox/live) are NOT kept
+// here. They are served at runtime from GET /api/billing/config (sourced from
+// server env vars), so secrets never live in the client bundle or the repo and
+// the same build works for both sandbox (local) and live (Railway).
 
 export const PRO_PRICE_LABEL = "$10/month";
 
@@ -20,3 +19,7 @@ export const FREE_FEATURES = [
   "Portfolios, goals & theses",
   "Watchlists, compare & news",
 ];
+
+// Legacy one-off donation link — kept only as a manual fallback.
+export const DONATE_URL =
+  "https://www.paypal.com/donate/?business=WSFPNM5GZ25GU&no_recurring=0&item_name=Orizin+Pro+subscription&currency_code=USD";

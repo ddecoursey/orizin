@@ -12,6 +12,8 @@ import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
 import brokerageRouter from './routes/brokerage.js';
+import billingRouter from './routes/billing.js';
+import { sendEmail, welcomeEmail } from './email.js';
 import * as db from './db.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
@@ -39,7 +41,12 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'"], // Allow for Vite dev + inline scripts if needed
+      // PayPal: the JS SDK is loaded from www.paypal.com and pulls assets from
+      // paypalobjects.com; without these the subscribe button is blocked in prod.
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://*.paypal.com", "https://*.paypalobjects.com"],
+      // The PayPal button/checkout renders in an iframe and calls PayPal's API.
+      connectSrc: ["'self'", "https://*.paypal.com", "https://*.paypalobjects.com"],
+      frameSrc: ["'self'", "https://*.paypal.com", "https://*.paypalobjects.com"],
       // Google Fonts: the stylesheet comes from fonts.googleapis.com and the
       // font files from fonts.gstatic.com — without these the brand font
       // (Space Grotesk, linked in index.html) was silently blocked in prod.
@@ -313,6 +320,9 @@ app.post('/api/auth/signup', loginLimiter, (req, res) => {
     return res.status(400).json({ error: result.error || 'Failed to create account' });
   }
 
+  // Welcome email (fire-and-forget; no-op if no email provider is configured).
+  sendEmail({ to: email, ...welcomeEmail() }).catch(() => {});
+
   const token = signToken({ user: email, isAdmin: false, exp: Date.now() + SESSION_MAX_AGE_MS });
   res.set('Set-Cookie', buildCookie(COOKIE_NAME, token, {
     maxAgeMs: SESSION_MAX_AGE_MS,
@@ -349,7 +359,9 @@ app.get('/api/auth/me', (req, res) => {
   let plan = 'free';
   let email = null;
   try {
-    const dbUser = db.getUserByUsername(payload.user);
+    // reconcileUserPlan lazily drops Pro once a cancelled subscription's grace
+    // period has ended, so access reflects reality without waiting for the sweep.
+    const dbUser = db.reconcileUserPlan(payload.user);
     if (dbUser) {
       plan = dbUser.plan === 'pro' ? 'pro' : 'free';
       email = dbUser.email || null;
@@ -420,6 +432,8 @@ app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
 // current user's id to req so downstream routes can scope per-user data.
 app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/auth/')) return next();
+  // PayPal calls the webhook server-to-server with no session cookie.
+  if (req.path === '/billing/webhook') return next();
   if (!isAuthEnabled()) {
     req.userId = 'default';
     return next();
@@ -445,6 +459,7 @@ app.use('/api', chatRouter);
 app.use('/api', usersRouter);
 app.use('/api', settingsRouter);
 app.use('/api', brokerageRouter);
+app.use('/api', billingRouter);
 
 // Global error handler for all /api routes — ensures we never return HTML.
 // (Express identifies error middleware by arity, so the 4th param stays.)
@@ -605,6 +620,13 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
   // Start the always-on low-rate background enrichment job (if not disabled)
   startBackgroundEnrichmentIfEnabled();
+
+  // Downgrade accounts whose post-cancellation grace period has ended. Runs at
+  // startup and hourly; lazy reconcile in /auth/me handles active users sooner.
+  try { db.expireLapsedPro(); } catch (e) { console.error('[billing] startup expire failed:', e.message); }
+  setInterval(() => {
+    try { db.expireLapsedPro(); } catch (e) { console.error('[billing] expire sweep failed:', e.message); }
+  }, 60 * 60 * 1000).unref?.();
 });
 
 // Graceful shutdown (important for clean Ctrl+C and stopping long-running enrich)

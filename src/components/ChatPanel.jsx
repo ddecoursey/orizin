@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { m, useReducedMotion } from "../lib/motion.js";
 import OriEmblem from "./OriEmblem.jsx";
 import { IconResearch } from "./icons.jsx";
-import { DONATE_URL, PRO_PRICE_LABEL, PRO_FEATURES } from "../lib/billing.js";
+import { PRO_PRICE_LABEL, PRO_FEATURES } from "../lib/billing.js";
 
 function relTime(ts) {
   if (!ts) return "";
@@ -120,10 +120,13 @@ function pageHints(view, symbol) {
   };
 }
 
-// Upgrade card shown to free-tier users in place of the chat. Payment is
-// manual for now: pay via the donate link, then the admin flips the account
-// to Pro (User Management) — no card data ever touches this app.
-function ProPaywall() {
+// Upgrade card shown to free-tier users in place of the chat.
+// Primary flow: Logged-in free users click "Upgrade to Pro" in the profile dropdown
+// (opens PayPal hosted checkout in a modal). This is now set up for proper
+// checkout (not just donate). After payment, admin can flip the user to "pro"
+// in User Management (or add webhook for auto-upgrade later).
+// The old donate link is kept as fallback.
+function ProPaywall({ onUpgradeToPro }) {
   return (
     <div className="m-3 rounded-xl border border-violet-800/50 bg-gradient-to-b from-violet-950/40 to-gray-900 p-4">
       <div className="flex items-center gap-2 mb-2">
@@ -141,18 +144,19 @@ function ProPaywall() {
           </li>
         ))}
       </ul>
-      <a
-        href={DONATE_URL}
-        target="_blank"
-        rel="noopener noreferrer"
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onUpgradeToPro && onUpgradeToPro();
+        }}
         className="block w-full text-center px-3 py-2 rounded-lg text-xs font-semibold text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all"
       >
         Upgrade — pay {PRO_PRICE_LABEL} via PayPal
-      </a>
+      </button>
       <p className="text-[10px] text-gray-500 mt-2 leading-snug">
-        After paying, your account is upgraded by the administrator (usually
-        within a day). Include your account email in the payment note so we
-        know it's you.
+        Uses PayPal sandbox for testing. After subscribing, you’ll be upgraded to Pro.
       </p>
     </div>
   );
@@ -162,7 +166,7 @@ function ProPaywall() {
 // a flex column. Used when both compare panes are open on the screener: three
 // static 24rem columns don't fit, the chat got pushed off-screen and its close
 // button became unreachable. Floating keeps it on top and dismissable.
-export default function ChatPanel({ chat, canUseOri = true, floating = false }) {
+export default function ChatPanel({ chat, canUseOri = true, floating = false, onUpgradeToPro }) {
   const reduce = useReducedMotion();
   const hints = pageHints(chat.view, chat.activeSymbol);
   const [input, setInput] = useState("");
@@ -432,7 +436,7 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false }) 
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-2 lg:py-3 space-y-2 lg:space-y-3">
-        {!canUseOri && <ProPaywall />}
+        {!canUseOri && <ProPaywall onUpgradeToPro={onUpgradeToPro} />}
         {canUseOri && chat.messages.length === 0 && (
           <div className="text-center py-6 lg:py-10 text-gray-600">
             <OriEmblem className="w-10 h-10 mx-auto mb-2 text-violet-400/90" />

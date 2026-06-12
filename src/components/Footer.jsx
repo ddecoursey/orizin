@@ -91,7 +91,10 @@ export default function Footer({ news = [] }) {
   return (
     <>
       <NewsTicker news={news} />
-      <footer className="relative z-10 shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500">
+      <footer
+        className="relative z-10 shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500"
+        style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+      >
       <span className="whitespace-nowrap">
         © {year} <span className="font-semibold text-gray-400">Orizin</span>™<span className="hidden lg:inline"> · All rights reserved</span>
       </span>

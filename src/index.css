@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+/* Fill the viewport edge-to-edge (paired with viewport-fit=cover) and paint the
+   page background on <body> so notch / home-indicator areas never reveal a white
+   gap on mobile. var(--color-gray-950) follows the theme (dark ↔ light remap). */
+html, body, #root { height: 100%; }
+body { background-color: var(--color-gray-950); }
+
 /* Temporarily disable color transitions for the exact frame of a dark/light
    flip so hundreds of elements snap instantly with zero jank. Added/removed in
    a useLayoutEffect + double rAF (App.jsx), so it never sticks around to affect
@@ -119,4 +125,23 @@
   .h-\[100dvh\] {
     overflow: hidden;
   }
+}
+
+/* Force dark theme for the Upgrade to Pro modal card, even in light mode.
+   Prevents the modal from appearing as a blank or invisible white box due to light mode overrides. */
+.upgrade-modal-card {
+  background-color: #111827 !important;
+  color: #f9fafb !important;
+}
+
+.light .upgrade-modal-card,
+.light .upgrade-modal-card * {
+  background-color: #111827 !important;
+  color: #f9fafb !important;
+}
+
+.light .upgrade-modal-card .text-gray-400,
+.light .upgrade-modal-card .text-gray-300,
+.light .upgrade-modal-card .text-gray-500 {
+  color: #9ca3af !important;
 }
