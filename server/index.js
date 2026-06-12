@@ -173,6 +173,12 @@ const AUTH_SECRET = process.env.AUTH_SECRET
        .update(`orizin-session-v1:stable-dev-secret`)   // stable default for local dev
        .digest('hex');
 
+// Logical deployment environment, surfaced to the UI so QA (sandbox) and
+// production (live) are never confused when both run at once. Set APP_ENV
+// explicitly per Railway environment ('qa' / 'production'); otherwise it's
+// inferred from PAYPAL_ENV. Anything other than 'production' shows a UI badge.
+const APP_ENV = process.env.APP_ENV || (process.env.PAYPAL_ENV === 'live' ? 'production' : 'development');
+
 // Legacy single-user mode still supported via AUTH_PASSWORD
 const legacyAuthEnabled = !!AUTH_PASSWORD;
 
@@ -342,7 +348,7 @@ app.post('/api/auth/logout', (req, res) => {
 app.get('/api/auth/me', (req, res) => {
   const currentlyAuthEnabled = isAuthEnabled();
   if (!currentlyAuthEnabled) {
-    return res.json({ user: 'default', authenticated: true, authEnabled: false, plan: 'pro', isAdmin: true });
+    return res.json({ user: 'default', authenticated: true, authEnabled: false, plan: 'pro', isAdmin: true, env: APP_ENV });
   }
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const payload = verifyToken(token);
@@ -373,7 +379,7 @@ app.get('/api/auth/me', (req, res) => {
     console.error('[auth] Error looking up user in /me:', e.message);
   }
 
-  res.json({ user: payload.user, isAdmin, plan, email, authenticated: true, authEnabled: true });
+  res.json({ user: payload.user, isAdmin, plan, email, authenticated: true, authEnabled: true, env: APP_ENV });
 });
 
 // Public status endpoint — used by the login page to decide whether to show
@@ -385,6 +391,7 @@ app.get('/api/auth/status', (req, res) => {
     authEnabled: isAuthEnabled(),
     hasUsers: userCount > 0,
     signupsEnabled: process.env.SIGNUPS_ENABLED !== 'false' && userCount > 0,
+    env: APP_ENV,
   });
 });
 
@@ -617,6 +624,13 @@ const server = app.listen(PORT, '0.0.0.0', () => {
         : 'DISABLED — set AUTH_PASSWORD or AUTH_USERS_JSON to enable'
     }`,
   );
+  console.log(`Environment: ${APP_ENV}${process.env.PAYPAL_ENV ? ` (PayPal: ${process.env.PAYPAL_ENV})` : ''}`);
+  if (!process.env.AUTH_SECRET && (process.env.APP_ENV || process.env.PAYPAL_ENV)) {
+    console.warn(
+      '[auth] WARNING: AUTH_SECRET is not set — using the shared dev default. ' +
+        'Set a UNIQUE AUTH_SECRET per environment (QA vs prod) so sessions are isolated and not forgeable.',
+    );
+  }
 
   // Start the always-on low-rate background enrichment job (if not disabled)
   startBackgroundEnrichmentIfEnabled();

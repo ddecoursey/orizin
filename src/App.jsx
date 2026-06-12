@@ -32,6 +32,9 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [plan, setPlan] = useState("free");
+  // Deployment environment ('production' | 'qa' | 'development') from the server,
+  // so QA (sandbox) and prod (live) are visibly distinct when both are running.
+  const [appEnv, setAppEnv] = useState("production");
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -44,6 +47,7 @@ export default function App() {
         setCurrentUser(data.user || "default");
         setIsAdmin(!!data.isAdmin);
         setPlan(data.plan === "pro" ? "pro" : "free");
+        setAppEnv(data.env || "production");
         setAuthState("authed");
       })
       .catch(() => setAuthState("login"));
@@ -58,6 +62,7 @@ export default function App() {
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
       setPlan(data.plan === "pro" ? "pro" : "free");
+      setAppEnv(data.env || "production");
     } catch {
       setCurrentUser("default");
       setIsAdmin(false);
@@ -76,6 +81,7 @@ export default function App() {
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
       setPlan(data.plan === "pro" ? "pro" : "free");
+      setAppEnv(data.env || "production");
     } catch {
       /* ignore — keep current state */
     }
@@ -106,10 +112,10 @@ export default function App() {
   }
   // key forces MainApp to remount when the user changes, so all the
   // localStorage-backed state (pins, tabs, theme) re-reads under the new key.
-  return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} plan={plan} onLogout={handleLogout} onAuthRefresh={refreshAuth} />;
+  return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} plan={plan} appEnv={appEnv} onLogout={handleLogout} onAuthRefresh={refreshAuth} />;
 }
 
-function MainApp({ currentUser, isAdmin, plan = "free", onLogout, onAuthRefresh }) {
+function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", onLogout, onAuthRefresh }) {
   // Ori access: Pro plan or admin. The server enforces this on /api/chat too —
   // this flag just drives the paywall UI.
   const canUseOri = isAdmin || plan === "pro";
@@ -642,6 +648,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", onLogout, onAuthRefresh 
         currentUser={currentUser}
         isAdmin={isAdmin}
         plan={plan}
+        env={appEnv}
         onLogout={onLogout}
         onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
         onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}
