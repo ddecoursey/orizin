@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import { IconResearch, IconRefresh } from "./icons.jsx";
@@ -113,6 +114,75 @@ function StatGrid({ children }) {
   return <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">{children}</div>;
 }
 
+// ── Technical signal helpers (Deep Research "Technical Analysis" panel) ──────
+function maSignal(price, ma) {
+  if (ma == null) return { value: null };
+  const value = `$${ma.toFixed(2)}`;
+  if (price == null) return { value };
+  const pct = ((price - ma) / ma) * 100;
+  return { value, signal: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`, tone: price >= ma ? "up" : "down" };
+}
+function crossSignal(sma50, sma200) {
+  if (sma50 == null || sma200 == null) return { value: null };
+  const golden = sma50 >= sma200;
+  return { value: golden ? "Golden" : "Death", signal: golden ? "bullish" : "bearish", tone: golden ? "up" : "down" };
+}
+function rsiSignal(rsi) {
+  if (rsi == null) return { value: null };
+  const v = Math.round(rsi);
+  if (rsi >= 70) return { value: v, signal: "overbought", tone: "down" };
+  if (rsi <= 30) return { value: v, signal: "oversold", tone: "up" };
+  return { value: v, signal: "neutral", tone: "gray" };
+}
+function williamsSignal(w) {
+  if (w == null) return { value: null };
+  const v = Math.round(w);
+  if (w >= -20) return { value: v, signal: "overbought", tone: "down" };
+  if (w <= -80) return { value: v, signal: "oversold", tone: "up" };
+  return { value: v, signal: "neutral", tone: "gray" };
+}
+function adxSignal(adx) {
+  if (adx == null) return { value: null };
+  const v = Math.round(adx);
+  if (adx >= 25) return { value: v, signal: "strong trend", tone: "warn" };
+  if (adx < 20) return { value: v, signal: "ranging", tone: "gray" };
+  return { value: v, signal: "developing", tone: "gray" };
+}
+function volSignal(stdDev, price) {
+  if (stdDev == null) return { value: null };
+  if (!price) return { value: stdDev.toFixed(2) };
+  const pct = (stdDev / price) * 100;
+  return { value: `${pct.toFixed(1)}%`, signal: pct >= 4 ? "high" : pct <= 1.5 ? "low" : "moderate", tone: pct >= 4 ? "warn" : "gray" };
+}
+
+function SigRow({ label, value, signal, tone = "gray" }) {
+  const toneCls =
+    tone === "up" ? "text-emerald-400" : tone === "down" ? "text-red-400" : tone === "warn" ? "text-amber-400" : "text-gray-400";
+  return (
+    <div className="flex justify-between items-baseline py-1.5 border-b border-gray-800/50 gap-3">
+      <span className="text-[11px] text-gray-500 shrink-0">{label}</span>
+      <span className="text-right whitespace-nowrap">
+        <span className="text-xs font-semibold font-mono text-gray-200">{value ?? <span className="text-gray-600">—</span>}</span>
+        {signal && <span className={`ml-1.5 text-[10px] font-semibold ${toneCls}`}>{signal}</span>}
+      </span>
+    </div>
+  );
+}
+
+// ── Earnings date helpers ───────────────────────────────────────────────────
+function fmtEarnDate(d) {
+  if (!d) return "—";
+  const dt = new Date(d);
+  return Number.isNaN(dt.getTime()) ? d : dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+function daysUntil(d) {
+  const dt = new Date(d);
+  if (Number.isNaN(dt.getTime())) return null;
+  const diff = Math.round((dt - new Date()) / 86400000);
+  if (diff === 0) return "today";
+  return diff > 0 ? `in ${diff}d` : `${-diff}d ago`;
+}
+
 export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {} }) {
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
@@ -122,6 +192,37 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // here since nothing outside this page needs it. Server caches make
   // re-opening a symbol free.
   const deep = useDeepResearch(symbol);
+
+  // Technical indicators (moving averages, ADX trend strength, Williams %R,
+  // volatility) for the Technical Analysis panel. Cached server-side ~6h.
+  const [technicals, setTechnicals] = useState(null);
+  const [techLoading, setTechLoading] = useState(false);
+  useEffect(() => {
+    if (!symbol) { setTechnicals(null); return; }
+    let cancelled = false;
+    setTechnicals(null);
+    setTechLoading(true);
+    fetch(`/api/stocks/technicals/${encodeURIComponent(symbol)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) { setTechnicals(d); setTechLoading(false); } })
+      .catch(() => { if (!cancelled) setTechLoading(false); });
+    return () => { cancelled = true; };
+  }, [symbol]);
+
+  // Earnings: next report date + recent EPS beat/miss history (FMP Starter).
+  const [earnings, setEarnings] = useState(null);
+  useEffect(() => {
+    if (!symbol) { setEarnings(null); return; }
+    let cancelled = false;
+    setEarnings(null);
+    fetch(`/api/stocks/earnings/${encodeURIComponent(symbol)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) setEarnings(d?.earnings || []); })
+      .catch(() => { if (!cancelled) setEarnings([]); });
+    return () => { cancelled = true; };
+  }, [symbol]);
+  const earnNext = earnings?.find?.((e) => e.epsActual == null && new Date(e.date) >= new Date(new Date().toDateString())) || null;
+  const earnRecent = (earnings || []).filter((e) => e.epsActual != null).slice(0, 4);
 
   const handleSearch = (stock) => {
     if (stock?.symbol) onSelectSymbol?.(stock.symbol);
@@ -235,7 +336,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             {loadingChart ? (
               <div className="h-[300px] bg-gray-900/50 rounded-lg animate-pulse" />
             ) : (
-              <PriceChart points={points} rsi={rsi} symbol={symbol} height={300} />
+              <PriceChart points={points} rsi={rsi} symbol={symbol} height={300} allowIndicators />
             )}
           </section>
 
@@ -328,6 +429,30 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 <Placeholder note="DCF not loaded for this symbol yet." />
               )}
             </Panel>
+
+            <Panel title="Technical Analysis" tier="T1" span={1}>
+              {!technicals && techLoading ? (
+                <div className="h-full min-h-[80px] flex items-center justify-center text-[11px] text-gray-600">
+                  Loading indicators…
+                </div>
+              ) : technicals && (technicals.sma50 != null || technicals.ema20 != null || technicals.adx != null) ? (
+                <div>
+                  <SigRow label="Price vs 50-day SMA" {...maSignal(technicals.price, technicals.sma50)} />
+                  <SigRow label="Price vs 200-day SMA" {...maSignal(technicals.price, technicals.sma200)} />
+                  <SigRow label="Price vs 20-day EMA" {...maSignal(technicals.price, technicals.ema20)} />
+                  <SigRow label="50 / 200 SMA" {...crossSignal(technicals.sma50, technicals.sma200)} />
+                  <SigRow label="RSI (14)" {...rsiSignal(technicals.rsi)} />
+                  <SigRow label="Williams %R (14)" {...williamsSignal(technicals.williams)} />
+                  <SigRow label="ADX (14)" {...adxSignal(technicals.adx)} />
+                  <SigRow label="Volatility (20d σ)" {...volSignal(technicals.stdDev, technicals.price)} />
+                  {technicals.asOf && (
+                    <div className="mt-2 text-[9px] text-gray-600 text-right">as of {technicals.asOf}</div>
+                  )}
+                </div>
+              ) : (
+                <Placeholder note="Technical indicators aren't available for this symbol." />
+              )}
+            </Panel>
           </div>
         </div>
 
@@ -337,6 +462,54 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             Tier 2 · Financial Statements & Estimates
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <Panel title="Earnings" tier="T2">
+              {earnings === null ? (
+                <Placeholder note="Loading earnings…" />
+              ) : !earnings.length ? (
+                <Placeholder note="No earnings data for this symbol." />
+              ) : (
+                <div>
+                  {earnNext && (
+                    <div className="mb-3 rounded-lg border border-blue-900/40 bg-blue-950/30 px-3 py-2">
+                      <div className="text-[10px] uppercase tracking-wider text-blue-300/80">Next report</div>
+                      <div className="text-sm font-semibold text-gray-100">
+                        {fmtEarnDate(earnNext.date)}
+                        {daysUntil(earnNext.date) && (
+                          <span className="ml-1.5 text-[11px] font-normal text-gray-500">{daysUntil(earnNext.date)}</span>
+                        )}
+                      </div>
+                      {earnNext.epsEstimated != null && (
+                        <div className="text-[11px] text-gray-500">Est. EPS ${earnNext.epsEstimated.toFixed(2)}</div>
+                      )}
+                    </div>
+                  )}
+                  {earnRecent.length > 0 && (
+                    <>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">Recent · EPS act / est</div>
+                      {earnRecent.map((e) => {
+                        const beat = e.epsActual >= e.epsEstimated;
+                        const pct = e.epsEstimated ? ((e.epsActual - e.epsEstimated) / Math.abs(e.epsEstimated)) * 100 : null;
+                        return (
+                          <div key={e.date} className="flex justify-between items-baseline py-1.5 border-b border-gray-800/50 gap-3">
+                            <span className="text-[11px] text-gray-500 shrink-0">{fmtEarnDate(e.date)}</span>
+                            <span className="text-right whitespace-nowrap text-xs font-mono">
+                              <span className="text-gray-200">${e.epsActual.toFixed(2)}</span>
+                              <span className="text-gray-600"> / {e.epsEstimated != null ? `$${e.epsEstimated.toFixed(2)}` : "—"}</span>
+                              {pct != null && (
+                                <span className={`ml-1.5 text-[10px] font-semibold ${beat ? "text-emerald-400" : "text-red-400"}`}>
+                                  {beat ? "beat" : "miss"} {pct >= 0 ? "+" : ""}{pct.toFixed(0)}%
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+              )}
+            </Panel>
+
             <Panel title="Income Statement (annual)" tier="T2">
               {deep.loadingStatements ? (
                 <Placeholder note="Loading income statement…" />

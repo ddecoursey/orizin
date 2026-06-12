@@ -22,6 +22,7 @@ import PortfolioGoalsPage from "./pages/PortfolioGoalsPage.jsx";
 import DeepResearchPage from "./components/DeepResearchPage.jsx";
 import Footer from "./components/Footer.jsx";
 import UpgradeModal from "./components/UpgradeModal.jsx";
+import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 
 export default function App() {
@@ -155,6 +156,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const [showCompare, setShowCompare] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const openUpgradeModal = () => setShowUpgradeModal(true);
+  const [showAddTicker, setShowAddTicker] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
   const [detailStock2, setDetailStock2] = useState(null);
   const [pickingSecond, setPickingSecond] = useState(false);
@@ -672,6 +674,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
         onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}
         onUpgradeToPro={openUpgradeModal}
+        onAddTicker={() => setShowAddTicker(true)}
         currentView={currentView}
         onNavigate={navigateTo}
         stocks={stocks}
@@ -691,7 +694,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             filters={filters}
             setFilters={setFilters}
             stocks={stocks}
-            onAddTicker={addTicker}
             collapsed={sidebarCollapsed}
             onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
           />
@@ -1136,6 +1138,14 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             // session so the UI unlocks Ori immediately.
             onAuthRefresh?.();
           }}
+        />
+      )}
+
+      {showAddTicker && (
+        <AddTickerModal
+          onClose={() => setShowAddTicker(false)}
+          onAdd={addTicker}
+          onView={(stock) => { setShowAddTicker(false); handleSelectStock(stock); }}
         />
       )}
     </div>

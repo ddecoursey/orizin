@@ -103,6 +103,7 @@ export default function Header({
   onManageUsers,
   onAccountSettings,
   onUpgradeToPro,
+  onAddTicker,
   env = 'production',
   currentView = 'screener',
   onNavigate,
@@ -231,6 +232,22 @@ export default function Header({
         >
           {(close) => (
             <>
+              {onAddTicker && (
+                <MenuItem
+                  onClick={() => { close(); onAddTicker(); }}
+                  title="Add a single ticker (e.g. a new IPO) not yet in the universe and gather its details from FMP."
+                >
+                  <span className="flex items-center gap-2">
+                    <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-gray-500 shrink-0" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                    Add ticker
+                  </span>
+                  <span className="block text-[10px] text-gray-500 mt-0.5 pl-[22px]">
+                    Pull a new symbol (IPO, missing stock) into the screener.
+                  </span>
+                </MenuItem>
+              )}
               <MenuItem
                 onClick={() => { close(); onRefresh?.(); }}
                 title="Universe Refresh: pulls full list from FMP stable stock-list + etf-list (no mcap floor), then enriches profiles. Includes all global stocks and ETFs."

@@ -13,10 +13,53 @@ const shortDate = (d) => {
 
 const TIMEFRAMES = ["1D", "1W", "1M", "YTD", "1Y", "5Y"];
 
+// ── Moving-average overlays — computed from the price series itself (no extra
+// FMP calls), so they always work as long as the price history loaded. ────────
+const MA_DEFS = [
+  { key: "sma50", label: "SMA 50", color: "#f59e0b" },   // amber
+  { key: "sma200", label: "SMA 200", color: "#a78bfa" }, // violet
+  { key: "ema20", label: "EMA 20", color: "#38bdf8" },   // sky
+];
+function maSMA(arr, period) {
+  const m = new Map();
+  if (!arr || arr.length < period) return m;
+  let sum = 0;
+  for (let i = 0; i < arr.length; i++) {
+    sum += arr[i].price;
+    if (i >= period) sum -= arr[i - period].price;
+    if (i >= period - 1) m.set(arr[i].date, sum / period);
+  }
+  return m;
+}
+function maEMA(arr, period) {
+  const m = new Map();
+  if (!arr || arr.length < period) return m;
+  const k = 2 / (period + 1);
+  let ema = 0;
+  for (let i = 0; i < period; i++) ema += arr[i].price; // seed with SMA
+  ema /= period;
+  m.set(arr[period - 1].date, ema);
+  for (let i = period; i < arr.length; i++) {
+    ema = arr[i].price * k + ema * (1 - k);
+    m.set(arr[i].date, ema);
+  }
+  return m;
+}
+function segsFromVals(vals, xAt, yFn) {
+  const out = [];
+  let s = [];
+  vals.forEach((v, i) => {
+    if (v == null) { if (s.length) out.push(s); s = []; }
+    else s.push(`${xAt(i)},${yFn(v)}`);
+  });
+  if (s.length) out.push(s);
+  return out;
+}
+
 // Interactive price chart with an RSI(10) subpanel, grid lines, and a
 // shared hover crosshair + tooltip. Rendered in real pixel coords (measured
 // from the container) so text stays crisp and hover math is exact.
-export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timeframe: timeframeProp = null, onTimeframeChange = null }) {
+export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timeframe: timeframeProp = null, onTimeframeChange = null, allowIndicators = false }) {
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   const [hover, setHover] = useState(null); // hovered point index
@@ -74,6 +117,16 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
   const ready = (points?.length || 0) >= 2;
   const intradayLoading = intradayMode && intraday.loading;
 
+  // Moving averages computed on the FULL daily history (so they're correct at the
+  // left edge of any timeframe), then aligned to the visible points by date.
+  const showMA = allowIndicators && !intradayMode;
+  const [maOn, setMaOn] = useState({ sma50: true, sma200: true, ema20: false });
+  const maMaps = useMemo(() => {
+    if (!showMA) return null;
+    const all = allPoints || [];
+    return { sma50: maSMA(all, 50), sma200: maSMA(all, 200), ema20: maEMA(all, 20) };
+  }, [allPoints, showMA]);
+
   // If 1D turned out to be unavailable for this symbol, omit the button and
   // fall back to a daily timeframe.
   const intradayUnavailable =
@@ -100,6 +153,25 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
     </div>
   );
 
+  // Moving-average toggle chips (Deep Research only).
+  const MABar = showMA && ready ? (
+    <div className="flex gap-1 mb-2 items-center flex-wrap">
+      <span className="text-[9px] uppercase tracking-wider text-gray-600 mr-0.5">MA</span>
+      {MA_DEFS.map((d) => (
+        <button
+          key={d.key}
+          onClick={() => setMaOn((m) => ({ ...m, [d.key]: !m[d.key] }))}
+          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border transition-colors ${
+            maOn[d.key] ? "text-white border-transparent" : "bg-gray-800 text-gray-400 border-gray-700 hover:text-gray-200"
+          }`}
+          style={maOn[d.key] ? { backgroundColor: d.color } : undefined}
+        >
+          {d.label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+
   // Layout (pixel coords)
   // Layout scales with the requested height so the chart can be rendered large
   // (Deep Research page) or compact (overview pane) from the same component.
@@ -113,8 +185,17 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
   const n = points.length;
 
   const prices = points.map((p) => p.price);
-  const pMin = Math.min(...prices);
-  const pMax = Math.max(...prices);
+  // Enabled MA lines, aligned to the visible points by date. The price scale is
+  // extended to fit them so an MA outside the window's price range still renders.
+  const maSeries = (showMA && maMaps)
+    ? MA_DEFS.filter((d) => maOn[d.key]).map((d) => ({
+        ...d,
+        vals: points.map((p) => (maMaps[d.key].has(p.date) ? maMaps[d.key].get(p.date) : null)),
+      }))
+    : [];
+  const maExtra = maSeries.flatMap((s) => s.vals).filter((v) => v != null);
+  const pMin = Math.min(...prices, ...maExtra);
+  const pMax = Math.max(...prices, ...maExtra);
   const pRange = pMax - pMin || 1;
 
   // Align RSI to price points by date
@@ -176,6 +257,7 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
   return (
     <div>
       {TimeframeBar}
+      {MABar}
       <div className="flex items-baseline justify-between mb-2 h-4">
         {ready && (
           <>
@@ -267,6 +349,22 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
               strokeLinecap="round"
               strokeLinejoin="round"
             />
+
+            {/* Moving-average overlays */}
+            {maSeries.map((s) =>
+              segsFromVals(s.vals, xAt, yPrice).map((seg, i) => (
+                <polyline
+                  key={`ma-${s.key}-${i}`}
+                  points={seg.join(" ")}
+                  fill="none"
+                  stroke={s.color}
+                  strokeWidth="1.25"
+                  strokeOpacity="0.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              )),
+            )}
 
             {/* RSI panel */}
             {hasRsi && (
