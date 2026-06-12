@@ -41,6 +41,9 @@ try {
 
 db.pragma('journal_mode = WAL');
 db.pragma('synchronous = NORMAL');
+// Wait (up to 5s) for a competing writer instead of throwing SQLITE_BUSY — the
+// background enrichment job writes while API requests read/write concurrently.
+db.pragma('busy_timeout = 5000');
 
 try {
   db.exec(`

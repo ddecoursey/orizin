@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import {
   saveChatSession,
   getChatSession,
@@ -13,6 +14,19 @@ import { fmt } from "./prompt-helpers.js";
 import { marketStatusLine } from "../marketHours.js";
 
 const router = Router();
+
+// Per-user limiter on the (paid, Gemini-backed) chat endpoint to cap cost/abuse.
+// Keyed by the authenticated user, not IP, so users behind one NAT don't share a
+// bucket. Generous for real use (a burst of follow-ups is fine).
+const chatLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  // /chat is always authenticated (the /api gate sets req.userId), so key by
+  // user. Avoids the IP path entirely (no IPv6 keying caveat).
+  keyGenerator: (req) => req.userId || "anon",
+});
 
 // ── Plan gating ─────────────────────────────────────────────────────────────
 // Ori (the chat itself) is the Pro-tier feature: free accounts get the full
@@ -603,7 +617,7 @@ async function fetchGeminiWithRetry({ apiKey, body, send }) {
 }
 
 // ── POST /api/chat ─────────────────────────────────────────────────────────
-router.post("/chat", async (req, res) => {
+router.post("/chat", chatLimiter, async (req, res) => {
   // Validate input before opening the SSE stream — bad requests get a plain
   // HTTP error the client can handle uniformly.
   const rawMessage = typeof req.body?.message === "string" ? req.body.message.trim() : "";

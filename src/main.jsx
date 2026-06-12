@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import DebugErrorLog from './pages/DebugErrorLog.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 
 // ── Client-side error reporting to the /debug page ─────────────────────────
 // Only warnings, errors, uncaught exceptions, and unhandled rejections are
@@ -78,13 +79,17 @@ const root = createRoot(document.getElementById('root'));
 if (window.location.pathname === '/debug') {
   root.render(
     <StrictMode>
-      <DebugErrorLog />
+      <ErrorBoundary>
+        <DebugErrorLog />
+      </ErrorBoundary>
     </StrictMode>
   );
 } else {
   root.render(
     <StrictMode>
-      <App />
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
     </StrictMode>
   );
 }
