@@ -193,6 +193,10 @@ export default function UpgradeModal({ onClose, onSuccess }) {
 
               {/* PayPal subscribe button renders here. Always mounted (so the ref
                   exists); a spinner sits on top until the SDK is ready. */}
+              <p className="mb-2 text-[11px] text-amber-300">
+                ⚠️ This will open PayPal in a popup window for the subscription approval. If your browser blocks popups (common in QA/test browsers), it will redirect this entire tab to PayPal. <strong>Allow popups for this site</strong> for the best experience. If you end up on a blank/white page, just close that tab, come back here, and refresh — the subscription approval often still succeeds.
+              </p>
+
               <div className="relative min-h-[150px] rounded-xl border border-gray-800 bg-gray-950/40 p-3">
                 {phase === "loading" && (
                   <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400">
