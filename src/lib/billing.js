@@ -4,6 +4,11 @@
 // here. They are served at runtime from GET /api/billing/config (sourced from
 // server env vars), so secrets never live in the client bundle or the repo and
 // the same build works for both sandbox (local) and live (Railway).
+//
+// The PayPal JS SDK is loaded *dynamically* by UpgradeModal using the
+// server-provided clientId (never a static script tag in index.html). This
+// prevents loading a sandbox SDK on production deploys, which was causing
+// parse errors and blank pages when the PayPal button tried to initialize.
 
 export const PRO_PRICE_LABEL = "$10/month";
 

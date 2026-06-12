@@ -54,6 +54,10 @@ export default function UpgradeModal({ onClose, onSuccess }) {
       if (!cfg?.configured) { setPhase("unconfigured"); return; }
 
       // 2) Load the SDK with that client id.
+      // Note: we no longer load a static SDK script in index.html (it was the
+      // sandbox one and caused parse errors + blank pages on prod deploys when
+      // the server config was live). The dynamic load here uses the correct
+      // clientId for the current environment (sandbox or live).
       let paypal;
       try {
         paypal = await loadPayPalSdk(cfg.clientId);

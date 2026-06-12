@@ -6,11 +6,15 @@ import { logError } from "./logger.js";
 const BASE = "https://financialmodelingprep.com/stable";
 const KEY = () => process.env.FMP_API_KEY || "";
 
-// ── Simple, concurrency-safe rate limiter for 300 rpm plan ────────────────
-// Guarantees we never exceed ~5 calls/sec on average, even with high
-// concurrency (10 enrichment workers + many sparklines). Prevents 429 storms.
-// Tuned just under the limit for safety margin.
-const MIN_INTERVAL_MS = 205; // ~292 rpm max — safe headroom under 300
+// ── Simple, concurrency-safe rate limiter ─────────────────────────────────
+// Guarantees we never exceed the configured rate on average, even with high
+// concurrency (enrichment workers + many sparklines). Prevents 429 storms.
+//
+// FMP_MAX_RPM caps THIS process. When two environments share one FMP key
+// (e.g. QA + prod), set it per env so the SUM stays under your plan's limit —
+// e.g. prod=250, QA=40. Defaults to ~292 rpm (just under a 300-rpm plan).
+const FMP_MAX_RPM = Math.max(10, parseInt(process.env.FMP_MAX_RPM || '292', 10) || 292);
+const MIN_INTERVAL_MS = Math.ceil(60000 / FMP_MAX_RPM); // 292 rpm → ~206ms
 let _nextSlot = 0;
 
 // Slot reservation: each caller atomically claims the next free slot BEFORE

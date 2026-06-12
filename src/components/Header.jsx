@@ -103,6 +103,7 @@ export default function Header({
   onManageUsers,
   onAccountSettings,
   onUpgradeToPro,
+  env = 'production',
   currentView = 'screener',
   onNavigate,
   stocks = [],
@@ -172,6 +173,17 @@ export default function Header({
           </span>
         </div>
       </div>
+
+      {/* Non-production environment badge (QA/sandbox/dev) — so this is never
+          mistaken for production when both run at once. */}
+      {env !== 'production' && (
+        <span
+          className="shrink-0 rounded-md bg-amber-500/20 border border-amber-500/50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"
+          title={`${env} environment — PayPal sandbox / test data, not production`}
+        >
+          {env === 'development' ? 'DEV' : env}
+        </span>
+      )}
 
       {/* Compact status — just the dot once loaded (message on hover) */}
       <div
