@@ -13,7 +13,7 @@ function loadPayPalSdk(clientId) {
     const s = document.createElement("script");
     s.src =
       `https://www.paypal.com/sdk/js?client-id=${encodeURIComponent(clientId)}` +
-      `&vault=true&intent=subscription&components=buttons`;
+      `&vault=true&intent=subscription&components=buttons&currency=USD&disable-funding=credit,card,venmo,paylater`;
     s.onload = () => resolve(window.paypal);
     s.onerror = () => {
       sdkPromise = null;
@@ -29,6 +29,10 @@ export default function UpgradeModal({ onClose, onSuccess }) {
   const [phase, setPhase] = useState("loading");
   const [error, setError] = useState("");
   const [subId, setSubId] = useState(null);
+  // True while the PayPal checkout flow has been launched (used to avoid
+  // accidentally closing the modal while the user completes payment in the
+  // PayPal window).
+  const [launching, setLaunching] = useState(false);
 
   const containerRef = useRef(null);
   const buttonsRef = useRef(null);
@@ -63,7 +67,7 @@ export default function UpgradeModal({ onClose, onSuccess }) {
         paypal = await loadPayPalSdk(cfg.clientId);
       } catch {
         if (!cancelled) {
-          setError("Couldn't load PayPal. Check your connection or popup blocker and retry.");
+          setError("Couldn't load PayPal. Check your connection and retry.");
           setPhase("error");
         }
         return;
@@ -80,9 +84,16 @@ export default function UpgradeModal({ onClose, onSuccess }) {
 
       const buttons = paypal.Buttons({
         style: { shape: "pill", color: "gold", layout: "vertical", label: "subscribe" },
+        fundingSource: paypal.FUNDING?.PAYPAL,
         createSubscription: (data, actions) =>
           actions.subscription.create({ plan_id: cfg.planId }),
+        onClick: () => {
+          // Mark that checkout has started so we can show progress state and
+          // prevent the modal from being dismissed via the backdrop.
+          setLaunching(true);
+        },
         onApprove: async (data) => {
+          setLaunching(false);
           // Hand the subscription id to our server, which verifies it with
           // PayPal before granting Pro. Never trust the client alone.
           try {
@@ -105,13 +116,17 @@ export default function UpgradeModal({ onClose, onSuccess }) {
           }
         },
         onError: (err) => {
+          setLaunching(false);
           console.error("PayPal error:", err);
           if (!cancelled) {
             setError("Something went wrong with PayPal. Please try again.");
             setPhase("error");
           }
         },
-        onCancel: () => { /* user closed the PayPal window — leave the button up */ },
+        onCancel: () => {
+          setLaunching(false);
+          /* User closed the PayPal window; leave the button visible for retry. */
+        },
       });
       buttonsRef.current = buttons;
       buttons.render(container).catch((e) => {
@@ -123,13 +138,21 @@ export default function UpgradeModal({ onClose, onSuccess }) {
     return () => {
       cancelled = true;
       renderedRef.current = false;
+      setLaunching(false);
       try { buttonsRef.current?.close(); } catch { /* ignore */ }
       buttonsRef.current = null;
     };
   }, []);
 
   const modal = (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
+      onClick={() => {
+        // Do not close the modal via backdrop while a PayPal checkout is in flight
+        // (user may still be completing payment in the PayPal window).
+        if (!launching) onClose();
+      }}
+    >
       <div
         className="upgrade-modal-card w-full max-w-md overflow-hidden rounded-2xl border border-gray-700 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -191,19 +214,35 @@ export default function UpgradeModal({ onClose, onSuccess }) {
                 </div>
               )}
 
-              {/* PayPal subscribe button renders here. Always mounted (so the ref
-                  exists); a spinner sits on top until the SDK is ready. */}
-              <p className="mb-2 text-[11px] text-amber-300">
-                ⚠️ This will open PayPal in a popup window for the subscription approval. If your browser blocks popups (common in QA/test browsers), it will redirect this entire tab to PayPal. <strong>Allow popups for this site</strong> for the best experience. If you end up on a blank/white page, just close that tab, come back here, and refresh — the subscription approval often still succeeds.
-              </p>
-
               <div className="relative min-h-[150px] rounded-xl border border-gray-800 bg-gray-950/40 p-3">
                 {phase === "loading" && (
                   <div className="absolute inset-0 flex items-center justify-center text-xs text-gray-400">
                     Loading secure checkout…
                   </div>
                 )}
-                <div ref={containerRef} />
+
+                {/* While launching we show a lightweight in-progress state instead of
+                    the PayPal button so the user has clear feedback and we can guard
+                    against accidental modal close. */}
+                {launching ? (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
+                    <div className="mb-2 text-lg">🔐 Opening PayPal checkout…</div>
+                    <p className="text-xs text-amber-300">
+                      Complete your subscription in the PayPal window.
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      This screen will update automatically when done.
+                    </p>
+                    <button
+                      onClick={() => setLaunching(false)}
+                      className="mt-3 text-[10px] underline text-gray-400 hover:text-gray-200"
+                    >
+                      Go back
+                    </button>
+                  </div>
+                ) : (
+                  <div ref={containerRef} />
+                )}
               </div>
 
               <p className="mt-4 text-center text-[10px] text-gray-500">
