@@ -118,7 +118,7 @@ export const DEFAULT_FILTERS = {
   // Bulk refresh uses full stock+etf lists (no mcap floor). Use Size mcap / pinnedOnly / search to narrow.
   // Manual Add Ticker works for anything.
   universe: "global",
-  includeEtfs: true,  // toggle to hide ETFs/funds client-side (universe refresh always loads full from lists)
+  includeEtfs: false,  // ETFs/funds hidden by default; toggle on in the filter pane (universe refresh still loads the full list)
   mcapMin: "",
   mcapMax: "",
   volMin: "",

@@ -803,6 +803,53 @@ export async function fetchRSI(symbol, { periodLength = 14, timeframe = "1day" }
   }
 }
 
+// Latest value of any technical indicator: sma, ema, wma, dema, tema, rsi, adx,
+// williams, standarddeviation. Returns { value, close, date } or null. The value
+// field is named after the indicator (standarddeviation → "standardDeviation").
+export async function fetchIndicatorLatest(symbol, indicator, periodLength, timeframe = "1day") {
+  const url = `${BASE}/technical-indicators/${indicator}?symbol=${encodeURIComponent(symbol)}&periodLength=${periodLength}&timeframe=${timeframe}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data) || !data.length) return null;
+    const key = indicator === "standarddeviation" ? "standardDeviation" : indicator;
+    // FMP order isn't guaranteed; take the most recent date.
+    const latest = [...data].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+    const value = n(latest?.[key]);
+    if (value == null) return null;
+    return {
+      value,
+      close: n(latest.close),
+      date: typeof latest.date === "string" ? latest.date.split(" ")[0] : latest.date,
+    };
+  } catch (e) {
+    console.warn(`[FMP] ${indicator} ${symbol}:`, e.message);
+    return null;
+  }
+}
+
+// Earnings calendar for a symbol: the upcoming report date (null actuals) plus
+// recent quarters with EPS/revenue actual vs estimate. Newest first.
+export async function fetchEarnings(symbol, { limit = 10 } = {}) {
+  const url = `${BASE}/earnings?symbol=${encodeURIComponent(symbol)}&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data
+      .map((d) => ({
+        date: typeof d.date === "string" ? d.date.split(" ")[0] : d.date,
+        epsActual: n(d.epsActual),
+        epsEstimated: n(d.epsEstimated),
+        revenueActual: n(d.revenueActual),
+        revenueEstimated: n(d.revenueEstimated),
+      }))
+      .filter((d) => d.date)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  } catch (e) {
+    console.warn(`[FMP] earnings ${symbol}:`, e.message);
+    return [];
+  }
+}
+
 // Ratings snapshot: letter grade + 1–5 sub-scores across key ratios.
 export async function fetchRatingsSnapshot(symbol, opts = {}) {
   const url = `${BASE}/ratings-snapshot?symbol=${symbol}&apikey=${KEY()}`;

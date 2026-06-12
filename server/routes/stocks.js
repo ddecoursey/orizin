@@ -81,6 +81,8 @@ import {
   fetchStockList,
   fetchHistoricalPricesLight,
   fetchRSI,
+  fetchIndicatorLatest,
+  fetchEarnings,
   fetchRatingsSnapshot,
   fetchGrades,
   fetchGeneralNews,
@@ -835,10 +837,12 @@ router.get("/stocks/ai-data/:symbol", (req, res) => {
 });
 
 // ── POST /api/stocks/add ───────────────────────────────────────────────────
-router.post("/stocks/add", async (req, res) => {
+router.post("/stocks/add", enrichLimiter, requireAdmin, async (req, res) => {
   const { symbol } = req.body;
-  if (!symbol) return res.status(400).json({ error: "symbol required" });
+  if (typeof symbol !== "string" || !symbol.trim()) return res.status(400).json({ error: "symbol required" });
+  // Tickers are short alphanumerics (plus . and - for class shares / exchanges).
   const sym = symbol.trim().toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(sym)) return res.status(400).json({ error: "Invalid ticker symbol" });
   try {
     const [prof, km, rat] = await Promise.all([
       fetchProfile(sym),
@@ -880,6 +884,66 @@ router.get("/stocks/rsi/:symbol", async (req, res) => {
       fetchRSI(symbol, { periodLength }), force
     );
     res.json({ symbol, periodLength, rsi });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/stocks/technicals/:symbol ─────────────────────────────────────
+// Batched technical indicators for the Deep Research "Technical Analysis" panel
+// (moving averages, ADX trend strength, Williams %R, volatility). Cached ~6h —
+// 1-day indicators only change daily — to bound FMP cost; rate-limited.
+router.get("/stocks/technicals/:symbol", aiDetailLimiter, async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const data = await cachedDetail(`tech:${symbol}`, 6 * 60 * 60 * 1000, async () => {
+      const [sma50, sma200, ema20, rsi14, adx, williams, stddev] = await Promise.all([
+        fetchIndicatorLatest(symbol, "sma", 50),
+        fetchIndicatorLatest(symbol, "sma", 200),
+        fetchIndicatorLatest(symbol, "ema", 20),
+        fetchIndicatorLatest(symbol, "rsi", 14),
+        fetchIndicatorLatest(symbol, "adx", 14),
+        fetchIndicatorLatest(symbol, "williams", 14),
+        fetchIndicatorLatest(symbol, "standarddeviation", 20),
+      ]);
+      // If every indicator came back null (transient FMP failure / rate limit),
+      // return null so cachedDetail does NOT cache an empty result for 6h.
+      const anyData = [sma50, sma200, ema20, rsi14, adx, williams, stddev].some((x) => x && x.value != null);
+      if (!anyData) return null;
+      const close = sma50?.close ?? ema20?.close ?? adx?.close ?? null;
+      const asOf = sma50?.date ?? ema20?.date ?? adx?.date ?? null;
+      return {
+        symbol,
+        asOf,
+        price: close,
+        sma50: sma50?.value ?? null,
+        sma200: sma200?.value ?? null,
+        ema20: ema20?.value ?? null,
+        rsi: rsi14?.value ?? null,
+        adx: adx?.value ?? null,
+        williams: williams?.value ?? null,
+        stdDev: stddev?.value ?? null,
+      };
+    }, force);
+    res.json(data);
+  } catch (e) {
+    res.status(502).json({ error: "Could not load technical indicators" });
+  }
+});
+
+// ── GET /api/stocks/earnings/:symbol ───────────────────────────────────────
+// Next earnings date + recent EPS/revenue beat-or-miss history. Cached ~12h.
+router.get("/stocks/earnings/:symbol", async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const earnings = await cachedDetail(`earnings:${symbol}`, 12 * 60 * 60 * 1000, () =>
+      fetchEarnings(symbol, { limit: 10 }), force
+    );
+    res.json({ symbol, earnings: earnings || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
