@@ -56,6 +56,12 @@ app.use(helmet({
     },
   },
   crossOriginEmbedderPolicy: false,
+  // PayPal Smart Buttons open a checkout POPUP and talk to it via window.opener.
+  // Helmet's default COOP ('same-origin') nulls window.opener for cross-origin
+  // popups, which breaks the handshake and leaves the popup stuck on about:blank.
+  // 'same-origin-allow-popups' keeps COOP protection for the page itself while
+  // letting popups it opens retain the opener link.
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
 }));
 
 app.use(cors());

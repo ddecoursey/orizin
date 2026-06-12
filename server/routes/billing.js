@@ -1,9 +1,16 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import * as db from '../db.js';
 import * as paypal from '../paypal.js';
 import { sendEmail, subscriptionEmail, cancelEmail } from '../email.js';
 
 const router = Router();
+
+// Generous limiters — well above legitimate use, but cap abuse. Webhook traffic
+// is from PayPal (low volume); activate/cancel are user-initiated (rare) and each
+// makes a PayPal API call. Real client IPs resolve via the app's `trust proxy`.
+const webhookLimiter = rateLimit({ windowMs: 60_000, max: 120, standardHeaders: true, legacyHeaders: false });
+const actionLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: true, legacyHeaders: false });
 
 // PayPal statuses that count as "subscribed → Pro".
 const ACTIVE = new Set(['ACTIVE', 'APPROVED']);
@@ -40,7 +47,7 @@ router.get('/billing/status', (req, res) => {
 // POST /api/billing/activate — verify a client-approved subscription with PayPal
 // (never trust the client), then attach it and grant Pro. pro_until is set from
 // PayPal's next_billing_time so we always know the paid-through date.
-router.post('/billing/activate', async (req, res) => {
+router.post('/billing/activate', actionLimiter, async (req, res) => {
   if (!paypal.isConfigured()) return res.status(503).json({ error: 'Billing is not configured' });
 
   const subscriptionId = String(req.body?.subscriptionID || req.body?.subscriptionId || '').trim();
@@ -82,7 +89,7 @@ router.post('/billing/activate', async (req, res) => {
 // POST /api/billing/cancel — stop the recurring PayPal billing, but KEEP Pro
 // until the end of the already-paid period (pro_until). A periodic sweep / lazy
 // reconcile downgrades to Free once that date passes.
-router.post('/billing/cancel', async (req, res) => {
+router.post('/billing/cancel', actionLimiter, async (req, res) => {
   const user = db.getUserByUsername(req.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -122,7 +129,7 @@ router.post('/billing/cancel', async (req, res) => {
 
 // POST /api/billing/webhook — PayPal calls this server-to-server (UNAUTHENTICATED;
 // exempted from the session gate in index.js). Signature-verified, then synced.
-router.post('/billing/webhook', async (req, res) => {
+router.post('/billing/webhook', webhookLimiter, async (req, res) => {
   const event = req.body || {};
   const verified = await paypal.verifyWebhookSignature(req.headers, event);
   if (!verified) return res.status(400).json({ error: 'Webhook signature verification failed' });
