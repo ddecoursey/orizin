@@ -86,7 +86,19 @@ export default function UpgradeModal({ onClose, onSuccess }) {
         style: { shape: "pill", color: "gold", layout: "vertical", label: "subscribe" },
         fundingSource: paypal.FUNDING?.PAYPAL,
         createSubscription: (data, actions) =>
-          actions.subscription.create({ plan_id: cfg.planId }),
+          actions.subscription.create({
+            plan_id: cfg.planId,
+            application_context: {
+              brand_name: "Orizin",
+              user_action: "SUBSCRIBE_NOW",
+              shipping_preference: "NO_SHIPPING",
+              // Used only if PayPal falls back to a full-page redirect (e.g. the
+              // popup is blocked). Auto-adapts to the current environment's origin
+              // so QA and prod each return to themselves.
+              return_url: `${window.location.origin}/?subscribed=1`,
+              cancel_url: `${window.location.origin}/?subscribe=cancelled`,
+            },
+          }),
         onClick: () => {
           // Mark that checkout has started so we can show progress state and
           // prevent the modal from being dismissed via the backdrop.
@@ -221,27 +233,16 @@ export default function UpgradeModal({ onClose, onSuccess }) {
                   </div>
                 )}
 
-                {/* While launching we show a lightweight in-progress state instead of
-                    the PayPal button so the user has clear feedback and we can guard
-                    against accidental modal close. */}
-                {launching ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center p-4 text-center">
-                    <div className="mb-2 text-lg">🔐 Opening PayPal checkout…</div>
-                    <p className="text-xs text-amber-300">
-                      Complete your subscription in the PayPal window.
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      This screen will update automatically when done.
-                    </p>
-                    <button
-                      onClick={() => setLaunching(false)}
-                      className="mt-3 text-[10px] underline text-gray-400 hover:text-gray-200"
-                    >
-                      Go back
-                    </button>
-                  </div>
-                ) : (
-                  <div ref={containerRef} />
+                {/* The PayPal button MUST stay mounted for the entire checkout —
+                    removing its container mid-flow severs the SDK's popup
+                    handshake (a cause of the about:blank dead-end). So we never
+                    swap it out; the in-progress hint sits below it instead. */}
+                <div ref={containerRef} />
+
+                {launching && (
+                  <p className="mt-2 text-center text-[11px] text-amber-300">
+                    Complete your subscription in the PayPal window — this screen updates automatically when you're done.
+                  </p>
                 )}
               </div>
 

@@ -102,12 +102,30 @@ export async function cancelSubscription(subscriptionId, reason = 'Customer canc
 // configured PAYPAL_WEBHOOK_ID we cannot verify, so we reject (fail closed).
 export async function verifyWebhookSignature(headers, event) {
   if (!WEBHOOK_ID) return false;
+
+  const authAlgo = headers['paypal-auth-algo'];
+  const certUrl = headers['paypal-cert-url'];
+  const transmissionId = headers['paypal-transmission-id'];
+  const transmissionSig = headers['paypal-transmission-sig'];
+  const transmissionTime = headers['paypal-transmission-time'];
+
+  // Cheap rejects BEFORE spending a PayPal API call: real events always carry
+  // all five signature headers, and the cert must live on a paypal.com host.
+  // This stops trivial junk POSTs from draining our PayPal API quota.
+  if (!authAlgo || !certUrl || !transmissionId || !transmissionSig || !transmissionTime) return false;
+  try {
+    const host = new URL(certUrl).hostname.toLowerCase();
+    if (host !== 'paypal.com' && !host.endsWith('.paypal.com')) return false;
+  } catch {
+    return false;
+  }
+
   const body = {
-    auth_algo: headers['paypal-auth-algo'],
-    cert_url: headers['paypal-cert-url'],
-    transmission_id: headers['paypal-transmission-id'],
-    transmission_sig: headers['paypal-transmission-sig'],
-    transmission_time: headers['paypal-transmission-time'],
+    auth_algo: authAlgo,
+    cert_url: certUrl,
+    transmission_id: transmissionId,
+    transmission_sig: transmissionSig,
+    transmission_time: transmissionTime,
     webhook_id: WEBHOOK_ID,
     webhook_event: event,
   };

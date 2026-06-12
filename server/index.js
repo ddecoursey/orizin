@@ -36,6 +36,22 @@ const app = express();
 
 app.set('trust proxy', true); // honor X-Forwarded-Proto from Railway's edge
 
+// ── Crash safety ────────────────────────────────────────────────────────────
+// Node's default is to CRASH the whole server on an unhandled promise rejection
+// or uncaught exception. Those almost always originate from a single bad request
+// or background task (FMP fetch, enrichment), not a corrupted process — so log
+// them (console + in-app error log) and keep serving instead of dropping every
+// user. Genuinely fatal errors will still surface in the logs for triage.
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+  console.error('[unhandledRejection]', msg);
+  try { logError('Unhandled promise rejection', { error: msg }); } catch { /* ignore */ }
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err?.stack || err);
+  try { logError('Uncaught exception', { error: err?.stack || String(err) }); } catch { /* ignore */ }
+});
+
 // Security headers
 app.use(helmet({
   contentSecurityPolicy: {
@@ -56,6 +72,12 @@ app.use(helmet({
     },
   },
   crossOriginEmbedderPolicy: false,
+  // PayPal Smart Buttons open a checkout POPUP and talk to it via window.opener.
+  // Helmet's default COOP ('same-origin') nulls window.opener for cross-origin
+  // popups, which breaks the handshake and leaves the popup stuck on about:blank.
+  // 'same-origin-allow-popups' keeps COOP protection for the page itself while
+  // letting popups it opens retain the opener link.
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
 }));
 
 app.use(cors());
@@ -393,6 +415,13 @@ app.get('/api/auth/status', (req, res) => {
     signupsEnabled: process.env.SIGNUPS_ENABLED !== 'false' && userCount > 0,
     env: APP_ENV,
   });
+});
+
+// Lightweight health check for Railway / uptime monitors. Unauthenticated and
+// cheap (no DB write) — reports basic liveness. Defined before the /api auth
+// gate so it stays reachable without a session.
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, env: APP_ENV, uptime: Math.round(process.uptime()) });
 });
 
 // One-time setup endpoint: create the very first admin user when the database is empty.

@@ -87,6 +87,25 @@ export default function App() {
     }
   }
 
+  // PayPal redirect fallback: if the checkout popup was blocked, PayPal sends the
+  // buyer back to /?subscribed=1 after approval. onApprove never ran (we navigated
+  // away), so Pro is granted server-side by the webhook — poll the session a few
+  // times so it shows up, then clean the URL. (?subscribe=cancelled just clears.)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const subscribed = params.get("subscribed") === "1";
+    const cancelled = params.get("subscribe") === "cancelled";
+    if (!subscribed && !cancelled) return;
+    window.history.replaceState({}, "", window.location.pathname);
+    if (!subscribed) return;
+    let n = 0;
+    const id = setInterval(() => {
+      refreshAuth();
+      if (++n >= 4) clearInterval(id);
+    }, 2500);
+    return () => clearInterval(id);
+  }, []);
+
   async function handleLogout() {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
