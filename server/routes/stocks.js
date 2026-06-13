@@ -22,6 +22,8 @@ import {
 } from "../db.js";
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
+import { hasOriAccess } from "../access.js";
+import { geminiGenerateJson } from "../geminiJson.js";
 
 // Rate limiters for expensive operations (per user or IP)
 // Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
@@ -83,6 +85,8 @@ import {
   fetchRSI,
   fetchIndicatorLatest,
   fetchEarnings,
+  fetchCongressTrades,
+  fetchInsiderBySymbol,
   fetchRatingsSnapshot,
   fetchGrades,
   fetchGeneralNews,
@@ -930,6 +934,217 @@ router.get("/stocks/technicals/:symbol", aiDetailLimiter, async (req, res) => {
     res.json(data);
   } catch (e) {
     res.status(502).json({ error: "Could not load technical indicators" });
+  }
+});
+
+// Aggregate Congress + insider trades into a "smart money" snapshot.
+function aggregateSmartMoney(symbol, senate, house, insider) {
+  const now = Date.now();
+  const within = (d, days) => { const t = Date.parse(d); return Number.isFinite(t) && now - t <= days * 86400000; };
+  const isBuy = (type) => /purchase|buy/i.test(type || "");
+  const isSell = (type) => /sale|sell/i.test(type || "");
+  const byDateDesc = (a, b) => new Date(b.transactionDate) - new Date(a.transactionDate);
+
+  // Congress (disclosures lag, so a wider 180-day window).
+  const congress = [...senate, ...house].filter((t) => within(t.transactionDate, 180));
+  const cBuyers = new Set(), cSellers = new Set();
+  for (const t of congress) { if (isBuy(t.type)) cBuyers.add(t.name); else if (isSell(t.type)) cSellers.add(t.name); }
+  const congressRecent = [...congress].sort(byDateDesc).slice(0, 12).map((t) => ({
+    date: t.transactionDate, name: t.name, chamber: t.chamber, district: t.district,
+    type: isBuy(t.type) ? "buy" : isSell(t.type) ? "sell" : "other", amount: t.amount,
+  }));
+
+  // Insiders — open-market only (P-Purchase / S-Sale; exclude awards/options/gifts).
+  const openMarket = insider.filter((t) => within(t.transactionDate, 120) && /^(P|S)-/i.test(t.transactionType || ""));
+  const iBuyers = new Set(), iSellers = new Set();
+  let buyValue = 0;
+  for (const t of openMarket) {
+    if (/^P-/i.test(t.transactionType)) { iBuyers.add(t.name); buyValue += (t.shares || 0) * (t.price || 0); }
+    else iSellers.add(t.name);
+  }
+  const insiderRecent = [...openMarket].sort(byDateDesc).slice(0, 6).map((t) => ({
+    date: t.transactionDate, name: t.name, role: t.role,
+    type: /^P-/i.test(t.transactionType) ? "buy" : "sell", shares: t.shares,
+    value: Math.round((t.shares || 0) * (t.price || 0)),
+  }));
+
+  const net = (cBuyers.size - cSellers.size) + (iBuyers.size - iSellers.size);
+  let signal = "quiet";
+  if (congress.length || openMarket.length) signal = net > 0 ? "buying" : net < 0 ? "selling" : "mixed";
+
+  return {
+    symbol,
+    signal,
+    congress: { buyers: cBuyers.size, sellers: cSellers.size, total: congress.length, recent: congressRecent },
+    insider: { buyers: iBuyers.size, sellers: iSellers.size, total: openMarket.length, buyValue: Math.round(buyValue), recent: insiderRecent },
+  };
+}
+
+// ── GET /api/stocks/smart-money/:symbol ────────────────────────────────────
+// Congressional (Senate + House) + insider (open-market Form 4) trades, rolled
+// up into a buy/sell signal + recent activity. Cached ~6h; rate-limited.
+router.get("/stocks/smart-money/:symbol", aiDetailLimiter, async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const data = await cachedDetail(`smartmoney:${symbol}`, 6 * 60 * 60 * 1000, async () => {
+      const [senate, house, insider] = await Promise.all([
+        fetchCongressTrades("senate", symbol),
+        fetchCongressTrades("house", symbol),
+        fetchInsiderBySymbol(symbol),
+      ]);
+      return aggregateSmartMoney(symbol, senate, house, insider);
+    }, force);
+    res.json(data || { symbol, signal: "quiet", congress: { total: 0, recent: [] }, insider: { total: 0, recent: [] } });
+  } catch (e) {
+    res.status(502).json({ error: "Could not load smart-money data" });
+  }
+});
+
+// ── POST /api/stocks/game-plan/:symbol ─────────────────────────────────────
+// Ori's intelligence layer for the unified Game Plan. The client sends its
+// deterministic verdict + a compact fundamentals snapshot; the server adds
+// canonical narrative data (profile + recent news) and asks Gemini to judge the
+// INTANGIBLES / future potential (the Tesla/SpaceX factor a spreadsheet misses),
+// macro tail/headwinds, bull & bear cases, and a BOUNDED adjustment to the
+// verdict. Pro-gated, rate-limited, cached 24h (company-level, not personalized).
+const GAME_PLAN_SYSTEM = `You are Ori, the in-house analyst for the Orizin stock app. You produce the "intangibles" layer of a stock's Game Plan — the judgment a spreadsheet can't make.
+
+Your job: weigh what the NUMBERS MISS. Durable moat, brand, founder/management quality, total addressable market, disruption & optionality, regulatory and macro tailwinds/headwinds, and narrative momentum. A company can have weak current fundamentals yet enormous intangible potential (e.g. an early Tesla or a SpaceX) — say so when it's true, and equally call out hype with no substance.
+
+Rules:
+- Be sharp and specific to THIS company, not generic. Use the profile and recent news.
+- Be balanced: always give a real bull case AND a real bear case, plus what would change your mind.
+- intangiblesScore (0-100): how strong the non-financial / future-potential case is. High only with a concrete reason.
+- convictionDelta (-20..20): how much you'd nudge the data-driven conviction, and no more. The data is the anchor; you adjust within reason.
+- horizonView / actionView: your view, knowing it may be reconciled toward the data verdict.
+- riskLevel: be honest; story-driven names are usually "high" or "speculative".
+- This is EDUCATIONAL analysis, never personalized financial advice. Do not tell the user to buy/sell with their own money; describe the setup.
+Return ONLY the JSON object matching the schema.`;
+
+const GAME_PLAN_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    bottomLine: { type: "STRING" },
+    intangiblesScore: { type: "INTEGER" },
+    intangiblesRationale: { type: "STRING" },
+    futurePotential: { type: "STRING" },
+    keyFactors: { type: "ARRAY", items: { type: "STRING" } },
+    macroTailwinds: { type: "ARRAY", items: { type: "STRING" } },
+    macroHeadwinds: { type: "ARRAY", items: { type: "STRING" } },
+    bullCase: { type: "STRING" },
+    bearCase: { type: "STRING" },
+    whatWouldChangeMyMind: { type: "STRING" },
+    riskLevel: { type: "STRING", enum: ["low", "moderate", "high", "speculative"] },
+    horizonView: { type: "STRING", enum: ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"] },
+    actionView: { type: "STRING" },
+    convictionDelta: { type: "INTEGER" },
+  },
+  required: [
+    "bottomLine", "intangiblesScore", "intangiblesRationale", "futurePotential",
+    "bullCase", "bearCase", "whatWouldChangeMyMind", "riskLevel", "horizonView",
+    "actionView", "convictionDelta",
+  ],
+  propertyOrdering: [
+    "bottomLine", "intangiblesScore", "intangiblesRationale", "futurePotential",
+    "keyFactors", "macroTailwinds", "macroHeadwinds", "bullCase", "bearCase",
+    "whatWouldChangeMyMind", "riskLevel", "horizonView", "actionView", "convictionDelta",
+  ],
+};
+
+function buildGamePlanPrompt({ symbol, profile, news, stats, verdict }) {
+  const p = profile || {};
+  const s = stats || {};
+  const v = verdict || {};
+  const num = (x, suf = "") => (x == null || !Number.isFinite(Number(x)) ? "—" : `${x}${suf}`);
+  const pctf = (x) => (x == null || !Number.isFinite(Number(x)) ? "—" : `${(Number(x) * 100).toFixed(1)}%`);
+  const headlines = (Array.isArray(news) ? news : [])
+    .slice(0, 8)
+    .map((n) => `• ${n.publishedDate ? String(n.publishedDate).slice(0, 10) + " " : ""}${n.title || ""}`)
+    .join("\n");
+
+  return `STOCK: ${symbol}${p.companyName ? ` — ${p.companyName}` : ""}
+Sector / Industry: ${p.sector || s.sector || "—"} / ${p.industry || "—"}
+Price ${num(s.price)} · Market cap ${num(s.mcap)} · Beta ${num(s.beta)}
+
+WHAT THE NUMBERS SAY (the deterministic verdict you are adjusting):
+- Hold horizon: ${v.horizon || "—"} · Right-now action: ${v.action || "—"} · Conviction ${num(v.conviction)}/100
+- Fundamentals/Orizin: ${num(s.orizinScore)}/100 · durability ${num(v.durability)} · valuation ${num(v.valuation)}
+- Flags: ${v.flags ? Object.entries(v.flags).filter(([, on]) => on).map(([k]) => k).join(", ") || "none" : "—"}
+${Array.isArray(v.reasons) && v.reasons.length ? `- Drivers: ${v.reasons.join("; ")}` : ""}
+
+KEY FUNDAMENTALS:
+- Valuation: P/E ${num(s.pe)}, P/S ${num(s.ps)}, P/B ${num(s.pb)}, FCF yield ${pctf(s.fcf_yield)}, DCF ${num(s.dcf)}, analyst target ${num(s.target)}
+- Quality: ROIC ${pctf(s.roic)}, ROE ${pctf(s.roe)}, net margin ${pctf(s.net_margin)}, op margin ${pctf(s.op_margin)}, gross ${pctf(s.gross_margin)}, FCF margin ${pctf(s.fcf_margin)}
+- Growth: revenue ${pctf(s.revenue_growth)}, EPS ${pctf(s.eps_growth)}
+- Balance sheet: D/E ${num(s.debt_equity)}, net-debt/EBITDA ${num(s.net_debt_ebitda)}; dividend yield ${pctf(s.div_yield)}
+
+COMPANY PROFILE:
+${p.description ? String(p.description).slice(0, 1200) : "(no description available)"}
+
+RECENT HEADLINES:
+${headlines || "(none available)"}
+
+Assess the intangibles and future potential of ${symbol}, then fill the JSON schema. Remember: the data verdict above is the anchor — your convictionDelta and horizon view should ADJUST within reason, not overrule it, unless the intangible story is genuinely decisive.`;
+}
+
+function sanitizeGamePlan(o) {
+  if (!o || typeof o !== "object") return null;
+  const clampInt = (v, lo, hi, dflt) => {
+    const n = Math.round(Number(v));
+    return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
+  };
+  const str = (v, max = 600) => (typeof v === "string" ? v.slice(0, max) : "");
+  const arr = (v, max = 6) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, max) : []);
+  const RISK = ["low", "moderate", "high", "speculative"];
+  const HOR = ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"];
+  return {
+    bottomLine: str(o.bottomLine, 400),
+    intangiblesScore: clampInt(o.intangiblesScore, 0, 100, 50),
+    intangiblesRationale: str(o.intangiblesRationale),
+    futurePotential: str(o.futurePotential),
+    keyFactors: arr(o.keyFactors),
+    macroTailwinds: arr(o.macroTailwinds),
+    macroHeadwinds: arr(o.macroHeadwinds),
+    bullCase: str(o.bullCase),
+    bearCase: str(o.bearCase),
+    whatWouldChangeMyMind: str(o.whatWouldChangeMyMind),
+    riskLevel: RISK.includes(o.riskLevel) ? o.riskLevel : "high",
+    horizonView: HOR.includes(o.horizonView) ? o.horizonView : null,
+    actionView: str(o.actionView, 80),
+    convictionDelta: clampInt(o.convictionDelta, -20, 20, 0),
+  };
+}
+
+router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  if (!hasOriAccess(req.userId)) {
+    return res.status(402).json({ error: "Ori's Game Plan is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
+  }
+  try {
+    const force = req.query.refresh === "1" || req.query.refresh === "true";
+    const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
+    const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
+    const data = await cachedDetail(`gameplan:${symbol}`, 24 * 60 * 60 * 1000, async () => {
+      const [profile, news] = await Promise.all([
+        cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)),
+        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })),
+      ]);
+      const raw = await geminiGenerateJson({
+        system: GAME_PLAN_SYSTEM,
+        prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
+        schema: GAME_PLAN_SCHEMA,
+      });
+      return sanitizeGamePlan(raw);
+    }, force);
+    res.json({ symbol, ori: data });
+  } catch (e) {
+    if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
+    if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });
+    if (e.code === "bad_json") return res.status(502).json({ error: "Ori couldn't produce a Game Plan — try again." });
+    res.status(502).json({ error: "Could not generate Ori's Game Plan." });
   }
 });
 

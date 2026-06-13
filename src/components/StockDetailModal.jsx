@@ -63,6 +63,7 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
   const wrapRef = useRef(null);
   const [w, setW] = useState(0);
   const [hover, setHover] = useState(null); // hovered point index
+  const [hoverCross, setHoverCross] = useState(null); // hovered golden/death cross marker
   // Timeframe can be controlled by the parent (so two compare panes stay in
   // sync) or managed internally for a standalone chart.
   const [timeframeInternal, setTimeframeInternal] = useState("1Y");
@@ -127,6 +128,29 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
     return { sma50: maSMA(all, 50), sma200: maSMA(all, 200), ema20: maEMA(all, 20) };
   }, [allPoints, showMA]);
 
+  // Golden / death crosses (SMA 50 × SMA 200) that fall inside the visible
+  // window — surfaced as interactive markers right where they happen on the
+  // chart. A "golden cross" (50 rising above 200) is classically bullish; a
+  // "death cross" (50 falling below 200) bearish. Only meaningful when both
+  // moving averages are toggled on.
+  const crossMarkers = useMemo(() => {
+    if (!showMA || !maMaps || !maOn.sma50 || !maOn.sma200) return [];
+    const out = [];
+    let prev = null;
+    points.forEach((p, i) => {
+      const a = maMaps.sma50.get(p.date);
+      const b = maMaps.sma200.get(p.date);
+      if (a == null || b == null) { prev = null; return; }
+      const diff = a - b;
+      if (prev != null) {
+        if (prev <= 0 && diff > 0) out.push({ i, dir: "golden", date: p.date, level: (a + b) / 2 });
+        else if (prev >= 0 && diff < 0) out.push({ i, dir: "death", date: p.date, level: (a + b) / 2 });
+      }
+      prev = diff;
+    });
+    return out;
+  }, [points, maMaps, showMA, maOn.sma50, maOn.sma200]);
+
   // If 1D turned out to be unavailable for this symbol, omit the button and
   // fall back to a daily timeframe.
   const intradayUnavailable =
@@ -169,6 +193,11 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
           {d.label}
         </button>
       ))}
+      {crossMarkers.length > 0 && (
+        <span className="ml-1.5 text-[9px] text-gray-500">
+          <span className="text-amber-400">◆</span> golden / <span className="text-red-400">◆</span> death — hover to inspect
+        </span>
+      )}
     </div>
   ) : null;
 
@@ -366,6 +395,31 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
               )),
             )}
 
+            {/* Golden / death cross markers (SMA 50 × SMA 200) */}
+            {crossMarkers.map((m, i) => {
+              const cx = xAt(m.i);
+              const cy = yPrice(m.level);
+              const gold = m.dir === "golden";
+              const color = gold ? "#f59e0b" : "#ef4444";
+              const active = hoverCross === i;
+              return (
+                <g
+                  key={`xc${i}`}
+                  onMouseEnter={() => setHoverCross(i)}
+                  onMouseLeave={() => setHoverCross((c) => (c === i ? null : c))}
+                  style={{ cursor: "pointer" }}
+                >
+                  {/* faint vertical guide so the cross is easy to spot */}
+                  <line x1={cx} x2={cx} y1={PRICE_TOP} y2={PRICE_TOP + PRICE_H} stroke={color} strokeOpacity={active ? 0.5 : 0.22} strokeWidth="1" strokeDasharray="2 3" />
+                  {/* generous transparent hit target */}
+                  <circle cx={cx} cy={cy} r="12" fill="transparent" />
+                  {active && <circle cx={cx} cy={cy} r="9" fill={color} opacity="0.18" />}
+                  <circle cx={cx} cy={cy} r={active ? 7 : 6} fill="none" stroke={color} strokeWidth="1.75" />
+                  <circle cx={cx} cy={cy} r="2.5" fill={color} />
+                </g>
+              );
+            })}
+
             {/* RSI panel */}
             {hasRsi && (
               <>
@@ -418,6 +472,27 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
                 {hRsi != null && <circle cx={hx} cy={yRsi(hRsi)} r="3" fill="#a78bfa" stroke="#0a0a0a" strokeWidth="1" />}
               </>
             )}
+
+            {/* Golden / death cross label (on marker hover) — drawn last so it sits on top */}
+            {hoverCross != null && crossMarkers[hoverCross] && (() => {
+              const m = crossMarkers[hoverCross];
+              const cx = xAt(m.i);
+              const cy = yPrice(m.level);
+              const gold = m.dir === "golden";
+              const color = gold ? "#f59e0b" : "#ef4444";
+              const label = `${gold ? "Golden" : "Death"} cross · ${shortDate(m.date)}`;
+              const bw = 16 + label.length * 5.4;
+              const bx = Math.max(2, Math.min(w - bw - 2, cx - bw / 2));
+              const by = Math.max(2, cy - 30);
+              return (
+                <g pointerEvents="none">
+                  <rect x={bx} y={by} width={bw} height="19" rx="4" fill="#0a0f1d" stroke={color} strokeWidth="1" />
+                  <text x={bx + bw / 2} y={by + 13} textAnchor="middle" fontSize="10" fontWeight="bold" fill={gold ? "#fbbf24" : "#fca5a5"}>
+                    {label}
+                  </text>
+                </g>
+              );
+            })()}
           </svg>
         )}
 
@@ -787,7 +862,7 @@ export default function StockDetailModal({
   if (!row) return null;
 
   const sec = SECTOR_COLORS[row.sector] || { bg: "#1e293b", fg: "#94a3b8" };
-  const sc = row.score != null ? Math.round(row.score * 100) : null;
+  const sc = row.conviction != null ? row.conviction : row.score != null ? Math.round(row.score * 100) : null;
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   return (
@@ -830,7 +905,7 @@ export default function StockDetailModal({
               </div>
               {sc != null && (
                 <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  Score {sc}
+                  Conviction {sc}
                 </div>
               )}
             </div>

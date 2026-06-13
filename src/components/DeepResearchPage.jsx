@@ -1,10 +1,15 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import { IconResearch, IconRefresh } from "./icons.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
+import { computeFit } from "../lib/fitScore.js";
+import { computeVerdict, mergeOriIntoVerdict, metricTone } from "../lib/verdict.js";
+import { useGamePlanOri } from "../hooks/useGamePlanOri.js";
+import GamePlan from "./GamePlan.jsx";
+import InfoHint from "./InfoHint.jsx";
 
 // Compact period-columns table for financial statements: one row per line
 // item, one column per fiscal year (newest first, up to `maxCols`).
@@ -90,12 +95,21 @@ function Panel({ title, tier, children, span = 1, soon = false }) {
   );
 }
 
-function Stat({ label, value, type, accent }) {
+const TONE_TEXT = { good: "text-emerald-400", ok: "text-amber-400", bad: "text-red-400", neutral: "text-gray-200" };
+const TONE_DOT = { good: "bg-emerald-400", ok: "bg-amber-400", bad: "bg-red-400" };
+
+// A labeled metric. Pass `metric` (a rubric key) to color the value Good/OK/Bad
+// for beginners; an explicit `accent` always wins (used where a panel sets its
+// own emphasis, e.g. DCF margin of safety).
+function Stat({ label, value, type, accent, metric }) {
   const f = type ? fmt(value, type) : value;
+  const tone = metric && value != null ? metricTone(metric, value) : "neutral";
+  const colorCls = accent || (tone !== "neutral" ? TONE_TEXT[tone] : "text-gray-200");
   return (
     <div className="flex justify-between items-baseline py-1.5 border-b border-gray-800/50 gap-3">
       <span className="text-[11px] text-gray-500 shrink-0">{label}</span>
-      <span className={`text-xs font-semibold font-mono text-right ${accent || "text-gray-200"}`}>
+      <span className={`text-xs font-semibold font-mono text-right flex items-center gap-1.5 justify-end ${colorCls}`}>
+        {tone !== "neutral" && TONE_DOT[tone] && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TONE_DOT[tone]}`} />}
         {f ?? <span className="text-gray-600">—</span>}
       </span>
     </div>
@@ -122,10 +136,16 @@ function maSignal(price, ma) {
   const pct = ((price - ma) / ma) * 100;
   return { value, signal: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`, tone: price >= ma ? "up" : "down" };
 }
-function crossSignal(sma50, sma200) {
+// Current 50-vs-200 trend regime (the golden/death cross *events* are shown
+// interactively on the price chart; this row just states which side we're on now).
+function trendRow(sma50, sma200) {
   if (sma50 == null || sma200 == null) return { value: null };
-  const golden = sma50 >= sma200;
-  return { value: golden ? "Golden" : "Death", signal: golden ? "bullish" : "bearish", tone: golden ? "up" : "down" };
+  const bull = sma50 >= sma200;
+  return {
+    value: bull ? "Bullish" : "Bearish",
+    signal: bull ? "50 > 200" : "50 < 200",
+    tone: bull ? "up" : "down",
+  };
 }
 function rsiSignal(rsi) {
   if (rsi == null) return { value: null };
@@ -183,46 +203,92 @@ function daysUntil(d) {
   return diff > 0 ? `in ${diff}d` : `${-diff}d ago`;
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {} }) {
+// ── Smart Money signal styling ──────────────────────────────────────────────
+function smTone(signal) {
+  if (signal === "buying") return "bg-emerald-900/40 text-emerald-300 border border-emerald-800/50";
+  if (signal === "selling") return "bg-red-900/40 text-red-300 border border-red-800/50";
+  if (signal === "mixed") return "bg-amber-900/40 text-amber-300 border border-amber-800/50";
+  return "bg-gray-800 text-gray-400 border border-gray-700";
+}
+function smLabel(signal) {
+  return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
+}
+
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {}, fitCtx = null }) {
+  // Personalized fit (portfolio / theses / goals). Cheap — one stock.
+  const fit = computeFit(row || { symbol }, fitCtx);
+
+  // ── Unified Game Plan ──────────────────────────────────────────────────────
+  // Deterministic core (instant): folds the Orizin Score + Fit + technicals +
+  // valuation + smart money + analysts into one conviction / horizon / action.
+  const deterministic = useMemo(
+    () => computeVerdict(row || { symbol }, detail, fit),
+    [row, symbol, detail, fit],
+  );
+  // Compact payload Ori's intelligence layer needs (POSTed to the server).
+  const oriPayload = useMemo(() => {
+    const r = row || {};
+    return {
+      stats: {
+        price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
+        pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield, div_yield: r.div_yield,
+        roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
+        gross_margin: r.gross_margin, fcf_margin: r.fcf_margin,
+        revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
+        debt_equity: r.debt_equity, net_debt_ebitda: r.net_debt_ebitda,
+        dcf: detail.aiData?.dcf ?? null, target: detail.aiData?.target_consensus ?? null,
+        orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+      },
+      verdict: {
+        horizon: deterministic.horizon?.label,
+        action: deterministic.action?.label,
+        conviction: deterministic.conviction,
+        durability: deterministic.durability != null ? Math.round(deterministic.durability * 100) : null,
+        valuation: deterministic.valuation != null ? Math.round(deterministic.valuation * 100) : null,
+        flags: deterministic.flags,
+        reasons: (deterministic.reasons || []).map((x) => x.text),
+      },
+    };
+  }, [row, detail, deterministic]);
+  const oriPayloadRef = useRef(oriPayload);
+  useEffect(() => {
+    oriPayloadRef.current = oriPayload;
+  }, [oriPayload]);
+  // Deferred Ori layer (Pro, cached 24h) — fades in after the deterministic core.
+  const oriState = useGamePlanOri(symbol, {
+    enabled: !!symbol && !deterministic.insufficient,
+    payloadRef: oriPayloadRef,
+  });
+  // Fold Ori in "within reason" once it arrives; otherwise show the data verdict.
+  const verdict = useMemo(
+    () => (oriState.ori ? mergeOriIntoVerdict(deterministic, oriState.ori) : deterministic),
+    [deterministic, oriState.ori],
+  );
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
-  const { profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart } = detail;
+  const {
+    profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart,
+    technicals, loadingTechnicals, earnings, smartMoney: smart,
+  } = detail;
 
   // Deep-research-only data (statements, filings, comp, peers, growth) — owned
   // here since nothing outside this page needs it. Server caches make
   // re-opening a symbol free.
   const deep = useDeepResearch(symbol);
 
-  // Technical indicators (moving averages, ADX trend strength, Williams %R,
-  // volatility) for the Technical Analysis panel. Cached server-side ~6h.
-  const [technicals, setTechnicals] = useState(null);
-  const [techLoading, setTechLoading] = useState(false);
-  useEffect(() => {
-    if (!symbol) { setTechnicals(null); return; }
-    let cancelled = false;
-    setTechnicals(null);
-    setTechLoading(true);
-    fetch(`/api/stocks/technicals/${encodeURIComponent(symbol)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (!cancelled) { setTechnicals(d); setTechLoading(false); } })
-      .catch(() => { if (!cancelled) setTechLoading(false); });
-    return () => { cancelled = true; };
-  }, [symbol]);
-
-  // Earnings: next report date + recent EPS beat/miss history (FMP Starter).
-  const [earnings, setEarnings] = useState(null);
-  useEffect(() => {
-    if (!symbol) { setEarnings(null); return; }
-    let cancelled = false;
-    setEarnings(null);
-    fetch(`/api/stocks/earnings/${encodeURIComponent(symbol)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (!cancelled) setEarnings(d?.earnings || []); })
-      .catch(() => { if (!cancelled) setEarnings([]); });
-    return () => { cancelled = true; };
-  }, [symbol]);
+  // Technicals, earnings, and smart-money now come from `detail` (useStockDetail)
+  // so the same data also reaches Ori's context. Derive the display shapes here.
   const earnNext = earnings?.find?.((e) => e.epsActual == null && new Date(e.date) >= new Date(new Date().toDateString())) || null;
   const earnRecent = (earnings || []).filter((e) => e.epsActual != null).slice(0, 4);
+
+  const congressSignal =
+    smart && smart.congress && smart.congress.total > 0
+      ? smart.congress.buyers > smart.congress.sellers
+        ? "buying"
+        : smart.congress.sellers > smart.congress.buyers
+          ? "selling"
+          : "mixed"
+      : "quiet";
 
   const handleSearch = (stock) => {
     if (stock?.symbol) onSelectSymbol?.(stock.symbol);
@@ -244,7 +310,9 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   }
 
   const sec = SECTOR_COLORS[row?.sector] || { bg: "#1e293b", fg: "#94a3b8" };
-  const sc = row?.score != null ? Math.round(row.score * 100) : null;
+  // Header shows the unified Conviction (from the Game Plan verdict), falling
+  // back to the row's lean conviction / Orizin score for arbitrary symbols.
+  const sc = verdict?.conviction ?? row?.conviction ?? (row?.score != null ? Math.round(row.score * 100) : null);
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   // DCF margin of safety vs current price (when both present).
@@ -299,7 +367,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <div className="text-lg font-bold font-mono text-gray-100">{fmt(row?.price, "price") ?? "—"}</div>
               {sc != null && (
                 <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  Orizin Score {sc}
+                  Conviction {sc}
                 </div>
               )}
             </div>
@@ -327,8 +395,13 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
       </div>
 
       <div className="p-4 sm:p-6 space-y-6">
+        {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
+        <div className="oz-fade-rise">
+          <GamePlan verdict={verdict} oriState={oriState} />
+        </div>
+
         {/* Price + RSI chart alongside the company profile, under the name bar */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise" style={{ animationDelay: "40ms" }}>
           <section className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-2">
               Price &amp; RSI
@@ -385,29 +458,29 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <StatGrid>
                 <Stat label="Market Cap" value={row?.mcap} type="money" />
                 <Stat label="Enterprise Val" value={row?.ev} type="money" />
-                <Stat label="P/E" value={row?.pe} type="x" />
-                <Stat label="P/B" value={row?.pb} type="x" />
-                <Stat label="P/S" value={row?.ps} type="x" />
-                <Stat label="EV/EBITDA" value={row?.ev_ebitda} type="x" />
-                <Stat label="EV/GP" value={row?.ev_gp} type="x" />
-                <Stat label="FCF Yield" value={row?.fcf_yield} type="pct" />
-                <Stat label="Earnings Yield" value={row?.earnings_yield} type="pct" />
-                <Stat label="Dividend Yield" value={row?.div_yield} type="pct" />
+                <Stat label="P/E" value={row?.pe} type="x" metric="pe" />
+                <Stat label="P/B" value={row?.pb} type="x" metric="pb" />
+                <Stat label="P/S" value={row?.ps} type="x" metric="ps" />
+                <Stat label="EV/EBITDA" value={row?.ev_ebitda} type="x" metric="ev_ebitda" />
+                <Stat label="EV/GP" value={row?.ev_gp} type="x" metric="ev_gp" />
+                <Stat label="FCF Yield" value={row?.fcf_yield} type="pct" metric="fcf_yield" />
+                <Stat label="Earnings Yield" value={row?.earnings_yield} type="pct" metric="earnings_yield" />
+                <Stat label="Dividend Yield" value={row?.div_yield} type="pct" metric="div_yield" />
               </StatGrid>
             </Panel>
 
             <Panel title="Financial Ratios (TTM)" tier="T1" span={1}>
               <StatGrid>
-                <Stat label="ROIC" value={row?.roic} type="pct" />
-                <Stat label="ROE" value={row?.roe} type="pct" />
-                <Stat label="ROA" value={row?.roa} type="pct" />
-                <Stat label="Gross Margin" value={row?.gross_margin} type="pct" />
-                <Stat label="Op Margin" value={row?.op_margin} type="pct" />
-                <Stat label="Net Margin" value={row?.net_margin} type="pct" />
-                <Stat label="FCF Margin" value={row?.fcf_margin} type="pct" />
-                <Stat label="Current Ratio" value={row?.current_ratio} type="ratio" />
-                <Stat label="Debt/Equity" value={row?.debt_equity} type="ratio" />
-                <Stat label="Net Debt/EBITDA" value={row?.net_debt_ebitda} type="ratio" />
+                <Stat label="ROIC" value={row?.roic} type="pct" metric="roic" />
+                <Stat label="ROE" value={row?.roe} type="pct" metric="roe" />
+                <Stat label="ROA" value={row?.roa} type="pct" metric="roa" />
+                <Stat label="Gross Margin" value={row?.gross_margin} type="pct" metric="gross_margin" />
+                <Stat label="Op Margin" value={row?.op_margin} type="pct" metric="op_margin" />
+                <Stat label="Net Margin" value={row?.net_margin} type="pct" metric="net_margin" />
+                <Stat label="FCF Margin" value={row?.fcf_margin} type="pct" metric="fcf_margin" />
+                <Stat label="Current Ratio" value={row?.current_ratio} type="ratio" metric="current_ratio" />
+                <Stat label="Debt/Equity" value={row?.debt_equity} type="ratio" metric="debt_equity" />
+                <Stat label="Net Debt/EBITDA" value={row?.net_debt_ebitda} type="ratio" metric="net_debt_ebitda" />
               </StatGrid>
             </Panel>
 
@@ -431,7 +504,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             </Panel>
 
             <Panel title="Technical Analysis" tier="T1" span={1}>
-              {!technicals && techLoading ? (
+              {!technicals && loadingTechnicals ? (
                 <div className="h-full min-h-[80px] flex items-center justify-center text-[11px] text-gray-600">
                   Loading indicators…
                 </div>
@@ -440,7 +513,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                   <SigRow label="Price vs 50-day SMA" {...maSignal(technicals.price, technicals.sma50)} />
                   <SigRow label="Price vs 200-day SMA" {...maSignal(technicals.price, technicals.sma200)} />
                   <SigRow label="Price vs 20-day EMA" {...maSignal(technicals.price, technicals.ema20)} />
-                  <SigRow label="50 / 200 SMA" {...crossSignal(technicals.sma50, technicals.sma200)} />
+                  <SigRow label="Trend (50 vs 200)" {...trendRow(technicals.sma50, technicals.sma200)} />
                   <SigRow label="RSI (14)" {...rsiSignal(technicals.rsi)} />
                   <SigRow label="Williams %R (14)" {...williamsSignal(technicals.williams)} />
                   <SigRow label="ADX (14)" {...adxSignal(technicals.adx)} />
@@ -453,6 +526,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 <Placeholder note="Technical indicators aren't available for this symbol." />
               )}
             </Panel>
+
           </div>
         </div>
 
@@ -617,6 +691,46 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             Tier 3 · Ownership, Peers & Growth
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <Panel title="Congressional Trading" tier="T3" span={2}>
+              {smart === null ? (
+                <div className="h-full min-h-[80px] flex items-center justify-center text-[11px] text-gray-600">Loading…</div>
+              ) : !smart.congress || smart.congress.total === 0 ? (
+                <Placeholder note="No disclosed congressional trades for this symbol in the last 180 days." />
+              ) : (
+                <div>
+                  <div className="flex items-center gap-3 mb-3 flex-wrap">
+                    <span className={`text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded ${smTone(congressSignal)}`}>
+                      {smLabel(congressSignal)}
+                    </span>
+                    <span className="text-[11px] text-gray-400">
+                      <span className="text-emerald-400 font-semibold">{smart.congress.buyers} bought</span>
+                      <span className="text-gray-600"> · </span>
+                      <span className="text-red-400 font-semibold">{smart.congress.sellers} sold</span>
+                      <span className="text-gray-600"> · {smart.congress.total} disclosures · 180d</span>
+                    </span>
+                    <InfoHint text="Trades in this stock disclosed by U.S. Senators and Representatives (periodic transaction reports). Disclosures lag the actual trade by up to ~45 days. An alt-data conviction signal standard screeners don't surface." />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0.5">
+                    {smart.congress.recent.map((t, i) => (
+                      <div key={i} className="flex items-baseline justify-between gap-2 py-1 border-b border-gray-800/40">
+                        <span className="min-w-0 truncate text-[11px] text-gray-300">
+                          {t.name}
+                          <span className="ml-1 text-[10px] text-gray-600">{t.chamber === "senate" ? "Sen" : "Rep"}{t.district ? ` · ${t.district}` : ""}</span>
+                        </span>
+                        <span className="shrink-0 text-right">
+                          <span className={`text-[10.5px] font-semibold ${t.type === "buy" ? "text-emerald-400" : t.type === "sell" ? "text-red-400" : "text-gray-500"}`}>
+                            {t.type === "buy" ? "Buy" : t.type === "sell" ? "Sell" : "—"}
+                          </span>
+                          {t.amount ? <span className="ml-1 text-[9.5px] text-gray-500">{t.amount}</span> : null}
+                          <span className="ml-1 text-[9.5px] text-gray-600">{fmtEarnDate(t.date)}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Panel>
+
             <Panel title="Insider Trading" tier="T3" span={1}>
               {insider?.length ? (
                 <div className="space-y-1.5 max-h-64 overflow-y-auto">

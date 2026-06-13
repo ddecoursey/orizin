@@ -7,9 +7,8 @@ import {
   deleteChatSession,
   getUserSettings,
   patchUserSettings,
-  getUserByUsername,
-  reconcileUserPlan,
 } from "../db.js";
+import { hasOriAccess } from "../access.js";
 import { fmt } from "./prompt-helpers.js";
 import { marketStatusLine } from "../marketHours.js";
 
@@ -28,20 +27,8 @@ const chatLimiter = rateLimit({
   keyGenerator: (req) => req.userId || "anon",
 });
 
-// ── Plan gating ─────────────────────────────────────────────────────────────
-// Ori (the chat itself) is the Pro-tier feature: free accounts get the full
-// screener/research experience, Pro ($10/month) unlocks Ori. Admins always
-// have access, as do the legacy single-user/env-auth modes (no user rows).
-function hasOriAccess(userId) {
-  if (!userId || userId === "default") return true; // auth disabled (local dev)
-  try {
-    const user = reconcileUserPlan(userId) || getUserByUsername(userId);
-    if (!user) return true; // legacy AUTH_PASSWORD session — no DB user rows
-    return !!user.is_admin || user.plan === "pro";
-  } catch {
-    return false;
-  }
-}
+// Ori access gating (Pro tier) lives in ../access.js and is shared with the
+// game-plan route so the two can't drift apart.
 
 // ── Ori's persistent per-user memory ───────────────────────────────────────
 // Durable facts Ori has learned about the user (risk tolerance, horizon,
@@ -113,6 +100,10 @@ Market status: ${marketStatusLine()}. Factor this in when discussing prices ("as
 ${username && username !== "default" ? `You are talking to **${username}**. Address them naturally by name occasionally (don't overdo it) and treat the portfolios, goals, theses and remembered facts below as theirs.` : ""}
 
 IMPORTANT: Always provide a disclaimer that this is analysis for informational purposes, not financial advice.
+
+When a stock's detailed data is provided below, synthesize ALL of it into one coherent view — fundamentals (valuation / quality / growth + the Orizin Score), DCF & analyst targets, technicals (moving-average trend & golden/death cross, RSI, ADX), upcoming earnings + recent beat/miss history, smart-money activity (U.S. Congress + company insider buying/selling as a conviction signal), and the user's personal Fit score. Call out when signals agree or conflict (e.g. strong fundamentals but a death-cross downtrend; Congress or insiders buying ahead of earnings; a high Orizin Score but a low personal Fit because it concentrates the user's portfolio).
+
+Many users are BEGINNERS who mainly want to know "what do I actually do with this?" When a 🧭 GAME PLAN is provided for a stock, it is the same beginner verdict the user sees on the page — a HOLD HORIZON (trade / ~1yr / ~3yr / ~5yr / 10+yr) and a RIGHT-NOW action (accumulate / buy / hold / wait for a pullback / trim / avoid). Lead with that plain-English bottom line, then back it with the evidence. Separate the two ideas the way the Game Plan does: how long the business is worth owning (quality/safety/growth) vs. whether today's price is a good entry (valuation/trend). Stay consistent with the on-screen verdict, or say plainly why you'd differ. Keep it concrete enough that a novice knows the next step, while always noting it's educational, not financial advice.
 ${memory?.length ? `
 === WHAT YOU REMEMBER ABOUT THIS USER (from past conversations) ===
 ${memory.map((f, i) => `${i + 1}. ${f.text || f}`).join("\n")}
@@ -138,15 +129,15 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
   if (stocks?.length) {
     prompt += "\nSTOCK DATA:\n";
     prompt +=
-      "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score | Cov |\n";
+      "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score | Conv | Cov |\n";
     prompt +=
-      "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|-----|\n";
+      "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|------|-----|\n";
     const top = stocks.slice(0, 50);
     for (const s of top) {
-      prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
+      prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} | ${s.conviction != null ? s.conviction : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
     }
     if (stocks.length > 50)
-      prompt += `\n(Showing top 50 of ${stocks.length} by composite score)\n`;
+      prompt += `\n(Showing top 50 of ${stocks.length} by Conviction. Score = Orizin fundamentals engine; Conv = the unified headline Conviction users see.)\n`;
   }
 
   if (pinnedStocks?.length) {
@@ -419,8 +410,17 @@ The user has this stock open in the company-overview panel right now. Unless the
 - Quality: ROIC ${fmt(s.roic, "pct")}, ROE ${fmt(s.roe, "pct")}, ROA ${fmt(s.roa, "pct")}, Gross ${fmt(s.gross_margin, "pct")}, Op ${fmt(s.op_margin, "pct")}, Net ${fmt(s.net_margin, "pct")}, ND/EBITDA ${fmt(s.net_debt_ebitda, "r")}, D/E ${fmt(s.debt_equity, "r")}, Current ratio ${fmt(s.current_ratio, "r")}
 - Growth (TTM): Revenue ${fmt(s.revenue_growth, "pct")}, EPS ${fmt(s.eps_growth, "pct")}, FCF ${fmt(s.fcf_growth, "pct")}
 - Dividend yield: ${fmt(s.div_yield, "pct")}
-- Orizin Score: ${s.score != null ? Math.round(s.score * 100) : "—"} (Q ${s.qScore != null ? Math.round(s.qScore * 100) : "—"}, V ${s.vScore != null ? Math.round(s.vScore * 100) : "—"}, G ${s.gScore != null ? Math.round(s.gScore * 100) : "—"})${s.dataCoverage != null ? ` · data coverage ${Math.round(s.dataCoverage * 100)}%${s.dataCoverage < 0.6 ? " (LOW — score leans on imputation, be skeptical)" : ""}` : ""}
+- Conviction (headline): ${s.verdict?.conviction ?? s.conviction ?? "—"}/100 · Fundamentals engine "Orizin Score": ${s.score != null ? Math.round(s.score * 100) : "—"} (Q ${s.qScore != null ? Math.round(s.qScore * 100) : "—"}, V ${s.vScore != null ? Math.round(s.vScore * 100) : "—"}, G ${s.gScore != null ? Math.round(s.gScore * 100) : "—"})${s.dataCoverage != null ? ` · data coverage ${Math.round(s.dataCoverage * 100)}%${s.dataCoverage < 0.6 ? " (LOW — leans on imputation, be skeptical)" : ""}` : ""}
 - RSI(10): ${rsiNote}${s.rsiTrend ? ` — ${s.rsiTrend.direction} (${s.rsiTrend.change5d >= 0 ? "+" : ""}${s.rsiTrend.change5d.toFixed(1)} over ~5 sessions)` : ""}`;
+
+  if (s.verdict) {
+    const v = s.verdict;
+    out += `\n- 🧭 GAME PLAN (the unified verdict shown on this stock's page): CONVICTION ${v.conviction ?? "—"}/100 · HOLD HORIZON ${v.horizon}${v.horizonSub ? ` (${v.horizonSub})` : ""} · RIGHT NOW → ${v.action}${v.actionLine ? ` (${v.actionLine})` : ""}. ${v.headline}`;
+    if (v.reasons && v.reasons.length) out += `\n  Horizon drivers: ${v.reasons.join("; ")}`;
+    if (Array.isArray(v.pillars) && v.pillars.length)
+      out += `\n  Pillars (0-100): ${v.pillars.map((p) => `${p.id} ${p.score ?? "—"}`).join(" · ")}`;
+    out += `\n  (confidence: ${v.confidence}). This ONE conviction unifies the Orizin Score (→ fundamentals pillar), personal Fit (→ fit pillar), valuation, technicals, smart money & analysts. Stay consistent with it, or state plainly why you'd differ. You ARE Ori — own the intangibles / future-potential judgment (the Tesla/SpaceX "numbers say no, story says yes" factor) and always give a bull case, a bear case, and what would change your mind.`;
+  }
 
   if (s.performance) {
     const p = s.performance;
@@ -474,6 +474,48 @@ The user has this stock open in the company-overview panel right now. Unless the
       .map((n) => `${n.date || ""} ${n.title || ""}${n.source ? ` (${n.source})` : ""}`.trim())
       .join(" | ");
     out += `\n- Recent news: ${headlines}`;
+  }
+
+  if (s.technicals) {
+    const t = s.technicals;
+    const maVs = (ma) => (ma != null && s.price ? `${fmt(ma, "price")} (${s.price >= ma ? "above" : "below"})` : ma != null ? fmt(ma, "price") : "—");
+    out += `\n- Technicals: SMA50 ${maVs(t.sma50)}, SMA200 ${maVs(t.sma200)}, EMA20 ${maVs(t.ema20)}; RSI(14) ${t.rsi14 != null ? t.rsi14.toFixed(0) : "—"}, ADX ${t.adx != null ? t.adx.toFixed(0) + (t.adx >= 25 ? " (strong trend)" : t.adx < 20 ? " (ranging)" : "") : "—"}, Williams%R ${t.williams != null ? t.williams.toFixed(0) : "—"}`;
+    if (t.sma50 != null && t.sma200 != null) out += `; ${t.sma50 >= t.sma200 ? "golden-cross regime (SMA50>SMA200, bullish trend)" : "death-cross regime (SMA50<SMA200, bearish trend)"}`;
+  }
+
+  if (s.earnings) {
+    const e = s.earnings;
+    if (e.next) out += `\n- Next earnings: ${e.next.date}${e.next.epsEstimated != null ? ` (est. EPS ${e.next.epsEstimated})` : ""}`;
+    if (e.recent && e.recent.length) {
+      const hist = e.recent
+        .map((q) => {
+          const beat = q.epsActual != null && q.epsEstimated != null ? (q.epsActual >= q.epsEstimated ? "beat" : "miss") : "";
+          return `${q.date} EPS ${q.epsActual ?? "—"} vs ${q.epsEstimated ?? "—"}${beat ? ` (${beat})` : ""}`;
+        })
+        .join("; ");
+      out += `\n- Recent earnings: ${hist}`;
+    }
+  }
+
+  if (s.smartMoney && (s.smartMoney.congress || s.smartMoney.insider)) {
+    const c = s.smartMoney.congress;
+    const i = s.smartMoney.insider;
+    const parts = [];
+    if (c && c.total) {
+      const names = (c.recent || [])
+        .slice(0, 5)
+        .map((t) => `${t.name} ${t.type === "buy" ? "BUY" : t.type === "sell" ? "SELL" : ""}${t.amount ? ` ${t.amount}` : ""}`.trim())
+        .join("; ");
+      parts.push(`Congress (180d): ${c.buyers} bought / ${c.sellers} sold${names ? ` — ${names}` : ""}`);
+    }
+    if (i && (i.buyers || i.sellers)) {
+      parts.push(`Insiders open-market (120d): ${i.buyers} bought / ${i.sellers} sold${i.buyValue ? ` ($${i.buyValue.toLocaleString()} bought)` : ""}`);
+    }
+    if (parts.length) out += `\n- Smart money (signal: ${s.smartMoney.signal}): ${parts.join(" | ")}`;
+  }
+
+  if (s.fit) {
+    out += `\n- Fit to THIS user (portfolio/goals/theses): ${s.fit.score}/100 — ${(s.fit.reasons || []).slice(0, 3).join("; ")}`;
   }
 
   return out;
