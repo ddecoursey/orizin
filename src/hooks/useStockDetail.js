@@ -20,6 +20,9 @@ export function useStockDetail(symbol, reloadToken = 0) {
   const [ai, setAi] = useState({ sym: null, value: null });
   const [insider, setInsider] = useState({ sym: null, value: [] });
   const [news, setNews] = useState({ sym: null, value: [] });
+  const [technicals, setTechnicals] = useState({ sym: null, value: null });
+  const [earnings, setEarnings] = useState({ sym: null, value: null });
+  const [smart, setSmart] = useState({ sym: null, value: null });
   const prevRef = useRef({ symbol: null, token: reloadToken });
 
   useEffect(() => {
@@ -64,6 +67,17 @@ export function useStockDetail(symbol, reloadToken = 0) {
     getJson(u(`/api/stocks/grades/${symbol}`)).then((d) => {
       if (!cancelled) setGrades({ sym: symbol, value: d?.grades || [] });
     });
+    // Technicals, earnings, and smart-money power both the Deep Research panels
+    // AND Ori's context (so recommendations use them) — fetched here once.
+    getJson(u(`/api/stocks/technicals/${symbol}`)).then((d) => {
+      if (!cancelled) setTechnicals({ sym: symbol, value: d || null });
+    });
+    getJson(u(`/api/stocks/earnings/${symbol}`)).then((d) => {
+      if (!cancelled) setEarnings({ sym: symbol, value: d?.earnings ?? null });
+    });
+    getJson(u(`/api/stocks/smart-money/${symbol}`)).then((d) => {
+      if (!cancelled) setSmart({ sym: symbol, value: d || null });
+    });
 
     return () => {
       cancelled = true;
@@ -83,6 +97,10 @@ export function useStockDetail(symbol, reloadToken = 0) {
     aiData: forSym(ai, null),
     insider: forSym(insider, []),
     news: forSym(news, []),
+    technicals: forSym(technicals, null),
+    earnings: forSym(earnings, null),
+    smartMoney: forSym(smart, null),
+    loadingTechnicals: !!symbol && technicals.sym !== symbol,
     loadingProfile: !!symbol && profile.sym !== symbol,
     loadingChart: !!symbol && points.sym !== symbol,
     loadingRatings: !!symbol && ratings.sym !== symbol,

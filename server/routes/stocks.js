@@ -83,6 +83,8 @@ import {
   fetchRSI,
   fetchIndicatorLatest,
   fetchEarnings,
+  fetchCongressTrades,
+  fetchInsiderBySymbol,
   fetchRatingsSnapshot,
   fetchGrades,
   fetchGeneralNews,
@@ -930,6 +932,71 @@ router.get("/stocks/technicals/:symbol", aiDetailLimiter, async (req, res) => {
     res.json(data);
   } catch (e) {
     res.status(502).json({ error: "Could not load technical indicators" });
+  }
+});
+
+// Aggregate Congress + insider trades into a "smart money" snapshot.
+function aggregateSmartMoney(symbol, senate, house, insider) {
+  const now = Date.now();
+  const within = (d, days) => { const t = Date.parse(d); return Number.isFinite(t) && now - t <= days * 86400000; };
+  const isBuy = (type) => /purchase|buy/i.test(type || "");
+  const isSell = (type) => /sale|sell/i.test(type || "");
+  const byDateDesc = (a, b) => new Date(b.transactionDate) - new Date(a.transactionDate);
+
+  // Congress (disclosures lag, so a wider 180-day window).
+  const congress = [...senate, ...house].filter((t) => within(t.transactionDate, 180));
+  const cBuyers = new Set(), cSellers = new Set();
+  for (const t of congress) { if (isBuy(t.type)) cBuyers.add(t.name); else if (isSell(t.type)) cSellers.add(t.name); }
+  const congressRecent = [...congress].sort(byDateDesc).slice(0, 12).map((t) => ({
+    date: t.transactionDate, name: t.name, chamber: t.chamber, district: t.district,
+    type: isBuy(t.type) ? "buy" : isSell(t.type) ? "sell" : "other", amount: t.amount,
+  }));
+
+  // Insiders — open-market only (P-Purchase / S-Sale; exclude awards/options/gifts).
+  const openMarket = insider.filter((t) => within(t.transactionDate, 120) && /^(P|S)-/i.test(t.transactionType || ""));
+  const iBuyers = new Set(), iSellers = new Set();
+  let buyValue = 0;
+  for (const t of openMarket) {
+    if (/^P-/i.test(t.transactionType)) { iBuyers.add(t.name); buyValue += (t.shares || 0) * (t.price || 0); }
+    else iSellers.add(t.name);
+  }
+  const insiderRecent = [...openMarket].sort(byDateDesc).slice(0, 6).map((t) => ({
+    date: t.transactionDate, name: t.name, role: t.role,
+    type: /^P-/i.test(t.transactionType) ? "buy" : "sell", shares: t.shares,
+    value: Math.round((t.shares || 0) * (t.price || 0)),
+  }));
+
+  const net = (cBuyers.size - cSellers.size) + (iBuyers.size - iSellers.size);
+  let signal = "quiet";
+  if (congress.length || openMarket.length) signal = net > 0 ? "buying" : net < 0 ? "selling" : "mixed";
+
+  return {
+    symbol,
+    signal,
+    congress: { buyers: cBuyers.size, sellers: cSellers.size, total: congress.length, recent: congressRecent },
+    insider: { buyers: iBuyers.size, sellers: iSellers.size, total: openMarket.length, buyValue: Math.round(buyValue), recent: insiderRecent },
+  };
+}
+
+// ── GET /api/stocks/smart-money/:symbol ────────────────────────────────────
+// Congressional (Senate + House) + insider (open-market Form 4) trades, rolled
+// up into a buy/sell signal + recent activity. Cached ~6h; rate-limited.
+router.get("/stocks/smart-money/:symbol", aiDetailLimiter, async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  try {
+    const force = req.query.force === '1' || req.query.force === 'true';
+    const data = await cachedDetail(`smartmoney:${symbol}`, 6 * 60 * 60 * 1000, async () => {
+      const [senate, house, insider] = await Promise.all([
+        fetchCongressTrades("senate", symbol),
+        fetchCongressTrades("house", symbol),
+        fetchInsiderBySymbol(symbol),
+      ]);
+      return aggregateSmartMoney(symbol, senate, house, insider);
+    }, force);
+    res.json(data || { symbol, signal: "quiet", congress: { total: 0, recent: [] }, insider: { total: 0, recent: [] } });
+  } catch (e) {
+    res.status(502).json({ error: "Could not load smart-money data" });
   }
 });
 

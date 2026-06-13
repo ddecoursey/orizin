@@ -24,6 +24,7 @@ import Footer from "./components/Footer.jsx";
 import UpgradeModal from "./components/UpgradeModal.jsx";
 import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
+import { buildFitContext, computeFit } from "./lib/fitScore.js";
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -369,6 +370,18 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     cancelOperation,
   } = useScreener(currentUser);
 
+  // Fit Score context (portfolio sectors, held symbols, goal/thesis keywords).
+  // Independent of the Q/V/G weights, so it only recomputes when the universe or
+  // the user's portfolio/goals/theses change — never on a weight drag.
+  const fitCtx = useMemo(
+    () => buildFitContext({
+      portfolios: portfolioGoals.portfolios,
+      goals: portfolioGoals.goals,
+      theses: portfolioGoals.theses,
+      stocks,
+    }),
+    [portfolioGoals.portfolios, portfolioGoals.goals, portfolioGoals.theses, stocks],
+  );
   // Bumped after a single-symbol re-gather so the Deep Research detail panes
   // re-fetch the freshly gathered data.
   const [detailReloadToken, setDetailReloadToken] = useState(0);
@@ -495,6 +508,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         latestRsi: detail.rsi?.length ? detail.rsi[detail.rsi.length - 1].rsi : null,
         performance: pricePerformance(detail.points),
         rsiTrend: rsiTrend(detail.rsi),
+        technicals: detail.technicals,
+        earnings: detail.earnings,
+        smartMoney: detail.smartMoney,
+        fit: computeFit(detailRow, fitCtx),
       }
     : null;
 
@@ -512,6 +529,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         latestRsi: researchDetail.rsi?.length ? researchDetail.rsi[researchDetail.rsi.length - 1].rsi : null,
         performance: pricePerformance(researchDetail.points),
         rsiTrend: rsiTrend(researchDetail.rsi),
+        technicals: researchDetail.technicals,
+        earnings: researchDetail.earnings,
+        smartMoney: researchDetail.smartMoney,
+        fit: computeFit(researchRow, fitCtx),
       }
     : null;
 
@@ -541,6 +562,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         latestRsi: chatFocusDetail1.rsi?.length ? chatFocusDetail1.rsi[chatFocusDetail1.rsi.length - 1].rsi : null,
         performance: pricePerformance(chatFocusDetail1.points),
         rsiTrend: rsiTrend(chatFocusDetail1.rsi),
+        technicals: chatFocusDetail1.technicals,
+        earnings: chatFocusDetail1.earnings,
+        smartMoney: chatFocusDetail1.smartMoney,
+        fit: computeFit(focusRow1, fitCtx),
       }
     : null;
 
@@ -559,6 +584,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         latestRsi: chatFocusDetail2.rsi?.length ? chatFocusDetail2.rsi[chatFocusDetail2.rsi.length - 1].rsi : null,
         performance: pricePerformance(chatFocusDetail2.points),
         rsiTrend: rsiTrend(chatFocusDetail2.rsi),
+        technicals: chatFocusDetail2.technicals,
+        earnings: chatFocusDetail2.earnings,
+        smartMoney: chatFocusDetail2.smartMoney,
+        fit: computeFit(focusRow2, fitCtx),
       }
     : null;
 
@@ -710,6 +739,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
           {currentView === 'deep-research' ? (
             <DeepResearchPage
+              fitCtx={fitCtx}
               symbol={researchSymbol}
               stocks={stocks}
               onSelectSymbol={(sym) => openDeepResearch(sym)}

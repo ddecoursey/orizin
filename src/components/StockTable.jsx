@@ -503,7 +503,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
               >
                 {/* Pin — sticky col 1 */}
                 <td
-                  className={`px-3 py-2 text-left sticky left-0 z-10 border-r border-gray-950 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-800/40"}`}
+                  className={`px-3 py-2 text-left sticky left-0 z-10 border-r border-gray-950 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-900"}`}
                   style={{ width: '32px', minWidth: '32px' }}
                 >
                   <button
@@ -519,7 +519,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
 
                 {/* Symbol + name — sticky col 2 */}
                 <td
-                  className={`px-3 py-2 text-left sticky left-10 z-10 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-800/40"}`}
+                  className={`px-3 py-2 text-left sticky left-10 z-10 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-900"}`}
                   style={{ width: '92px', minWidth: '92px', left: '32px' }}
                 >
                   <div

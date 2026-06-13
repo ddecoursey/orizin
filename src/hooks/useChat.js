@@ -96,6 +96,34 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
           source: a.site || a.publisher,
           date: a.publishedDate,
         })),
+        // Technical indicators (latest values; moving averages, ADX, etc.).
+        technicals: s.technicals
+          ? {
+              sma50: s.technicals.sma50, sma200: s.technicals.sma200, ema20: s.technicals.ema20,
+              rsi14: s.technicals.rsi, adx: s.technicals.adx, williams: s.technicals.williams, stdDev: s.technicals.stdDev,
+            }
+          : null,
+        // Earnings: next report + recent EPS actual vs estimate.
+        earnings: Array.isArray(s.earnings)
+          ? {
+              next: s.earnings.find((e) => e.epsActual == null && new Date(e.date) >= new Date(new Date().toDateString())) || null,
+              recent: s.earnings.filter((e) => e.epsActual != null).slice(0, 4),
+            }
+          : null,
+        // Smart money: Congress + insider conviction signal.
+        smartMoney: s.smartMoney
+          ? {
+              signal: s.smartMoney.signal,
+              congress: s.smartMoney.congress
+                ? { buyers: s.smartMoney.congress.buyers, sellers: s.smartMoney.congress.sellers, total: s.smartMoney.congress.total, recent: (s.smartMoney.congress.recent || []).slice(0, 6) }
+                : null,
+              insider: s.smartMoney.insider
+                ? { buyers: s.smartMoney.insider.buyers, sellers: s.smartMoney.insider.sellers, buyValue: s.smartMoney.insider.buyValue }
+                : null,
+            }
+          : null,
+        // Personalized fit to the user's portfolio / goals / theses.
+        fit: s.fit && !s.fit.needsContext ? { score: s.fit.score, reasons: s.fit.reasons } : null,
       };
     }
 

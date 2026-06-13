@@ -850,6 +850,46 @@ export async function fetchEarnings(symbol, { limit = 10 } = {}) {
   }
 }
 
+// Congressional trades for a symbol. chamber = 'senate' | 'house'.
+export async function fetchCongressTrades(chamber, symbol, { limit = 80 } = {}) {
+  const url = `${BASE}/${chamber}-trades?symbol=${encodeURIComponent(symbol)}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.slice(0, limit).map((d) => ({
+      chamber,
+      transactionDate: typeof d.transactionDate === "string" ? d.transactionDate.split(" ")[0] : d.transactionDate,
+      name: `${d.firstName || ""} ${d.lastName || ""}`.trim() || d.office || "—",
+      district: d.district || null,
+      type: d.type || null,
+      amount: d.amount || null,
+    }));
+  } catch (e) {
+    console.warn(`[FMP] ${chamber}-trades ${symbol}:`, e.message);
+    return [];
+  }
+}
+
+// Insider (Form 4) trades for a symbol.
+export async function fetchInsiderBySymbol(symbol, { limit = 80 } = {}) {
+  const url = `${BASE}/insider-trading/search?symbol=${encodeURIComponent(symbol)}&page=0&limit=${limit}&apikey=${KEY()}`;
+  try {
+    const data = await fetchWithRetry(url, 2, 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map((d) => ({
+      transactionDate: typeof d.transactionDate === "string" ? d.transactionDate.split(" ")[0] : d.transactionDate,
+      name: d.reportingName || "—",
+      role: d.typeOfOwner || null,
+      transactionType: d.transactionType || null,
+      shares: n(d.securitiesTransacted),
+      price: n(d.price),
+    }));
+  } catch (e) {
+    console.warn(`[FMP] insider ${symbol}:`, e.message);
+    return [];
+  }
+}
+
 // Ratings snapshot: letter grade + 1–5 sub-scores across key ratios.
 export async function fetchRatingsSnapshot(symbol, opts = {}) {
   const url = `${BASE}/ratings-snapshot?symbol=${symbol}&apikey=${KEY()}`;

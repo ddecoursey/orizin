@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import { IconResearch, IconRefresh } from "./icons.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
+import { computeFit } from "../lib/fitScore.js";
+import InfoHint from "./InfoHint.jsx";
 
 // Compact period-columns table for financial statements: one row per line
 // item, one column per fiscal year (newest first, up to `maxCols`).
@@ -122,10 +123,16 @@ function maSignal(price, ma) {
   const pct = ((price - ma) / ma) * 100;
   return { value, signal: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%`, tone: price >= ma ? "up" : "down" };
 }
-function crossSignal(sma50, sma200) {
+// Current 50-vs-200 trend regime (the golden/death cross *events* are shown
+// interactively on the price chart; this row just states which side we're on now).
+function trendRow(sma50, sma200) {
   if (sma50 == null || sma200 == null) return { value: null };
-  const golden = sma50 >= sma200;
-  return { value: golden ? "Golden" : "Death", signal: golden ? "bullish" : "bearish", tone: golden ? "up" : "down" };
+  const bull = sma50 >= sma200;
+  return {
+    value: bull ? "Bullish" : "Bearish",
+    signal: bull ? "50 > 200" : "50 < 200",
+    tone: bull ? "up" : "down",
+  };
 }
 function rsiSignal(rsi) {
   if (rsi == null) return { value: null };
@@ -183,46 +190,45 @@ function daysUntil(d) {
   return diff > 0 ? `in ${diff}d` : `${-diff}d ago`;
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {} }) {
+// ── Smart Money signal styling ──────────────────────────────────────────────
+function smTone(signal) {
+  if (signal === "buying") return "bg-emerald-900/40 text-emerald-300 border border-emerald-800/50";
+  if (signal === "selling") return "bg-red-900/40 text-red-300 border border-red-800/50";
+  if (signal === "mixed") return "bg-amber-900/40 text-amber-300 border border-amber-800/50";
+  return "bg-gray-800 text-gray-400 border border-gray-700";
+}
+function smLabel(signal) {
+  return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
+}
+
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {}, fitCtx = null }) {
+  // Personalized fit (portfolio / theses / goals). Cheap — one stock.
+  const fit = computeFit(row || { symbol }, fitCtx);
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
-  const { profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart } = detail;
+  const {
+    profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart,
+    technicals, loadingTechnicals, earnings, smartMoney: smart,
+  } = detail;
 
   // Deep-research-only data (statements, filings, comp, peers, growth) — owned
   // here since nothing outside this page needs it. Server caches make
   // re-opening a symbol free.
   const deep = useDeepResearch(symbol);
 
-  // Technical indicators (moving averages, ADX trend strength, Williams %R,
-  // volatility) for the Technical Analysis panel. Cached server-side ~6h.
-  const [technicals, setTechnicals] = useState(null);
-  const [techLoading, setTechLoading] = useState(false);
-  useEffect(() => {
-    if (!symbol) { setTechnicals(null); return; }
-    let cancelled = false;
-    setTechnicals(null);
-    setTechLoading(true);
-    fetch(`/api/stocks/technicals/${encodeURIComponent(symbol)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (!cancelled) { setTechnicals(d); setTechLoading(false); } })
-      .catch(() => { if (!cancelled) setTechLoading(false); });
-    return () => { cancelled = true; };
-  }, [symbol]);
-
-  // Earnings: next report date + recent EPS beat/miss history (FMP Starter).
-  const [earnings, setEarnings] = useState(null);
-  useEffect(() => {
-    if (!symbol) { setEarnings(null); return; }
-    let cancelled = false;
-    setEarnings(null);
-    fetch(`/api/stocks/earnings/${encodeURIComponent(symbol)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (!cancelled) setEarnings(d?.earnings || []); })
-      .catch(() => { if (!cancelled) setEarnings([]); });
-    return () => { cancelled = true; };
-  }, [symbol]);
+  // Technicals, earnings, and smart-money now come from `detail` (useStockDetail)
+  // so the same data also reaches Ori's context. Derive the display shapes here.
   const earnNext = earnings?.find?.((e) => e.epsActual == null && new Date(e.date) >= new Date(new Date().toDateString())) || null;
   const earnRecent = (earnings || []).filter((e) => e.epsActual != null).slice(0, 4);
+
+  const congressSignal =
+    smart && smart.congress && smart.congress.total > 0
+      ? smart.congress.buyers > smart.congress.sellers
+        ? "buying"
+        : smart.congress.sellers > smart.congress.buyers
+          ? "selling"
+          : "mixed"
+      : "quiet";
 
   const handleSearch = (stock) => {
     if (stock?.symbol) onSelectSymbol?.(stock.symbol);
@@ -431,7 +437,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             </Panel>
 
             <Panel title="Technical Analysis" tier="T1" span={1}>
-              {!technicals && techLoading ? (
+              {!technicals && loadingTechnicals ? (
                 <div className="h-full min-h-[80px] flex items-center justify-center text-[11px] text-gray-600">
                   Loading indicators…
                 </div>
@@ -440,7 +446,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                   <SigRow label="Price vs 50-day SMA" {...maSignal(technicals.price, technicals.sma50)} />
                   <SigRow label="Price vs 200-day SMA" {...maSignal(technicals.price, technicals.sma200)} />
                   <SigRow label="Price vs 20-day EMA" {...maSignal(technicals.price, technicals.ema20)} />
-                  <SigRow label="50 / 200 SMA" {...crossSignal(technicals.sma50, technicals.sma200)} />
+                  <SigRow label="Trend (50 vs 200)" {...trendRow(technicals.sma50, technicals.sma200)} />
                   <SigRow label="RSI (14)" {...rsiSignal(technicals.rsi)} />
                   <SigRow label="Williams %R (14)" {...williamsSignal(technicals.williams)} />
                   <SigRow label="ADX (14)" {...adxSignal(technicals.adx)} />
@@ -451,6 +457,32 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 </div>
               ) : (
                 <Placeholder note="Technical indicators aren't available for this symbol." />
+              )}
+            </Panel>
+
+            <Panel title="Goal Fit" tier="T1" span={1}>
+              {!fit || fit.needsContext ? (
+                <Placeholder note="Set goals, theses, or a portfolio (Portfolio tab) to see how this stock fits you." />
+              ) : (
+                <div>
+                  <div className="flex items-baseline gap-2 mb-3">
+                    <span className={`text-3xl font-black ${fit.score >= 66 ? "text-emerald-400" : fit.score >= 45 ? "text-gray-100" : "text-amber-400"}`}>
+                      {fit.score}
+                    </span>
+                    <span className="text-[11px] text-gray-500">
+                      / 100 fit
+                      <InfoHint className="ml-1" text="How well this stock matches YOU — your portfolio (diversification), written theses, and goals. Separate from the Orizin Score." />
+                    </span>
+                  </div>
+                  <ul className="space-y-1">
+                    {fit.reasons.map((r, i) => (
+                      <li key={i} className="text-[11px] text-gray-300 flex items-start gap-1.5">
+                        <span className="text-violet-400 shrink-0 mt-0.5">›</span>
+                        <span>{r}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               )}
             </Panel>
           </div>
@@ -617,6 +649,46 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             Tier 3 · Ownership, Peers & Growth
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <Panel title="Congressional Trading" tier="T3" span={2}>
+              {smart === null ? (
+                <div className="h-full min-h-[80px] flex items-center justify-center text-[11px] text-gray-600">Loading…</div>
+              ) : !smart.congress || smart.congress.total === 0 ? (
+                <Placeholder note="No disclosed congressional trades for this symbol in the last 180 days." />
+              ) : (
+                <div>
+                  <div className="flex items-center gap-3 mb-3 flex-wrap">
+                    <span className={`text-[11px] font-bold uppercase tracking-wide px-2 py-0.5 rounded ${smTone(congressSignal)}`}>
+                      {smLabel(congressSignal)}
+                    </span>
+                    <span className="text-[11px] text-gray-400">
+                      <span className="text-emerald-400 font-semibold">{smart.congress.buyers} bought</span>
+                      <span className="text-gray-600"> · </span>
+                      <span className="text-red-400 font-semibold">{smart.congress.sellers} sold</span>
+                      <span className="text-gray-600"> · {smart.congress.total} disclosures · 180d</span>
+                    </span>
+                    <InfoHint text="Trades in this stock disclosed by U.S. Senators and Representatives (periodic transaction reports). Disclosures lag the actual trade by up to ~45 days. An alt-data conviction signal standard screeners don't surface." />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0.5">
+                    {smart.congress.recent.map((t, i) => (
+                      <div key={i} className="flex items-baseline justify-between gap-2 py-1 border-b border-gray-800/40">
+                        <span className="min-w-0 truncate text-[11px] text-gray-300">
+                          {t.name}
+                          <span className="ml-1 text-[10px] text-gray-600">{t.chamber === "senate" ? "Sen" : "Rep"}{t.district ? ` · ${t.district}` : ""}</span>
+                        </span>
+                        <span className="shrink-0 text-right">
+                          <span className={`text-[10.5px] font-semibold ${t.type === "buy" ? "text-emerald-400" : t.type === "sell" ? "text-red-400" : "text-gray-500"}`}>
+                            {t.type === "buy" ? "Buy" : t.type === "sell" ? "Sell" : "—"}
+                          </span>
+                          {t.amount ? <span className="ml-1 text-[9.5px] text-gray-500">{t.amount}</span> : null}
+                          <span className="ml-1 text-[9.5px] text-gray-600">{fmtEarnDate(t.date)}</span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Panel>
+
             <Panel title="Insider Trading" tier="T3" span={1}>
               {insider?.length ? (
                 <div className="space-y-1.5 max-h-64 overflow-y-auto">
