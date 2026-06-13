@@ -119,7 +119,7 @@ const COLS = [
   { key: "current_ratio", label: "Curr R", type: "ratio" },
   { key: "debt_equity", label: "D/E", type: "ratio" },
   { key: "div_yield", label: "Div Yld", type: "pct" },
-  { key: "score", label: "Score", plain: true, nosort: false },
+  { key: "conviction", label: "Conviction", plain: true, nosort: false },
 ];
 
 export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
@@ -443,7 +443,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
           <col style={{ width: '52px' }} />     {/* Curr R */}
           <col style={{ width: '48px' }} />     {/* D/E */}
           <col style={{ width: '58px' }} />     {/* Div Yld */}
-          <col style={{ width: '72px' }} />     {/* Score */}
+          <col style={{ width: '92px' }} />     {/* Conviction */}
           <col style={{ width: '52px' }} />     {/* Ask Ori */}
         </colgroup>
 
@@ -457,6 +457,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                 <th
                   key={c.key}
                   onClick={() => handleSort(c.key)}
+                  title={c.key === "conviction" ? "Conviction (0–100): the unified verdict — fundamentals (Orizin engine) + valuation. Refines with technicals, smart money, analysts & Ori's intangibles on the Deep Research page." : undefined}
                   style={w ? { width: w } : undefined}
                   className={`px-3 py-2 whitespace-nowrap text-[9px] uppercase tracking-wider
                     font-bold border-b border-gray-800
@@ -600,9 +601,9 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                   );
                 })}
 
-                {/* Score */}
+                {/* Conviction */}
                 <td className="px-3 py-2 min-w-[80px]">
-                  <ScoreBar score={r.score} />
+                  <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
                 </td>
 
                 {/* Ask Ori */}

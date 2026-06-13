@@ -862,7 +862,7 @@ export default function StockDetailModal({
   if (!row) return null;
 
   const sec = SECTOR_COLORS[row.sector] || { bg: "#1e293b", fg: "#94a3b8" };
-  const sc = row.score != null ? Math.round(row.score * 100) : null;
+  const sc = row.conviction != null ? row.conviction : row.score != null ? Math.round(row.score * 100) : null;
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   return (
@@ -905,7 +905,7 @@ export default function StockDetailModal({
               </div>
               {sc != null && (
                 <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  Score {sc}
+                  Conviction {sc}
                 </div>
               )}
             </div>

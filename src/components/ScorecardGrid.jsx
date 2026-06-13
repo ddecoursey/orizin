@@ -50,7 +50,7 @@ function SubChip({ label, value, colors, title }) {
 }
 
 function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
-  const sc = r.score != null ? Math.round(r.score * 100) : null;
+  const sc = r.conviction != null ? r.conviction : r.score != null ? Math.round(r.score * 100) : null;
   const scoreColor = sc >= 70 ? '#10b981' : sc >= 45 ? '#f59e0b' : '#ef4444';
   const sec = SECTOR_COLORS[r.sector] || { bg: '#1e293b', fg: '#94a3b8' };
 
@@ -169,13 +169,13 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
 const MemoizedScorecard = React.memo(Scorecard);
 
 export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }) {
-  // Pinned favorites are floated to the top (then ordered by score), so they
-  // stay visible regardless of the score sort — same behavior as the table view.
+  // Pinned favorites are floated to the top (then ordered by conviction), so
+  // they stay visible regardless of the sort — same behavior as the table view.
   const sorted = useMemo(
     () => [...rows].sort((a, b) => {
       const ap = pins?.has(a.symbol), bp = pins?.has(b.symbol);
       if (ap !== bp) return ap ? -1 : 1;
-      return (b.score || 0) - (a.score || 0);
+      return (b.conviction || 0) - (a.conviction || 0);
     }),
     [rows, pins],
   );
@@ -207,7 +207,7 @@ export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }
       </div>
       {sorted.length > CARD_CAP && (
         <div className="text-center text-xs text-gray-500 py-4">
-          Showing the top {CARD_CAP} of {sorted.length} by Orizin Score — narrow your filters to surface more specific names.
+          Showing the top {CARD_CAP} of {sorted.length} by Conviction — narrow your filters to surface more specific names.
         </div>
       )}
     </div>

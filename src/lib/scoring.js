@@ -22,6 +22,8 @@
 //     always present once a stock clears the gate, so the effective weights
 //     are exactly the user's sliders (normalized) — no silent redistribution.
 
+import { quickConviction } from "./verdict.js";
+
 export const DEFAULT_WEIGHTS = { q: 35, v: 35, g: 30 };
 
 // Rank substitute for "this value is disqualifying" (sorts to the bottom of
@@ -222,6 +224,12 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS) {
       vScore: scored ? v.score : null,
       gScore: scored ? g.score : null,
       score,
+      // Unified, user-facing Conviction (0..100) — the Orizin Score (fundamentals)
+      // blended with valuation. The full multi-pillar + Ori conviction is computed
+      // on the Deep Research page; this lean version keeps the 10k-row screener fast.
+      conviction: scored
+        ? quickConviction({ score, vScore: v.score, pe: r.pe, ev_ebitda: r.ev_ebitda, fcf_yield: r.fcf_yield, eps_growth: r.eps_growth, price: r.price, dcf: r.dcf })
+        : null,
       // Fraction of the 16 scorecard inputs with real data — surfaced in the
       // UI and to Ori so low-coverage scores are visibly less trustworthy.
       dataCoverage: totalInputs ? present / totalInputs : 0,

@@ -64,8 +64,8 @@ const I = {
 const FEATURES = [
   {
     icon: I.filter,
-    title: "Quant screener with the Orizin Score",
-    body: "Rank 8,000+ stocks on a 16-metric scorecard across Quality, Value and Growth — with your own weights, junk-data guards, and 30+ fundamental filters.",
+    title: "Quant screener with a Conviction score",
+    body: "Rank 8,000+ stocks by Conviction — a 16-metric Quality/Value/Growth scorecard blended with valuation — with your own weights, junk-data guards, and 30+ fundamental filters.",
   },
   {
     icon: I.spark,

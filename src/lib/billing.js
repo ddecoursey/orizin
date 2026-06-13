@@ -19,7 +19,7 @@ export const PRO_FEATURES = [
 ];
 
 export const FREE_FEATURES = [
-  "Full screener with Orizin Scores",
+  "Full screener with Conviction scores",
   "Deep Research pages",
   "Portfolios, goals & theses",
   "Watchlists, compare & news",

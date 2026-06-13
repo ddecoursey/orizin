@@ -25,6 +25,7 @@ import UpgradeModal from "./components/UpgradeModal.jsx";
 import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 import { buildFitContext, computeFit } from "./lib/fitScore.js";
+import { computeVerdict } from "./lib/verdict.js";
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -512,6 +513,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: detail.earnings,
         smartMoney: detail.smartMoney,
         fit: computeFit(detailRow, fitCtx),
+        verdict: computeVerdict(detailRow, detail, computeFit(detailRow, fitCtx)),
       }
     : null;
 
@@ -533,6 +535,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: researchDetail.earnings,
         smartMoney: researchDetail.smartMoney,
         fit: computeFit(researchRow, fitCtx),
+        verdict: computeVerdict(researchRow, researchDetail, computeFit(researchRow, fitCtx)),
       }
     : null;
 
@@ -566,6 +569,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: chatFocusDetail1.earnings,
         smartMoney: chatFocusDetail1.smartMoney,
         fit: computeFit(focusRow1, fitCtx),
+        verdict: computeVerdict(focusRow1, chatFocusDetail1, computeFit(focusRow1, fitCtx)),
       }
     : null;
 
@@ -588,6 +592,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: chatFocusDetail2.earnings,
         smartMoney: chatFocusDetail2.smartMoney,
         fit: computeFit(focusRow2, fitCtx),
+        verdict: computeVerdict(focusRow2, chatFocusDetail2, computeFit(focusRow2, fitCtx)),
       }
     : null;
 
@@ -1341,7 +1346,7 @@ function WeightsPopover({ weights, setWeights }) {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 p-3 space-y-3">
             <div className="text-[10px] uppercase tracking-wider text-gray-500">
-              Orizin Score weights
+              Fundamentals weights
             </div>
             {rows.map(([k, label]) => (
               <PopoverWeightRow

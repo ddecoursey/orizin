@@ -23,7 +23,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       earnings_yield: s.earnings_yield,
       net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
       debt_equity: s.debt_equity, div_yield: s.div_yield,
-      payout: s.payout, beta: s.beta, score: s.score,
+      payout: s.payout, beta: s.beta, score: s.score, conviction: s.conviction,
       qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
       dataCoverage: s.dataCoverage,
       effectiveWeights: s.effectiveWeights,
@@ -31,7 +31,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
   }
 
   function buildContext() {
-    const sorted = [...(filteredStocks || [])].sort((a, b) => (b.score || 0) - (a.score || 0));
+    const sorted = [...(filteredStocks || [])].sort((a, b) => (b.conviction || 0) - (a.conviction || 0));
     const top = sorted.slice(0, 50);
 
     // Provide Ori with the list of available sectors and industries so it uses correct values
@@ -55,7 +55,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
         revenue_growth: s.revenue_growth, eps_growth: s.eps_growth, fcf_growth: s.fcf_growth,
         net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
         debt_equity: s.debt_equity, div_yield: s.div_yield, beta: s.beta,
-        score: s.score, qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
+        score: s.score, conviction: s.conviction, qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
         dataCoverage: s.dataCoverage,
         latestRsi: s.latestRsi,
         profile: s.profile
@@ -124,6 +124,25 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
           : null,
         // Personalized fit to the user's portfolio / goals / theses.
         fit: s.fit && !s.fit.needsContext ? { score: s.fit.score, reasons: s.fit.reasons } : null,
+        // Unified Game Plan verdict: conviction + hold horizon + action + pillars.
+        verdict:
+          s.verdict && !s.verdict.insufficient
+            ? {
+                conviction: s.verdict.conviction,
+                horizon: s.verdict.horizon?.label,
+                horizonSub: s.verdict.horizon?.sub,
+                action: s.verdict.action?.label,
+                actionLine: s.verdict.action?.line,
+                headline: s.verdict.headline,
+                reasons: (s.verdict.reasons || []).map((r) => `${r.tone === "good" ? "+" : r.tone === "bad" ? "-" : "~"} ${r.text}`),
+                pillars: (s.verdict.pillars || []).map((p) => ({
+                  id: p.id,
+                  score: p.score != null ? Math.round(p.score * 100) : null,
+                  tone: p.tone,
+                })),
+                confidence: s.verdict.confidence,
+              }
+            : null,
       };
     }
 
@@ -153,7 +172,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       availableIndustries: allIndustries,
       focusSymbols,
       scorecardDefinition: {
-        description: "The Orizin Score is a weighted average of three pillars. All inputs are tie-aware 0-1 percentile ranks within the current filtered set.",
+        description: "Conviction (0-100) is the unified, user-facing headline score. The 'Orizin Score' is the background fundamentals ENGINE that feeds Conviction's Fundamentals pillar — a weighted average of three pillars (Q/V/G). All inputs are tie-aware 0-1 percentile ranks within the current filtered set. On the screener, Conviction = Fundamentals (Orizin) + Valuation; on Deep Research it also folds in technicals, smart money, analysts, personal Fit, and Ori's intangibles.",
         Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
         V: "Value — average rank of: EV/GP, EV/EBITDA, P/E (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
         G: "Growth — average rank of: Revenue growth (TTM), EPS growth (TTM), FCF growth (TTM)",

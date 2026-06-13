@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useRef } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import { IconResearch, IconRefresh } from "./icons.jsx";
@@ -5,6 +6,9 @@ import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
 import { computeFit } from "../lib/fitScore.js";
+import { computeVerdict, mergeOriIntoVerdict, metricTone } from "../lib/verdict.js";
+import { useGamePlanOri } from "../hooks/useGamePlanOri.js";
+import GamePlan from "./GamePlan.jsx";
 import InfoHint from "./InfoHint.jsx";
 
 // Compact period-columns table for financial statements: one row per line
@@ -91,12 +95,21 @@ function Panel({ title, tier, children, span = 1, soon = false }) {
   );
 }
 
-function Stat({ label, value, type, accent }) {
+const TONE_TEXT = { good: "text-emerald-400", ok: "text-amber-400", bad: "text-red-400", neutral: "text-gray-200" };
+const TONE_DOT = { good: "bg-emerald-400", ok: "bg-amber-400", bad: "bg-red-400" };
+
+// A labeled metric. Pass `metric` (a rubric key) to color the value Good/OK/Bad
+// for beginners; an explicit `accent` always wins (used where a panel sets its
+// own emphasis, e.g. DCF margin of safety).
+function Stat({ label, value, type, accent, metric }) {
   const f = type ? fmt(value, type) : value;
+  const tone = metric && value != null ? metricTone(metric, value) : "neutral";
+  const colorCls = accent || (tone !== "neutral" ? TONE_TEXT[tone] : "text-gray-200");
   return (
     <div className="flex justify-between items-baseline py-1.5 border-b border-gray-800/50 gap-3">
       <span className="text-[11px] text-gray-500 shrink-0">{label}</span>
-      <span className={`text-xs font-semibold font-mono text-right ${accent || "text-gray-200"}`}>
+      <span className={`text-xs font-semibold font-mono text-right flex items-center gap-1.5 justify-end ${colorCls}`}>
+        {tone !== "neutral" && TONE_DOT[tone] && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${TONE_DOT[tone]}`} />}
         {f ?? <span className="text-gray-600">—</span>}
       </span>
     </div>
@@ -204,6 +217,53 @@ function smLabel(signal) {
 export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {}, fitCtx = null }) {
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
+
+  // ── Unified Game Plan ──────────────────────────────────────────────────────
+  // Deterministic core (instant): folds the Orizin Score + Fit + technicals +
+  // valuation + smart money + analysts into one conviction / horizon / action.
+  const deterministic = useMemo(
+    () => computeVerdict(row || { symbol }, detail, fit),
+    [row, symbol, detail, fit],
+  );
+  // Compact payload Ori's intelligence layer needs (POSTed to the server).
+  const oriPayload = useMemo(() => {
+    const r = row || {};
+    return {
+      stats: {
+        price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
+        pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield, div_yield: r.div_yield,
+        roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
+        gross_margin: r.gross_margin, fcf_margin: r.fcf_margin,
+        revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
+        debt_equity: r.debt_equity, net_debt_ebitda: r.net_debt_ebitda,
+        dcf: detail.aiData?.dcf ?? null, target: detail.aiData?.target_consensus ?? null,
+        orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+      },
+      verdict: {
+        horizon: deterministic.horizon?.label,
+        action: deterministic.action?.label,
+        conviction: deterministic.conviction,
+        durability: deterministic.durability != null ? Math.round(deterministic.durability * 100) : null,
+        valuation: deterministic.valuation != null ? Math.round(deterministic.valuation * 100) : null,
+        flags: deterministic.flags,
+        reasons: (deterministic.reasons || []).map((x) => x.text),
+      },
+    };
+  }, [row, detail, deterministic]);
+  const oriPayloadRef = useRef(oriPayload);
+  useEffect(() => {
+    oriPayloadRef.current = oriPayload;
+  }, [oriPayload]);
+  // Deferred Ori layer (Pro, cached 24h) — fades in after the deterministic core.
+  const oriState = useGamePlanOri(symbol, {
+    enabled: !!symbol && !deterministic.insufficient,
+    payloadRef: oriPayloadRef,
+  });
+  // Fold Ori in "within reason" once it arrives; otherwise show the data verdict.
+  const verdict = useMemo(
+    () => (oriState.ori ? mergeOriIntoVerdict(deterministic, oriState.ori) : deterministic),
+    [deterministic, oriState.ori],
+  );
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
   const {
@@ -250,7 +310,9 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   }
 
   const sec = SECTOR_COLORS[row?.sector] || { bg: "#1e293b", fg: "#94a3b8" };
-  const sc = row?.score != null ? Math.round(row.score * 100) : null;
+  // Header shows the unified Conviction (from the Game Plan verdict), falling
+  // back to the row's lean conviction / Orizin score for arbitrary symbols.
+  const sc = verdict?.conviction ?? row?.conviction ?? (row?.score != null ? Math.round(row.score * 100) : null);
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   // DCF margin of safety vs current price (when both present).
@@ -305,7 +367,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <div className="text-lg font-bold font-mono text-gray-100">{fmt(row?.price, "price") ?? "—"}</div>
               {sc != null && (
                 <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  Orizin Score {sc}
+                  Conviction {sc}
                 </div>
               )}
             </div>
@@ -333,8 +395,13 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
       </div>
 
       <div className="p-4 sm:p-6 space-y-6">
+        {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
+        <div className="oz-fade-rise">
+          <GamePlan verdict={verdict} oriState={oriState} />
+        </div>
+
         {/* Price + RSI chart alongside the company profile, under the name bar */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise" style={{ animationDelay: "40ms" }}>
           <section className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-2">
               Price &amp; RSI
@@ -391,29 +458,29 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <StatGrid>
                 <Stat label="Market Cap" value={row?.mcap} type="money" />
                 <Stat label="Enterprise Val" value={row?.ev} type="money" />
-                <Stat label="P/E" value={row?.pe} type="x" />
-                <Stat label="P/B" value={row?.pb} type="x" />
-                <Stat label="P/S" value={row?.ps} type="x" />
-                <Stat label="EV/EBITDA" value={row?.ev_ebitda} type="x" />
-                <Stat label="EV/GP" value={row?.ev_gp} type="x" />
-                <Stat label="FCF Yield" value={row?.fcf_yield} type="pct" />
-                <Stat label="Earnings Yield" value={row?.earnings_yield} type="pct" />
-                <Stat label="Dividend Yield" value={row?.div_yield} type="pct" />
+                <Stat label="P/E" value={row?.pe} type="x" metric="pe" />
+                <Stat label="P/B" value={row?.pb} type="x" metric="pb" />
+                <Stat label="P/S" value={row?.ps} type="x" metric="ps" />
+                <Stat label="EV/EBITDA" value={row?.ev_ebitda} type="x" metric="ev_ebitda" />
+                <Stat label="EV/GP" value={row?.ev_gp} type="x" metric="ev_gp" />
+                <Stat label="FCF Yield" value={row?.fcf_yield} type="pct" metric="fcf_yield" />
+                <Stat label="Earnings Yield" value={row?.earnings_yield} type="pct" metric="earnings_yield" />
+                <Stat label="Dividend Yield" value={row?.div_yield} type="pct" metric="div_yield" />
               </StatGrid>
             </Panel>
 
             <Panel title="Financial Ratios (TTM)" tier="T1" span={1}>
               <StatGrid>
-                <Stat label="ROIC" value={row?.roic} type="pct" />
-                <Stat label="ROE" value={row?.roe} type="pct" />
-                <Stat label="ROA" value={row?.roa} type="pct" />
-                <Stat label="Gross Margin" value={row?.gross_margin} type="pct" />
-                <Stat label="Op Margin" value={row?.op_margin} type="pct" />
-                <Stat label="Net Margin" value={row?.net_margin} type="pct" />
-                <Stat label="FCF Margin" value={row?.fcf_margin} type="pct" />
-                <Stat label="Current Ratio" value={row?.current_ratio} type="ratio" />
-                <Stat label="Debt/Equity" value={row?.debt_equity} type="ratio" />
-                <Stat label="Net Debt/EBITDA" value={row?.net_debt_ebitda} type="ratio" />
+                <Stat label="ROIC" value={row?.roic} type="pct" metric="roic" />
+                <Stat label="ROE" value={row?.roe} type="pct" metric="roe" />
+                <Stat label="ROA" value={row?.roa} type="pct" metric="roa" />
+                <Stat label="Gross Margin" value={row?.gross_margin} type="pct" metric="gross_margin" />
+                <Stat label="Op Margin" value={row?.op_margin} type="pct" metric="op_margin" />
+                <Stat label="Net Margin" value={row?.net_margin} type="pct" metric="net_margin" />
+                <Stat label="FCF Margin" value={row?.fcf_margin} type="pct" metric="fcf_margin" />
+                <Stat label="Current Ratio" value={row?.current_ratio} type="ratio" metric="current_ratio" />
+                <Stat label="Debt/Equity" value={row?.debt_equity} type="ratio" metric="debt_equity" />
+                <Stat label="Net Debt/EBITDA" value={row?.net_debt_ebitda} type="ratio" metric="net_debt_ebitda" />
               </StatGrid>
             </Panel>
 
@@ -460,31 +527,6 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               )}
             </Panel>
 
-            <Panel title="Goal Fit" tier="T1" span={1}>
-              {!fit || fit.needsContext ? (
-                <Placeholder note="Set goals, theses, or a portfolio (Portfolio tab) to see how this stock fits you." />
-              ) : (
-                <div>
-                  <div className="flex items-baseline gap-2 mb-3">
-                    <span className={`text-3xl font-black ${fit.score >= 66 ? "text-emerald-400" : fit.score >= 45 ? "text-gray-100" : "text-amber-400"}`}>
-                      {fit.score}
-                    </span>
-                    <span className="text-[11px] text-gray-500">
-                      / 100 fit
-                      <InfoHint className="ml-1" text="How well this stock matches YOU — your portfolio (diversification), written theses, and goals. Separate from the Orizin Score." />
-                    </span>
-                  </div>
-                  <ul className="space-y-1">
-                    {fit.reasons.map((r, i) => (
-                      <li key={i} className="text-[11px] text-gray-300 flex items-start gap-1.5">
-                        <span className="text-violet-400 shrink-0 mt-0.5">›</span>
-                        <span>{r}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </Panel>
           </div>
         </div>
 
