@@ -8,6 +8,7 @@
 const GEMINI_JSON_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 const MAX_RETRIES = 3;
+const REQUEST_TIMEOUT_MS = 30000; // don't let a hung LLM call tie up the request + rate-limit slot
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt) => 500 * 2 ** attempt + Math.random() * 250;
@@ -44,18 +45,24 @@ export async function geminiGenerateJson({ system, prompt, schema, temperature =
   let lastStatus = 0;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     let res;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
       res = await fetch(GEMINI_JSON_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch {
+      // Network error OR our timeout abort — both are transient, so retry.
       if (attempt < MAX_RETRIES) {
         await sleep(backoff(attempt));
         continue;
       }
       throw err("Network error reaching Ori", "overloaded");
+    } finally {
+      clearTimeout(timer);
     }
 
     if (res.ok) {

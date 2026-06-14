@@ -1068,20 +1068,30 @@ function buildGamePlanPrompt({ symbol, profile, news, stats, verdict }) {
   const v = verdict || {};
   const num = (x, suf = "") => (x == null || !Number.isFinite(Number(x)) ? "—" : `${x}${suf}`);
   const pctf = (x) => (x == null || !Number.isFinite(Number(x)) ? "—" : `${(Number(x) * 100).toFixed(1)}%`);
+  // The deterministic verdict + stats come from the CLIENT and the result is
+  // cached per-symbol shared across users, so scrub free-text fields (strip
+  // newlines/control chars + cap length) before they enter the prompt — no
+  // crafted body can inject instructions or poison the shared cache.
+  // eslint-disable-next-line no-control-regex -- intentionally strips control chars from untrusted client text
+  const clean = (x, max = 160) => (typeof x === "string" ? x.replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, max) : "");
+  const reasons = Array.isArray(v.reasons) ? v.reasons.map((x) => clean(x, 140)).filter(Boolean).slice(0, 6) : [];
+  const flags = v.flags && typeof v.flags === "object"
+    ? Object.entries(v.flags).filter(([, on]) => on).map(([k]) => clean(k, 24)).filter(Boolean).slice(0, 6)
+    : [];
   const headlines = (Array.isArray(news) ? news : [])
     .slice(0, 8)
-    .map((n) => `• ${n.publishedDate ? String(n.publishedDate).slice(0, 10) + " " : ""}${n.title || ""}`)
+    .map((n) => `• ${n.publishedDate ? String(n.publishedDate).slice(0, 10) + " " : ""}${clean(n.title, 200)}`)
     .join("\n");
 
-  return `STOCK: ${symbol}${p.companyName ? ` — ${p.companyName}` : ""}
-Sector / Industry: ${p.sector || s.sector || "—"} / ${p.industry || "—"}
+  return `STOCK: ${symbol}${p.companyName ? ` — ${clean(p.companyName, 80)}` : ""}
+Sector / Industry: ${clean(p.sector || s.sector, 40) || "—"} / ${clean(p.industry, 40) || "—"}
 Price ${num(s.price)} · Market cap ${num(s.mcap)} · Beta ${num(s.beta)}
 
 WHAT THE NUMBERS SAY (the deterministic verdict you are adjusting):
-- Hold horizon: ${v.horizon || "—"} · Right-now action: ${v.action || "—"} · Conviction ${num(v.conviction)}/100
+- Hold horizon: ${clean(v.horizon, 40) || "—"} · Right-now action: ${clean(v.action, 40) || "—"} · Conviction ${num(v.conviction)}/100
 - Fundamentals/Orizin: ${num(s.orizinScore)}/100 · durability ${num(v.durability)} · valuation ${num(v.valuation)}
-- Flags: ${v.flags ? Object.entries(v.flags).filter(([, on]) => on).map(([k]) => k).join(", ") || "none" : "—"}
-${Array.isArray(v.reasons) && v.reasons.length ? `- Drivers: ${v.reasons.join("; ")}` : ""}
+- Flags: ${flags.length ? flags.join(", ") : "none"}
+${reasons.length ? `- Drivers: ${reasons.join("; ")}` : ""}
 
 KEY FUNDAMENTALS:
 - Valuation: P/E ${num(s.pe)}, P/S ${num(s.ps)}, P/B ${num(s.pb)}, FCF yield ${pctf(s.fcf_yield)}, DCF ${num(s.dcf)}, analyst target ${num(s.target)}
@@ -1137,9 +1147,12 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
     const data = await cachedDetail(`gameplan:${symbol}`, 24 * 60 * 60 * 1000, async () => {
+      // Profile/news are enrichment for the prompt, not hard requirements — a
+      // transient fetch failure shouldn't sink the whole Game Plan, so degrade
+      // to null and let Ori reason from the stats it already has.
       const [profile, news] = await Promise.all([
-        cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)),
-        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })),
+        cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
+        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
       ]);
       const raw = await geminiGenerateJson({
         system: GAME_PLAN_SYSTEM,

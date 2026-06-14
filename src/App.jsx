@@ -491,6 +491,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
   // Derive price performance and RSI trend for the open stock from the data we
   // already fetched for the chart — gives Ori momentum/timing context for free.
+  const detailFit = detailRow ? computeFit(detailRow, fitCtx) : null;
   const activeStock = detailRow
     ? {
         ...detailRow,
@@ -506,13 +507,14 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         technicals: detail.technicals,
         earnings: detail.earnings,
         smartMoney: detail.smartMoney,
-        fit: computeFit(detailRow, fitCtx),
-        verdict: computeVerdict(detailRow, detail, computeFit(detailRow, fitCtx), { risk }),
+        fit: detailFit,
+        verdict: computeVerdict(detailRow, detail, detailFit, { risk }),
       }
     : null;
 
   // The on-screen Deep Research stock, with full detail, framed exactly like
   // activeStock so Ori treats it as the thing the user is currently studying.
+  const researchFit = researchRow ? computeFit(researchRow, fitCtx) : null;
   const researchStock = researchRow
     ? {
         ...researchRow,
@@ -528,8 +530,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         technicals: researchDetail.technicals,
         earnings: researchDetail.earnings,
         smartMoney: researchDetail.smartMoney,
-        fit: computeFit(researchRow, fitCtx),
-        verdict: computeVerdict(researchRow, researchDetail, computeFit(researchRow, fitCtx), { risk }),
+        fit: researchFit,
+        verdict: computeVerdict(researchRow, researchDetail, researchFit, { risk }),
       }
     : null;
 
@@ -547,6 +549,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const focusRow1 = chatFocusSym1
     ? filtered.find((r) => r.symbol === chatFocusSym1) || stocks.find((r) => r.symbol === chatFocusSym1)
     : null;
+  const focus1Fit = focusRow1 ? computeFit(focusRow1, fitCtx) : null;
   const focusStock1 = focusRow1
     ? {
         ...focusRow1,
@@ -562,14 +565,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         technicals: chatFocusDetail1.technicals,
         earnings: chatFocusDetail1.earnings,
         smartMoney: chatFocusDetail1.smartMoney,
-        fit: computeFit(focusRow1, fitCtx),
-        verdict: computeVerdict(focusRow1, chatFocusDetail1, computeFit(focusRow1, fitCtx), { risk }),
+        fit: focus1Fit,
+        verdict: computeVerdict(focusRow1, chatFocusDetail1, focus1Fit, { risk }),
       }
     : null;
 
   const focusRow2 = chatFocusSym2
     ? filtered.find((r) => r.symbol === chatFocusSym2) || stocks.find((r) => r.symbol === chatFocusSym2)
     : null;
+  const focus2Fit = focusRow2 ? computeFit(focusRow2, fitCtx) : null;
   const focusStock2 = focusRow2
     ? {
         ...focusRow2,
@@ -585,8 +589,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         technicals: chatFocusDetail2.technicals,
         earnings: chatFocusDetail2.earnings,
         smartMoney: chatFocusDetail2.smartMoney,
-        fit: computeFit(focusRow2, fitCtx),
-        verdict: computeVerdict(focusRow2, chatFocusDetail2, computeFit(focusRow2, fitCtx), { risk }),
+        fit: focus2Fit,
+        verdict: computeVerdict(focusRow2, chatFocusDetail2, focus2Fit, { risk }),
       }
     : null;
 
