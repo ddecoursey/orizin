@@ -24,6 +24,56 @@ const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const pct = (v) => (isNum(v) ? `${(v * 100).toFixed(0)}%` : "—");
 
+// A persisted ~45-day price RETURN → 0..1 momentum proxy (down ~25% → 0, flat →
+// 0.5, up ~25% → 1). Lets the SCREENER carry a technicals signal (so falling
+// "value traps" don't rank like winners) without per-symbol indicator fetches;
+// the full Deep Research technicals pillar (SMA50/200 trend + RSI) overrides it.
+const momFromReturn = (m) => (isNum(m) ? clamp01(0.5 + m * 2) : null);
+
+// Analyst target-upside sub-signal (0..1) from consensus target vs price. Reads
+// the target from detail (Deep Research) OR the bulk row (screener — joined from
+// ai_enrichment), so both views compute the same number. Shared by the analyst
+// pillar and the lean screener conviction.
+function targetUpside(r, aiData, price) {
+  const target = isNum(aiData?.target_consensus)
+    ? aiData.target_consensus
+    : isNum(r?.target_consensus)
+      ? r.target_consensus
+      : isNum(r?.targetConsensus)
+        ? r.targetConsensus
+        : null;
+  return isNum(target) && isNum(price) && price > 0 ? clamp01(((target - price) / price) * 1.5 + 0.4) : null;
+}
+
+// Trend / momentum (0..1) + the trend regime. Uses the SMA50-vs-SMA200 cross —
+// from live detail on Deep Research OR the persisted bulk SMAs on the screener —
+// so BOTH views see the same trend (a 45-day bounce inside a long downtrend reads
+// bearish either place). Falls back to the persisted ~45-day return only when no
+// SMAs exist. Shared by computeVerdict and the lean screener conviction.
+function momentumSignal(tech, r) {
+  const sma50 = isNum(tech?.sma50) ? tech.sma50 : isNum(r?.sma50) ? r.sma50 : null;
+  const sma200 = isNum(tech?.sma200) ? tech.sma200 : isNum(r?.sma200) ? r.sma200 : null;
+  const price = isNum(r?.price) ? r.price : null;
+  const rsi = tech ? (isNum(tech.rsi) ? tech.rsi : isNum(tech.rsi14) ? tech.rsi14 : null) : isNum(r?.latestRsi) ? r.latestRsi : null;
+  const adx = isNum(tech?.adx) ? tech.adx : null;
+  let trend = "unknown";
+  if (isNum(sma50) && isNum(sma200)) trend = sma50 >= sma200 ? "up" : "down";
+  else if (isNum(price) && isNum(sma200)) trend = price >= sma200 ? "up" : "down";
+  const overbought = isNum(rsi) && rsi >= 70;
+  const oversold = isNum(rsi) && rsi <= 30;
+  const strongTrend = isNum(adx) && adx >= 25;
+  let score;
+  if (trend !== "unknown") {
+    let m = trend === "up" ? 0.68 : 0.32;
+    if (overbought) m -= 0.18;
+    if (oversold) m += 0.18;
+    score = clamp01(m);
+  } else {
+    score = momFromReturn(r?.mom); // last resort: short-window return
+  }
+  return { score, trend, overbought, oversold, strongTrend, rsi };
+}
+
 // Ramp helpers: map a raw value onto 0..1 between a low and high anchor.
 function up(v, lo, hi) {
   if (!isNum(v)) return null;
@@ -62,20 +112,17 @@ const toneOf = (v) => (v == null ? "neutral" : v >= 0.6 ? "good" : v >= 0.4 ? "o
 function pillar(id, label, score, weight, toneOverride, ori = false) {
   return { id, label, score: score ?? null, weight, tone: toneOverride || (score == null ? "neutral" : toneOf(score)), ori };
 }
-// Conviction 0..100. A pillar with no data is IMPUTED at a neutral 0.5 (carrying
-// its full weight) rather than dropped — so conviction sits on the SAME scale
-// whether only 2 pillars are known (screener) or all 7 are (Deep Research).
-// Dropping unknowns would renormalize over just the favorable pillars and make
-// the screener read misleadingly high; this mirrors the Orizin score's
-// missing-input imputation, and the number simply sharpens as real data loads.
+// Conviction 0..100 = weighted average over the pillars that have REAL data,
+// renormalizing the remaining weights. A pillar with no data (null score) is
+// EXCLUDED, not imputed — so a missing signal never drags the number toward the
+// middle. The screener (Fundamentals + Valuation known) therefore reflects those
+// two honestly and can reach the full range; opening Deep Research starts at the
+// same number and then refines as technicals, insiders, analysts, fit and Ori's
+// intangibles load. (Earlier we imputed unknowns at 0.5, which compressed the
+// screener to a ~68 ceiling — reverted per user.)
 function convictionFromPillars(pillars) {
-  let s = 0;
-  let w = 0;
-  for (const p of pillars) {
-    s += (isNum(p.score) ? p.score : 0.5) * p.weight;
-    w += p.weight;
-  }
-  return w > 0 ? Math.round((s / w) * 100) : null;
+  const s = weightedAvg(pillars.map((p) => [p.score, p.weight]));
+  return s == null ? null : Math.round(100 * s);
 }
 // Smart-money conviction signal (U.S. Congress + insiders) → 0..1. "quiet" =
 // no signal, so it's excluded from the blend rather than counted as neutral.
@@ -87,10 +134,10 @@ function smartMoneyScore(sm) {
   return null;
 }
 // Expert-analyst signal: implied upside to consensus target + recent up/down
-// grade flow → 0..1.
-function analystScore(detail, aiData, price) {
-  const target = isNum(aiData?.target_consensus) ? aiData.target_consensus : null;
-  const up = isNum(target) && isNum(price) && price > 0 ? clamp01(((target - price) / price) * 1.5 + 0.4) : null;
+// grade flow → 0..1. Target upside works on the screener too (row fallback); the
+// grade-flow half only adds in once detail is loaded on Deep Research.
+function analystScore(r, detail, aiData, price) {
+  const up = targetUpside(r, aiData, price);
   let grade = null;
   const grades = detail?.grades;
   if (Array.isArray(grades) && grades.length) {
@@ -127,7 +174,7 @@ function recentEarnings(earnings) {
 function valuationScore(r, aiData) {
   const price = isNum(r.price) ? r.price : null;
   const dcf = isNum(aiData?.dcf) ? aiData.dcf : isNum(r.dcf) ? r.dcf : null;
-  const target = isNum(aiData?.target_consensus) ? aiData.target_consensus : isNum(r.targetConsensus) ? r.targetConsensus : null;
+  const target = isNum(aiData?.target_consensus) ? aiData.target_consensus : isNum(r.target_consensus) ? r.target_consensus : isNum(r.targetConsensus) ? r.targetConsensus : null;
   const mos = isNum(dcf) && isNum(price) && dcf > 0 && price > 0 ? (dcf - price) / dcf : null;
   const upsideAnalyst = isNum(target) && isNum(price) && price > 0 ? (target - price) / price : null;
   let peTerm = null;
@@ -151,6 +198,40 @@ function valuationScore(r, aiData) {
 // fills it in (see mergeOriIntoVerdict).
 const PILLAR_WEIGHTS = { fundamentals: 0.3, valuation: 0.18, technicals: 0.12, smartMoney: 0.1, analyst: 0.12, fit: 0.18, intangibles: 0.14 };
 
+// ── Risk tolerance ───────────────────────────────────────────────────────────
+// Raw conviction is blind to how SPECULATIVE a name is, so cheap, high-rank
+// microcaps float to the top. speculationScore measures that (small size, high
+// beta, unprofitable, distressed balance sheet, thin data); riskDelta then tilts
+// conviction by the user's risk tolerance — a retiree (conservative) pushes
+// speculative names DOWN hard, a young/aggressive investor barely penalizes them.
+export const RISK_LEVELS = ["conservative", "balanced", "aggressive"];
+export const DEFAULT_RISK = "balanced";
+
+function speculationScore(r) {
+  const hasMargin = r.net_margin != null || r.op_margin != null;
+  // Size and volatility dominate — they're what makes a name unsuitable for a
+  // conservative (e.g. retiree) investor regardless of how good the numbers look.
+  return weightedAvg([
+    [isNum(r.mcap) ? 1 - up(r.mcap, 3e8, 3e9) : null, 0.35], // <$300M → 1, $3B+ → 0
+    [isNum(r.beta) ? up(Math.abs(r.beta), 1.0, 2.2) : null, 0.25], // high beta → 1
+    [(r.net_margin != null && r.net_margin < 0) || (r.op_margin != null && r.op_margin < 0) ? 1 : hasMargin ? 0 : null, 0.15],
+    [isNum(r.debt_equity) ? (r.debt_equity < 0 ? 1 : up(r.debt_equity, 1.0, 3.0)) : null, 0.1],
+    [isNum(r.net_debt_ebitda) ? up(r.net_debt_ebitda, 3, 7) : null, 0.05],
+    [isNum(r.dataCoverage) ? 1 - r.dataCoverage : null, 0.15],
+  ]);
+}
+
+// Conviction points to add for the user's risk tolerance. Computed from the SAME
+// row fields on the screener and on Deep Research, so the two stay consistent.
+function riskDelta(r, risk) {
+  const spec = speculationScore(r);
+  const s = spec == null ? 0.4 : spec;
+  if (risk === "conservative") return -Math.round(s * 42); // retiree: speculative names sink hard
+  if (risk === "aggressive") return -Math.round(s * 5); // risk-taker: barely penalized
+  return -Math.round(s * 16); // balanced — a mild built-in guard
+}
+const applyRisk = (conviction, delta) => (conviction == null ? conviction : Math.max(0, Math.min(100, conviction + delta)));
+
 /**
  * Lean conviction 0..100 for the screener (10k rows, no per-symbol detail / no
  * Ori). Uses only the pillars derivable from a scored row — Fundamentals (the
@@ -158,24 +239,27 @@ const PILLAR_WEIGHTS = { fundamentals: 0.3, valuation: 0.18, technicals: 0.12, s
  * weights renormalize. Equals computeVerdict().conviction for a row with no
  * detail loaded, so the number stays consistent as it refines on Deep Research.
  */
-export function quickConviction(row, fit = null) {
+export function quickConviction(row, fit = null, risk = DEFAULT_RISK) {
   if (!row) return null;
   const fund = isNum(row.score) ? row.score : null;
+  const price = isNum(row.price) ? row.price : null;
   const val = valuationScore(row, null).score;
   if (fund == null && val == null) return null; // nothing real to anchor on
+  const analyst = targetUpside(row, null, price); // consensus-target upside (no grades on the screener)
+  const tech = momentumSignal(null, row).score; // SMA50/200 trend (bulk), or ~45-day return fallback
   const fitS = fit && !fit.needsContext && isNum(fit.score) ? clamp01(fit.score / 100) : null;
-  // Same pillar set & imputation as computeVerdict, with only the screener-known
-  // pillars filled — so this equals the Deep Research conviction before detail
-  // loads, then refines (it doesn't jump) as the rest arrives.
-  return convictionFromPillars([
+  // Same pillars & renormalization as computeVerdict with no detail loaded, so
+  // this EQUALS the Deep Research conviction on open and only refines (doesn't
+  // jump) as live technicals / grades / insiders / Ori arrive. A null pillar is
+  // excluded — Insiders & Intangibles simply aren't known on the screener.
+  const base = convictionFromPillars([
     { score: fund, weight: PILLAR_WEIGHTS.fundamentals },
     { score: val, weight: PILLAR_WEIGHTS.valuation },
-    { score: null, weight: PILLAR_WEIGHTS.technicals },
-    { score: null, weight: PILLAR_WEIGHTS.smartMoney },
-    { score: null, weight: PILLAR_WEIGHTS.analyst },
+    { score: tech, weight: PILLAR_WEIGHTS.technicals },
+    { score: analyst, weight: PILLAR_WEIGHTS.analyst },
     { score: fitS, weight: PILLAR_WEIGHTS.fit },
-    { score: null, weight: PILLAR_WEIGHTS.intangibles },
   ]);
+  return applyRisk(base, riskDelta(row, risk));
 }
 
 const HORIZON = {
@@ -191,8 +275,9 @@ const HORIZON = {
  * @param {object} row     scored screener row (fundamentals + Orizin score)
  * @param {object} detail  { technicals, earnings, smartMoney, aiData }
  */
-export function computeVerdict(row, detail = {}, fit = null) {
+export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
   const r = row || {};
+  const risk = opts.risk || DEFAULT_RISK;
   const tech = detail.technicals || null;
   const aiData = detail.aiData || null;
   const price = isNum(r.price) ? r.price : null;
@@ -282,24 +367,7 @@ export function computeVerdict(row, detail = {}, fit = null) {
     valuation == null ? "unknown" : valuation >= 0.6 ? "cheap" : valuation >= 0.45 ? "fair" : valuation >= 0.3 ? "rich" : "expensive";
 
   // ── TIMING (technical trend / momentum) ────────────────────────────────────
-  const sma50 = tech?.sma50;
-  const sma200 = tech?.sma200;
-  const rsi = tech ? (isNum(tech.rsi) ? tech.rsi : isNum(tech.rsi14) ? tech.rsi14 : null) : isNum(r.latestRsi) ? r.latestRsi : null;
-  const adx = tech?.adx ?? null;
-  let trend = "unknown";
-  if (isNum(sma50) && isNum(sma200)) trend = sma50 >= sma200 ? "up" : "down";
-  else if (isNum(price) && isNum(sma200)) trend = price >= sma200 ? "up" : "down";
-  const overbought = isNum(rsi) && rsi >= 70;
-  const oversold = isNum(rsi) && rsi <= 30;
-  const strongTrend = isNum(adx) && adx >= 25;
-
-  const momentum = (() => {
-    if (trend === "unknown") return null;
-    let m = trend === "up" ? 0.68 : 0.32;
-    if (overbought) m -= 0.18;
-    if (oversold) m += 0.18;
-    return clamp01(m);
-  })();
+  const { score: momentum, trend, overbought, oversold, strongTrend, rsi } = momentumSignal(tech, r);
 
   // ── ACTION decision ────────────────────────────────────────────────────────
   let action;
@@ -380,16 +448,20 @@ export function computeVerdict(row, detail = {}, fit = null) {
     pillar("fundamentals", "Fundamentals", fund, PILLAR_WEIGHTS.fundamentals, unprofitable ? "bad" : undefined),
     pillar("valuation", "Valuation", valuation, PILLAR_WEIGHTS.valuation),
     pillar("technicals", "Technicals", momentum, PILLAR_WEIGHTS.technicals),
-    pillar("smartMoney", "Smart money", smartMoneyScore(detail.smartMoney), PILLAR_WEIGHTS.smartMoney),
-    pillar("analyst", "Analyst", analystScore(detail, aiData, price), PILLAR_WEIGHTS.analyst),
+    pillar("smartMoney", "Insiders", smartMoneyScore(detail.smartMoney), PILLAR_WEIGHTS.smartMoney),
+    pillar("analyst", "Analyst", analystScore(r, detail, aiData, price), PILLAR_WEIGHTS.analyst),
     { ...pillar("fit", "Fit for you", fit && !fit.needsContext && isNum(fit.score) ? clamp01(fit.score / 100) : null, PILLAR_WEIGHTS.fit), reasons: fit && !fit.needsContext ? fit.reasons : null },
     pillar("intangibles", "Intangibles", null, PILLAR_WEIGHTS.intangibles, undefined, true),
   ];
-  const conviction = convictionFromPillars(pillars);
+  // Risk-tolerance tilt (stored so mergeOriIntoVerdict can re-apply it after it
+  // recomputes conviction with Ori's intangibles pillar).
+  const rDelta = riskDelta(r, risk);
+  const conviction = applyRisk(convictionFromPillars(pillars), rDelta);
 
   return {
     horizon,
     conviction,
+    riskDelta: rDelta,
     pillars,
     action: { label: action, tone: actionTone, line: timingLine },
     headline,
@@ -428,8 +500,9 @@ export function mergeOriIntoVerdict(det, ori) {
     p.id === "intangibles" ? { ...p, score: intang, tone: intang == null ? "neutral" : toneOf(intang) } : p,
   );
 
-  // Conviction now includes the real intangibles score, then Ori's bounded nudge.
-  let conviction = convictionFromPillars(pillars);
+  // Conviction now includes the real intangibles score, the risk-tolerance tilt
+  // (re-applied since we recomputed from pillars), then Ori's bounded nudge.
+  let conviction = applyRisk(convictionFromPillars(pillars), det.riskDelta || 0);
   if (conviction != null) {
     const delta = isNum(ori.convictionDelta) ? Math.max(-20, Math.min(20, ori.convictionDelta)) : 0;
     conviction = Math.max(0, Math.min(100, conviction + delta));

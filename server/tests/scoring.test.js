@@ -108,6 +108,21 @@ test('missing growth data can no longer beat real mediocre growth', () => {
   );
 });
 
+test('conviction penalizes missing data in heavily weighted pillars', () => {
+  const noGrowth = mk('NOG', { revenue_growth: null, eps_growth: null, fcf_growth: null });
+  const full = mk('FULL');
+  const rows = [...fillers(), noGrowth, full];
+  const scored = bySym(computeScores(rows, { q: 49, v: 17, g: 60 }, 'aggressive'));
+
+  assert.ok(scored.NOG.dataCoveragePenalty > 0, 'missing the heavily weighted Growth pillar should reduce Conviction');
+  assert.equal(scored.FULL.dataCoveragePenalty, 0, 'complete growth data should not receive the missing-pillar penalty');
+  assert.equal(
+    scored.NOG.conviction,
+    scored.NOG.baseConviction - scored.NOG.dataCoveragePenalty,
+    'headline Conviction should reflect the data-coverage penalty',
+  );
+});
+
 test('negative EV/EBITDA: cheap only when EBITDA is positive', () => {
   const netCash = scoringInputs({ ev_ebitda: -2, ebitda_margin: 0.2 });
   assert.equal(netCash.ev_ebitda, -2, 'negative EV with positive EBITDA stays (genuinely cheap)');
@@ -143,7 +158,7 @@ test('zero weights produce no score; defaults are 35/35/30', () => {
   const rows = [...fillers(), mk('X')];
   const scored = bySym(computeScores(rows, { q: 0, v: 0, g: 0 }));
   assert.equal(scored.X.score, null);
-  assert.deepEqual(DEFAULT_WEIGHTS, { q: 35, v: 35, g: 30 });
+  assert.deepEqual(DEFAULT_WEIGHTS, { q: 30, v: 30, g: 40 });
 });
 
 test('rule of 40 is preserved on scored rows', () => {
@@ -151,4 +166,84 @@ test('rule of 40 is preserved on scored rows', () => {
   const scored = bySym(computeScores(rows));
   assert.equal(Math.round(scored.R40.rule_of_40), 50);
   assert.equal(scored.R40.passes_rule_of_40, true);
+});
+
+/**
+ * New regression / behavioral test for the conviction + data-coverage penalty.
+ * We simulate the real-world situation that triggered the original bug report:
+ * some stocks have excellent Quality + Value numbers (and high FCF yield etc.)
+ * but *zero* growth data (rev/eps/fcf), while others have solid but real growth.
+ * Under the (now default) 30/30/40 weights + balanced risk, the headline Conviction
+ * used for screener ranking must apply a meaningful penalty to the no-evidence
+ * names and must result in growth-evidenced names dominating the very top.
+ */
+test('default lens (30/30/40 + balanced) applies real penalty to missing Growth pillar and favors evidenced names in ranking', () => {
+  // "Miner-like" strong no-growth names (high margins, cheap multiples, good ROIC/ROE, high FCFY, realistic size).
+  const strongNoG1 = mk('NOGMINER1', {
+    revenue_growth: null, eps_growth: null, fcf_growth: null,
+    pe: 11, ev_ebitda: 5.5, fcf_yield: 0.09, op_margin: 0.48, fcf_margin: 0.32,
+    roic: 0.16, roe: 0.24, mcap: 60e9, beta: 1.1, net_margin: 0.22,
+    price: 50, dcf: null, target_consensus: 70,
+  });
+  const strongNoG2 = mk('NOGMINER2', {
+    revenue_growth: null, eps_growth: null, fcf_growth: null,
+    pe: 9, ev_ebitda: 4.2, fcf_yield: 0.12, op_margin: 0.51, fcf_margin: 0.35,
+    roic: 0.18, roe: 0.27, mcap: 40e9, beta: 1.3, net_margin: 0.25,
+    price: 80, dcf: null, target_consensus: 110,
+  });
+
+  // Solid names *with* real growth (slightly less extreme V/Q but evidenced growth).
+  const goodGrowth1 = mk('GROW1', {
+    revenue_growth: 0.12, eps_growth: 0.15, fcf_growth: 0.18,
+    pe: 18, ev_ebitda: 10, fcf_yield: 0.06, op_margin: 0.22, fcf_margin: 0.18,
+    roic: 0.14, roe: 0.19, mcap: 25e9, beta: 1.0, net_margin: 0.12,
+    price: 40, dcf: 55, target_consensus: 48,
+  });
+  const goodGrowth2 = mk('GROW2', {
+    revenue_growth: 0.22, eps_growth: 0.28, fcf_growth: 0.25,
+    pe: 14, ev_ebitda: 8, fcf_yield: 0.07, op_margin: 0.26, fcf_margin: 0.21,
+    roic: 0.19, roe: 0.23, mcap: 8e9, beta: 1.2, net_margin: 0.15,
+    price: 25, dcf: null, target_consensus: 32,
+  });
+
+  const rows = [...fillers(6), strongNoG1, strongNoG2, goodGrowth1, goodGrowth2];
+  const scored = bySym(computeScores(rows, DEFAULT_WEIGHTS, 'balanced'));
+
+  // The no-growth miners must receive a non-trivial penalty under the default 40% G weight.
+  assert.ok(
+    scored.NOGMINER1.dataCoveragePenalty >= 5,
+    `strong no-growth name must receive meaningful default-lens penalty (got ${scored.NOGMINER1.dataCoveragePenalty})`
+  );
+  assert.ok(
+    scored.NOGMINER2.dataCoveragePenalty >= 5,
+    `strong no-growth name must receive meaningful default-lens penalty (got ${scored.NOGMINER2.dataCoveragePenalty})`
+  );
+  assert.equal(scored.GROW1.dataCoveragePenalty, 0, 'growth-evidenced name gets zero missing-pillar penalty');
+  assert.equal(scored.GROW2.dataCoveragePenalty, 0, 'growth-evidenced name gets zero missing-pillar penalty');
+
+  // Headline conviction must be exactly base minus penalty.
+  assert.equal(
+    scored.NOGMINER1.conviction,
+    scored.NOGMINER1.baseConviction - scored.NOGMINER1.dataCoveragePenalty
+  );
+
+  // When sorted by the final conviction (what the screener actually uses for "top conviction"),
+  // the very highest ranks should be occupied by the names that have real growth data.
+  // (The no-growth names, despite strong raw V/Q, get pushed down by the evidence penalty.)
+  const sorted = [...rows.map(r => scored[r.symbol] || r)]
+    .filter(r => r.conviction != null)
+    .sort((a, b) => (b.conviction || 0) - (a.conviction || 0));
+
+  const top3HaveGrowth = sorted.slice(0, 3).every(r => r.revenue_growth != null || r.eps_growth != null || r.fcf_growth != null);
+  assert.ok(
+    top3HaveGrowth,
+    'under default 30/30/40 + balanced, top of the conviction ranking must be dominated by names that actually supply growth data'
+  );
+
+  // At least one of the growth names should outrank (or be very close to) the no-growth miners
+  // after penalty (they do in this controlled set because of the 40% G weight + penalty).
+  assert.ok(
+    Math.max(scored.GROW1.conviction || 0, scored.GROW2.conviction || 0) >= Math.min(scored.NOGMINER1.conviction || 0, scored.NOGMINER2.conviction || 0),
+    'growth-evidenced names should not be dominated by no-evidence high-V names under the tuned default lens'
+  );
 });

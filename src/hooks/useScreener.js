@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { computeRankedRows, applyWeights } from "../lib/scoring.js";
+import { buildFitContext, computeFit } from "../lib/fitScore.js";
 import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
 // localStorage keys are namespaced per logged-in user so two people sharing
@@ -49,6 +50,25 @@ function saveWeights(user, weights) {
   try {
     localStorage.setItem(weightsKey(user), JSON.stringify(weights));
   } catch {}
+}
+
+// Risk tolerance — a personal preference that tilts Conviction (conservative
+// punishes speculative microcaps/high-beta/unprofitable names; aggressive is
+// lenient). Persisted per-user like weights.
+const RISK_VALUES = ["conservative", "balanced", "aggressive"];
+const DEFAULT_RISK = "balanced";
+function riskKey(user) {
+  return `screener_risk_v1:${user}`;
+}
+function sanitizeRisk(v) {
+  return RISK_VALUES.includes(v) ? v : DEFAULT_RISK;
+}
+function loadRisk(user) {
+  try {
+    return sanitizeRisk(localStorage.getItem(riskKey(user)));
+  } catch {
+    return DEFAULT_RISK;
+  }
 }
 
 // One-time migration: copy pre-multiuser keys to the current user's
@@ -353,7 +373,7 @@ export function applyFilters(all, f, pins) {
   });
 }
 
-export function useScreener(currentUser) {
+export function useScreener(currentUser, portfolioGoals = {}) {
   const user = currentUser || "default";
   // Run migration synchronously before any state init so loadPins/loadTabs
   // see the migrated values on first render.
@@ -364,6 +384,7 @@ export function useScreener(currentUser) {
   const [lastFetch, setLastFetch] = useState(null);
   const [filters, setFiltersRaw] = useState({ ...DEFAULT_FILTERS });
   const [weights, setWeightsRaw] = useState(() => loadWeights(user));
+  const [risk, setRiskRaw] = useState(() => loadRisk(user));
   const [tabs, setTabsState] = useState(() => loadTabs(user));
   const [activeTab, setActiveTabState] = useState(
     () => localStorage.getItem(activeKey(user)) || "default",
@@ -393,6 +414,24 @@ export function useScreener(currentUser) {
     });
   }
 
+  // Risk-tolerance setter — mirrors weights (localStorage now, server once hydrated).
+  function setRisk(value) {
+    const next = sanitizeRisk(value);
+    setRiskRaw(next);
+    try { localStorage.setItem(riskKey(user), next); } catch {}
+    if (hydratedRef.current) patchUserSettings({ risk: next });
+  }
+
+  // Session-only Conviction overrides: when a stock is deep-researched its
+  // Conviction refines (live technicals/grades/insiders/Ori); we lift that
+  // sharper number back onto the screener row for the rest of the session
+  // (resets on reload — not persisted).
+  const [convictionOverrides, setConvictionOverrides] = useState({});
+  function setConvictionOverride(symbol, conviction) {
+    if (!symbol || !Number.isFinite(conviction)) return;
+    setConvictionOverrides((prev) => (prev[symbol] === conviction ? prev : { ...prev, [symbol]: conviction }));
+  }
+
   const [loadProgress, setLoadProg] = useState(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
   const [hasEnrichedOnce, setHasEnrichedOnce] = useState(false);
@@ -418,10 +457,110 @@ export function useScreener(currentUser) {
     [filteredRows]
   );
 
-  const filtered = useMemo(
-    () => applyWeights(rankedData, weights),
-    [rankedData, weights]
+  // Personalized Fit context + per-symbol Fit map. Built from the user's
+  // portfolio/goals/theses; null when there's no context (so the screener stays
+  // impersonal for users who haven't set anything up). Memoized over the whole
+  // universe so weight/risk drags don't recompute Fit — only a portfolio change does.
+  const fitCtx = useMemo(
+    () =>
+      buildFitContext({
+        portfolios: portfolioGoals.portfolios,
+        goals: portfolioGoals.goals,
+        theses: portfolioGoals.theses,
+        stocks,
+      }),
+    [portfolioGoals.portfolios, portfolioGoals.goals, portfolioGoals.theses, stocks],
   );
+  const hasFitContext =
+    !!(portfolioGoals.portfolios?.length || portfolioGoals.goals?.length || portfolioGoals.theses?.length);
+  const fitMap = useMemo(() => {
+    if (!hasFitContext) return null;
+    const m = Object.create(null);
+    for (const s of stocks) if (s.symbol) m[s.symbol] = computeFit(s, fitCtx);
+    return m;
+  }, [stocks, fitCtx, hasFitContext]);
+
+  const filteredWeighted = useMemo(
+    () => applyWeights(rankedData, weights, risk, fitMap),
+    [rankedData, weights, risk, fitMap]
+  );
+
+  // Deep Research overrides are computed under the current personalization lens.
+  // If the user changes Q/V/G weights, risk tolerance, or portfolio/goals Fit,
+  // those lifted convictions become stale; drop them so the screener reflects
+  // the freshly personalized lean conviction again.
+  useEffect(() => {
+    setConvictionOverrides({});
+  }, [weights, risk, fitMap]);
+
+  // Apply any session Conviction overrides from Deep Research. Returns the same
+  // reference when there are none, so the common case adds zero churn.
+  const filtered = useMemo(() => {
+    const syms = Object.keys(convictionOverrides);
+    if (!syms.length) return filteredWeighted;
+    return filteredWeighted.map((r) =>
+      convictionOverrides[r.symbol] != null ? { ...r, conviction: convictionOverrides[r.symbol] } : r,
+    );
+  }, [filteredWeighted, convictionOverrides]);
+
+  // Lazy Ori intangibles for top names on the current list (no 20k Gemini calls).
+  // Only the highest-conviction / visible leaders get reviewed (and server caches
+  // game-plan results 24h per symbol, so first viewer pays the cost, everyone else
+  // gets instant "Ori reviewed" data with convictionDelta + intangiblesScore etc.).
+  // This lets us expose the real Ori-reviewed intangibles (and adjust conviction)
+  // on the big list for the names that matter, while using the always-free
+  // durabilityProxy + data penalty as the "close equivalent" to de-risk junk that
+  // looks perfect quantitatively.
+  const [oriData, setOriData] = useState({});
+  const oriFetchedRef = useRef(new Set());
+  useEffect(() => {
+    const leaders = [...filteredWeighted]
+      .filter(r => r.conviction != null && r.conviction >= 65)
+      .sort((a,b) => (b.conviction||0) - (a.conviction||0))
+      .slice(0, 60);  // only the ones users actually see at the top
+    leaders.forEach(async (r) => {
+      const sym = r.symbol;
+      if (oriFetchedRef.current.has(sym) || oriData[sym]) return;
+      oriFetchedRef.current.add(sym);
+      try {
+        const payload = {
+          stats: {
+            price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
+            pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield,
+            roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
+            revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
+            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+          },
+          verdict: {
+            conviction: r.conviction,
+            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+          },
+        };
+        const res = await fetch(`/api/stocks/game-plan/${sym}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          if (j.ori) {
+            setOriData(prev => ({ ...prev, [sym]: j.ori }));
+          }
+        }
+      } catch {}
+    });
+  }, [filteredWeighted, oriData]);  // runs when the weighted list changes; leaders only (oriData to avoid re-fires)
+
+  // Merge any newly arrived Ori deltas into displayed conviction (like DR overrides)
+  const withOri = useMemo(() => {
+    if (!Object.keys(oriData).length) return filtered;
+    return filtered.map(r => {
+      const o = oriData[r.symbol];
+      if (!o || !Number.isFinite(o.convictionDelta)) return r;
+      const adj = Math.max(0, Math.min(100, (r.conviction || r.baseConviction || 0) + o.convictionDelta));
+      return { ...r, conviction: adj, ori: o };
+    });
+  }, [filtered, oriData]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
@@ -643,7 +782,7 @@ export function useScreener(currentUser) {
       if (cancelled) return;
 
       const hasServerState =
-        server && (Array.isArray(server.tabs) || server.weights || server.activeTab);
+        server && (Array.isArray(server.tabs) || server.weights || server.activeTab || server.risk);
 
       if (hasServerState) {
         let nextTabs = tabs;
@@ -663,12 +802,17 @@ export function useScreener(currentUser) {
           setWeightsRaw(clean);
           saveWeights(user, clean);
         }
+        if (server.risk) {
+          const cleanRisk = sanitizeRisk(server.risk);
+          setRiskRaw(cleanRisk);
+          try { localStorage.setItem(riskKey(user), cleanRisk); } catch {}
+        }
         // Re-derive pins from the adopted active tab (parity with mount init).
         const at = nextTabs.find((t) => t.id === nextActive);
         const tp = at?.state?.pins;
         setPins(Array.isArray(tp) ? new Set(tp) : new Set());
       } else {
-        patchUserSettings({ tabs, activeTab, weights });
+        patchUserSettings({ tabs, activeTab, weights, risk });
       }
 
       hydratedRef.current = true;
@@ -965,7 +1109,7 @@ export function useScreener(currentUser) {
 
   return {
     stocks,
-    filtered,
+    filtered: withOri,  // includes lazy Ori deltas for top leaders (real intangibles exposure without 20k calls)
     // Filtered set BEFORE weighting (stable when only the Q/V/G sliders move) — the
     // table uses it for the heatmap so dragging weights doesn't recompute it.
     filteredRows,
@@ -976,6 +1120,10 @@ export function useScreener(currentUser) {
     applyFiltersFromAI,
     weights,
     setWeights,
+    risk,
+    setRisk,
+    setConvictionOverride,
+    fitCtx,
     pins,
     togglePin,
     tabs,

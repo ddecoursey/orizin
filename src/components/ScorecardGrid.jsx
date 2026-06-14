@@ -22,12 +22,15 @@ function StatRow({ label, value, type }) {
   );
 }
 
-function SubChip({ label, value, colors, title }) {
+function SubChip({ label, value, colors, title, lowCov }) {
   const pct = value != null ? Math.round(value * 100) : null;
+  const style = lowCov
+    ? { background: colors.bg, color: colors.fg, border: '1px solid #f59e0b' }
+    : { background: colors.bg, color: colors.fg };
   return (
     <span
       className="group relative inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9.5px] font-semibold tracking-[-0.2px] cursor-default"
-      style={{ background: colors.bg, color: colors.fg }}
+      style={style}
     >
       {label} {pct ?? '—'}
 
@@ -82,8 +85,17 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
               {pinned ? '★' : '☆'}
             </button>
           )}
-          <span className="text-2xl font-black" style={{ color: scoreColor }}>
+          <span
+            className="text-2xl font-black"
+            style={{ color: scoreColor }}
+            title={r.dataCoveragePenalty > 0
+              ? `Conviction ${sc} (base ${r.baseConviction}, -${r.dataCoveragePenalty} data-coverage penalty for missing heavily-weighted pillar data)`
+              : undefined}
+          >
             {sc ?? '—'}
+            {r.dataCoveragePenalty > 0 && (
+              <span className="text-[10px] align-super ml-0.5 text-amber-400" title={`Data penalty -${r.dataCoveragePenalty}`}>↓</span>
+            )}
           </span>
         </div>
       </div>
@@ -116,30 +128,48 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
           label="Q"
           value={r.qScore}
           colors={{ bg: '#14532d', fg: '#86efac' }}
-          title="Quality — Profitable, capital-efficient businesses with strong balance sheets (ROIC, margins, low debt, liquidity)."
+          lowCov={r.pillarCoverage && r.pillarCoverage.q < 0.5}
+          title={`Quality — Profitable, capital-efficient businesses with strong balance sheets (ROIC, margins, low debt, liquidity). Pillar coverage: ${r.pillarCoverage ? Math.round(r.pillarCoverage.q * 100) : '—'}% real data.`}
         />
         <SubChip
           label="V"
           value={r.vScore}
           colors={{ bg: '#713f12', fg: '#fde68a' }}
-          title="Value — Cheap on multiples + margin of safety (EV/GP, EV/EBITDA, P/E, FCF yield, DCF)."
+          lowCov={r.pillarCoverage && r.pillarCoverage.v < 0.5}
+          title={`Value — Cheap on multiples + margin of safety (EV/GP, EV/EBITDA, P/E, FCF yield, DCF). Pillar coverage: ${r.pillarCoverage ? Math.round(r.pillarCoverage.v * 100) : '—'}% real data.`}
         />
         <SubChip
           label="G"
           value={r.gScore}
           colors={{ bg: '#134e4b', fg: '#5eead4' }}
-          title="Growth — Revenue, EPS, and FCF growth (TTM). Higher = favor faster-growing companies."
+          lowCov={r.pillarCoverage && r.pillarCoverage.g < 0.5}
+          title={`Growth — Revenue, EPS, and FCF growth (TTM). Higher = favor faster-growing companies. Pillar coverage: ${r.pillarCoverage ? Math.round(r.pillarCoverage.g * 100) : '—'}% real data.`}
         />
         {r.dataCoverage != null && r.score != null && (
           <SubChip
             label="Data"
             value={r.dataCoverage}
             colors={
-              r.dataCoverage >= 0.75
-                ? { bg: '#1e3a5f', fg: '#93c5fd' }
-                : { bg: '#78350f', fg: '#fcd34d' }
+              (r.dataCoveragePenalty && r.dataCoveragePenalty > 0)
+                ? { bg: '#78350f', fg: '#fcd34d' }
+                : (r.dataCoverage >= 0.75 ? { bg: '#1e3a5f', fg: '#93c5fd' } : { bg: '#78350f', fg: '#fcd34d' })
             }
-            title="How much of the 16-metric scorecard has real data. Missing inputs count as a slightly-below-median rank instead of being ignored, so sparse data can't inflate the score — but low coverage still means lower confidence."
+            title={
+              (r.dataCoveragePenalty && r.dataCoveragePenalty > 0)
+                ? `Data coverage ${Math.round(r.dataCoverage*100)}%. Conviction penalized by ${r.dataCoveragePenalty} because user-weighted pillar(s) have heavy missing data (see Q/V/G %). Low-evidence names are pushed down the ranking when you weight a missing pillar heavily.`
+                : "How much of the 16-metric scorecard has real data. Missing inputs count as a slightly-below-median rank instead of being ignored, so sparse data can't inflate the score — but low coverage still means lower confidence."
+            }
+          />
+        )}
+        {r.durabilityProxy != null && (
+          <SubChip
+            label="Dur"
+            value={r.durabilityProxy / 100}
+            colors={
+              r.durabilityProxy >= 70 ? { bg: '#14532d', fg: '#86efac' } :
+              r.durabilityProxy >= 50 ? { bg: '#713f12', fg: '#fde68a' } : { bg: '#78350f', fg: '#fcd34d' }
+            }
+            title={`Business durability proxy (${r.durabilityProxy}/100). Combines real profitability sustainability, capital efficiency/safety, data richness, and scale/stability. High = harder for "perfect on paper" quantitative names to rank at the top without underlying business quality. Cheap equivalent to Ori intangibles review (full version on Deep Research for any symbol).`}
           />
         )}
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-gray-800 text-gray-400">

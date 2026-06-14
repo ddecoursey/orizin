@@ -24,7 +24,7 @@
 
 import { quickConviction } from "./verdict.js";
 
-export const DEFAULT_WEIGHTS = { q: 35, v: 35, g: 30 };
+export const DEFAULT_WEIGHTS = { q: 30, v: 30, g: 40 };
 
 // Rank substitute for "this value is disqualifying" (sorts to the bottom of
 // ascending-is-better columns). Finite so it survives isFinite checks.
@@ -192,11 +192,37 @@ function pillarAt(componentCols, i) {
   return { score: sum / componentCols.length, present, total: componentCols.length };
 }
 
+// Conviction penalty for user-weighted missing evidence. The Q/V/G score still
+// uses neutral imputation so sparse rows remain comparable, but the headline
+// Conviction should not let a stock dominate when the user (or the default lens)
+// weights a pillar that is *completely* unknown. We add an extra boost for
+// zero-coverage pillars (common for growth: many stocks simply have no rev/eps/fcf
+// growth numbers populated). This produces a meaningful ranking discount (~8-14 pts
+// for a typical large-cap no-growth name under the new 30/30/40 defaults) while
+// still allowing exceptional evidenced names to rise.
+function coveragePenalty({ qCoverage, vCoverage, gCoverage }, weights, denom) {
+  if (!denom) return 0;
+  const wq = (Number(weights?.q ?? DEFAULT_WEIGHTS.q) || 0) / denom;
+  const wv = (Number(weights?.v ?? DEFAULT_WEIGHTS.v) || 0) / denom;
+  const wg = (Number(weights?.g ?? DEFAULT_WEIGHTS.g) || 0) / denom;
+  let weightedMissing =
+    wq * (1 - qCoverage) +
+    wv * (1 - vCoverage) +
+    wg * (1 - gCoverage);
+  // Extra penalty when the user puts weight on a pillar for which we have *zero*
+  // real evidence. This is the key case the original bug report highlighted.
+  if (gCoverage === 0) weightedMissing += wg * 0.12;
+  if (vCoverage === 0) weightedMissing += wv * 0.10;
+  if (qCoverage === 0) weightedMissing += wq * 0.10;
+  // Slightly lower entry threshold + steeper ramp than the very first version.
+  return Math.min(20, Math.round(Math.max(0, weightedMissing - 0.22) * 55));
+}
+
 /**
  * Lightweight: applies the Q/V/G slider weights to already-ranked data.
  * Cheap enough to run on every slider change.
  */
-export function applyWeights(ranked, weights = DEFAULT_WEIGHTS) {
+export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced", fitMap = null) {
   const { rows, ranks } = ranked;
   if (!rows.length) return rows;
 
@@ -213,8 +239,35 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS) {
     const present = q.present + v.present + g.present;
     const totalInputs = q.total + v.total + g.total;
     const scored = present >= MIN_COMPONENTS && denom > 0;
+    const coverage = totalInputs ? present / totalInputs : 0;
+    const qCoverage = q.total ? q.present / q.total : 0;
+    const vCoverage = v.total ? v.present / v.total : 0;
+    const gCoverage = g.total ? g.present / g.total : 0;
+    const dataCoveragePenalty = scored
+      ? coveragePenalty({ qCoverage, vCoverage, gCoverage }, weights, denom)
+      : 0;
 
     const score = scored ? (q.score * wq + v.score * wv + g.score * wg) / denom : null;
+    const baseConviction = scored
+      ? quickConviction(
+          {
+            score, vScore: v.score, pe: r.pe, ev_ebitda: r.ev_ebitda, fcf_yield: r.fcf_yield,
+            eps_growth: r.eps_growth, price: r.price, dcf: r.dcf,
+            // Joined from ai_enrichment + computed during enrich — let the screener
+            // see analyst upside and the SMA50/200 trend so value traps (and
+            // names in long downtrends) don't rank high.
+            target_consensus: r.target_consensus, mom: r.mom, sma50: r.sma50, sma200: r.sma200,
+            // Speculation inputs for the risk-tolerance tilt.
+            mcap: r.mcap, beta: r.beta, net_margin: r.net_margin, op_margin: r.op_margin,
+            debt_equity: r.debt_equity, net_debt_ebitda: r.net_debt_ebitda, dataCoverage: coverage,
+          },
+          // Personalized Fit (precomputed per-symbol; null when the user has no
+          // portfolio/goals context). Same computeFit() Deep Research uses, so
+          // the screener and DR conviction stay consistent.
+          fitMap ? fitMap[r.symbol] || null : null,
+          risk,
+        )
+      : null;
 
     const r40 = ruleOf40(r);
 
@@ -227,16 +280,16 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS) {
       // Unified, user-facing Conviction (0..100) — the Orizin Score (fundamentals)
       // blended with valuation. The full multi-pillar + Ori conviction is computed
       // on the Deep Research page; this lean version keeps the 10k-row screener fast.
-      conviction: scored
-        ? quickConviction({ score, vScore: v.score, pe: r.pe, ev_ebitda: r.ev_ebitda, fcf_yield: r.fcf_yield, eps_growth: r.eps_growth, price: r.price, dcf: r.dcf })
-        : null,
+      conviction: baseConviction == null ? null : Math.max(0, baseConviction - dataCoveragePenalty),
+      baseConviction,
+      dataCoveragePenalty,
       // Fraction of the 16 scorecard inputs with real data — surfaced in the
       // UI and to Ori so low-coverage scores are visibly less trustworthy.
-      dataCoverage: totalInputs ? present / totalInputs : 0,
+      dataCoverage: coverage,
       pillarCoverage: {
-        q: q.total ? q.present / q.total : 0,
-        v: v.total ? v.present / v.total : 0,
-        g: g.total ? g.present / g.total : 0,
+        q: qCoverage,
+        v: vCoverage,
+        g: gCoverage,
       },
       // With imputation every scored stock carries all three pillars, so the
       // effective weights are simply the normalized sliders.
@@ -245,14 +298,42 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS) {
         : { q: 0, v: 0, g: 0 },
       rule_of_40: r40.score,
       passes_rule_of_40: r40.passes,
+      // Durability / intangibles proxy (0-100). Always available, no LLM cost.
+      // High values indicate stronger signals of sustainable business quality
+      // (real profits, efficient capital, clean balance sheet, rich data, scale).
+      // Use to de-emphasize or filter "perfect on paper but likely junk" names.
+      durabilityProxy: scored ? computeDurabilityProxy(r) : null,
     };
   });
 }
 
 /** Legacy API - kept for compatibility */
-export function computeScores(rows, weights = DEFAULT_WEIGHTS) {
+export function computeScores(rows, weights = DEFAULT_WEIGHTS, risk = "balanced") {
   const ranked = computeRankedRows(rows);
-  return applyWeights(ranked, weights);
+  return applyWeights(ranked, weights, risk);
+}
+
+// Cheap, always-available proxy for the kinds of "intangibles" Ori reviews
+// (durable moat / profitability sustainability, balance sheet safety, data richness,
+// scale/stability). High score makes it harder for pure "paper perfect" quantitative
+// names (unprofitable cyclicals, narrative microcaps, etc.) to dominate the list
+// without real business quality signals. 0-100. Complements the dataCoveragePenalty.
+export function computeDurabilityProxy(r) {
+  if (!r) return null;
+  // Profitability sustainability (margins positive and decent)
+  const m = (v, lo, hi) => (v == null || !isFinite(v) ? 0.3 : Math.max(0, Math.min(1, (v - lo) / (hi - lo))));
+  const prof = (m(r.net_margin, 0, 0.15) * 0.3 + m(r.op_margin, 0.02, 0.18) * 0.4 + m(r.fcf_margin, 0, 0.12) * 0.3);
+  // Capital efficiency + safety
+  const roic = m(r.roic, 0.05, 0.2);
+  const bs = r.debt_equity == null ? 0.6 : (r.debt_equity < 0 ? 0.95 : m(3 - r.debt_equity, 0, 2.5));
+  const cap = 0.5 * roic + 0.5 * bs;
+  // Data + stability (harder to fake, more "real" business)
+  const data = r.dataCoverage != null ? r.dataCoverage : 0.5;
+  const scale = r.mcap == null ? 0.4 : (r.mcap > 10e9 ? 1 : r.mcap > 2e9 ? 0.85 : r.mcap > 5e8 ? 0.6 : 0.35);
+  const hasG = (r.revenue_growth != null || r.eps_growth != null || r.fcf_growth != null) ? 0.15 : 0;
+  const stab = 0.5 * data + 0.3 * scale + 0.2 * hasG;
+  const raw = 0.35 * prof + 0.3 * cap + 0.35 * stab;
+  return Math.round(100 * Math.max(0, Math.min(1, raw)));
 }
 
 export const SECTOR_COLORS = {

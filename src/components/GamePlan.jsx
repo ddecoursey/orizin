@@ -81,7 +81,7 @@ export default function GamePlan({ verdict, oriState = {} }) {
           <div className="text-[10px] uppercase tracking-[0.18em] text-gray-500 mt-1">conviction</div>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 min-w-0">
-          <div className={`rounded-lg border ${ht.border} bg-gray-950/40 px-3.5 py-2.5`}>
+          <div className={`rounded-lg border ${ht.border} bg-gray-950/40 px-3.5 py-2.5 min-w-0`}>
             <div className="text-[10px] uppercase tracking-[0.18em] text-gray-500">Hold for</div>
             <div className={`text-2xl font-black leading-tight ${ht.text}`}>{h.label}</div>
             <div className="text-[11px] text-gray-400">
@@ -89,13 +89,13 @@ export default function GamePlan({ verdict, oriState = {} }) {
               {verdict.horizonAdjusted && <span className="ml-1 text-violet-300/90">· ✦ Ori-adjusted</span>}
             </div>
           </div>
-          <div className={`rounded-lg border ${at.border} bg-gray-950/40 px-3.5 py-2.5`}>
+          <div className={`rounded-lg border ${at.border} bg-gray-950/40 px-3.5 py-2.5 min-w-0`}>
             <div className="text-[10px] uppercase tracking-[0.18em] text-gray-500">Right now</div>
-            <div className={`text-base font-extrabold leading-tight ${at.text}`}>
+            <div className={`text-base font-extrabold leading-tight break-words ${at.text}`}>
               {a.label}
               {a.oriAdjusted && <span className="ml-1 text-[10px] font-semibold text-violet-300/90 align-middle">✦</span>}
             </div>
-            {a.line && <div className="text-[11px] text-gray-400 mt-0.5 line-clamp-2">{a.line}</div>}
+            {a.line && <div className="text-[11px] text-gray-400 mt-0.5 break-words">{a.line}</div>}
           </div>
         </div>
       </div>
@@ -232,7 +232,7 @@ function Header({ confidence }) {
     <header className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2">
         <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
-        <InfoHint text="One unified verdict: a conviction score (0–100) blending fundamentals (the old Orizin Score), valuation, technicals, smart money, analysts, your personal Fit, and Ori's read on intangibles / future potential — plus how long it's worth holding and what to do at today's price. Educational only — not financial advice." />
+        <InfoHint text="One unified verdict: a conviction score (0–100) blending fundamentals (the old Orizin Score), valuation, technicals, insiders (corporate insiders + U.S. Congress buying/selling), analysts, your personal Fit, and Ori's read on intangibles / future potential — plus how long it's worth holding and what to do at today's price. Educational only — not financial advice." />
       </div>
       <div className="flex items-center gap-2">
         {confidence && (

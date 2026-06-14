@@ -93,6 +93,8 @@ const COLS = [
   { key: "sector", label: "Sector", left: true, plain: true },
   { key: "mcap", label: "Mkt Cap", plain: true, type: "money" },
   { key: "price", label: "Price", plain: true, type: "price" },
+  { key: "conviction", label: "Conviction", plain: true, nosort: false },
+  { key: "durabilityProxy", label: "Dur", plain: true },
   { key: "trend", label: "Trend", plain: true, nosort: true },
   { key: "beta", label: "Beta", plain: true, type: "ratio" },
   { key: "pe", label: "P/E", type: "x" },
@@ -119,8 +121,43 @@ const COLS = [
   { key: "current_ratio", label: "Curr R", type: "ratio" },
   { key: "debt_equity", label: "D/E", type: "ratio" },
   { key: "div_yield", label: "Div Yld", type: "pct" },
-  { key: "conviction", label: "Conviction", plain: true, nosort: false },
 ];
+
+const COL_WIDTHS = {
+  pin: "32px",
+  symbol: "92px",
+  sector: "92px",
+  mcap: "78px",
+  price: "58px",
+  conviction: "92px",
+  durabilityProxy: "42px",
+  trend: "58px",
+  beta: "44px",
+  pe: "52px",
+  pb: "52px",
+  ps: "52px",
+  ev_ebitda: "68px",
+  ev_sales: "52px",
+  ev_gp: "52px",
+  fcf_yield: "58px",
+  earnings_yield: "58px",
+  gross_margin: "58px",
+  op_margin: "52px",
+  net_margin: "52px",
+  fcf_margin: "52px",
+  roic: "52px",
+  roe: "52px",
+  roa: "52px",
+  revenue_growth: "58px",
+  eps_growth: "52px",
+  fcf_growth: "52px",
+  op_income_growth: "58px",
+  rule_of_40: "44px",
+  net_debt_ebitda: "52px",
+  current_ratio: "52px",
+  debt_equity: "48px",
+  div_yield: "58px",
+};
 
 export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
   const [sortKey, setSortKey] = useState("mcap");
@@ -278,11 +315,13 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       const ap = pinnedSet.has(a.symbol),
         bp = pinnedSet.has(b.symbol);
       if (ap !== bp) return ap ? -1 : 1;
-      const av = a[sortKey],
-        bv = b[sortKey];
-      if (av == null || !isFinite(av)) return 1;
-      if (bv == null || !isFinite(bv)) return -1;
-      if (typeof av === "string") return av.localeCompare(bv) * sortDir;
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      if (av == null || av === "" || (typeof av === "number" && !isFinite(av))) return 1;
+      if (bv == null || bv === "" || (typeof bv === "number" && !isFinite(bv))) return -1;
+      if (typeof av === "string" || typeof bv === "string") {
+        return String(av).localeCompare(String(bv)) * sortDir;
+      }
       return (av - bv) * sortDir;
     });
   }, [rows, pins, sortKey, sortDir]);
@@ -414,50 +453,21 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       <table className="w-full border-collapse text-xs">
         {/* Define column widths for stable "lanes" even with virtualization */}
         <colgroup>
-          <col style={{ width: '32px' }} />      {/* Pin */}
-          <col style={{ width: '92px' }} />     {/* Symbol + name */}
-          <col style={{ width: '92px' }} />     {/* Sector */}
-          <col style={{ width: '78px' }} />     {/* Mkt Cap */}
-          <col style={{ width: '58px' }} />     {/* Price */}
-          <col style={{ width: '58px' }} />     {/* Trend */}
-          <col style={{ width: '44px' }} />     {/* Beta */}
-          <col style={{ width: '52px' }} />     {/* P/E */}
-          <col style={{ width: '52px' }} />     {/* P/B */}
-          <col style={{ width: '52px' }} />     {/* P/S */}
-          <col style={{ width: '68px' }} />     {/* EV/EBITDA */}
-          <col style={{ width: '52px' }} />     {/* EV/S */}
-          <col style={{ width: '52px' }} />     {/* EV/GP */}
-          <col style={{ width: '58px' }} />     {/* FCF Yld */}
-          <col style={{ width: '58px' }} />     {/* Gross M */}
-          <col style={{ width: '52px' }} />     {/* Op M */}
-          <col style={{ width: '52px' }} />     {/* Net M */}
-          <col style={{ width: '52px' }} />     {/* FCF M */}
-          <col style={{ width: '52px' }} />     {/* ROIC */}
-          <col style={{ width: '52px' }} />     {/* ROE */}
-          <col style={{ width: '52px' }} />     {/* ROA */}
-          <col style={{ width: '58px' }} />     {/* Rev Gr */}
-          <col style={{ width: '52px' }} />     {/* EPS Gr */}
-          <col style={{ width: '52px' }} />     {/* FCF Gr */}
-          <col style={{ width: '44px' }} />     {/* R40 */}
-          <col style={{ width: '52px' }} />     {/* ND/EB */}
-          <col style={{ width: '52px' }} />     {/* Curr R */}
-          <col style={{ width: '48px' }} />     {/* D/E */}
-          <col style={{ width: '58px' }} />     {/* Div Yld */}
-          <col style={{ width: '92px' }} />     {/* Conviction */}
+          {COLS.map((c) => (
+            <col key={c.key} style={{ width: COL_WIDTHS[c.key] }} />
+          ))}
           <col style={{ width: '52px' }} />     {/* Ask Ori */}
         </colgroup>
 
         <thead className="sticky top-0 z-20 bg-gray-950">
           <tr>
-            {COLS.map((c, i) => {
-              // Widths aligned with colgroup for strong column lanes
-              const widths = ['32px','92px','92px','78px','58px','58px','44px','52px','52px','52px','68px','52px','52px','58px','58px','52px','52px','52px','52px','52px','52px','58px','52px','52px','44px','52px','52px','48px','58px','72px'];
-              const w = widths[i];
+            {COLS.map((c) => {
+              const w = COL_WIDTHS[c.key];
               return (
                 <th
                   key={c.key}
                   onClick={() => handleSort(c.key)}
-                  title={c.key === "conviction" ? "Conviction (0–100): the unified verdict — fundamentals (Orizin engine) + valuation. Refines with technicals, smart money, analysts & Ori's intangibles on the Deep Research page." : undefined}
+                  title={c.key === "conviction" ? "Conviction (0–100): the unified verdict — fundamentals (Orizin engine) + valuation. Refines with technicals, smart money, analysts & Ori's intangibles on the Deep Research page. When a pillar you weighted heavily (via Q/V/G sliders) has mostly missing data, a data-coverage penalty is subtracted from Conviction so low-evidence names don't dominate the ranking." : undefined}
                   style={w ? { width: w } : undefined}
                   className={`px-3 py-2 whitespace-nowrap text-[9px] uppercase tracking-wider
                     font-bold border-b border-gray-800
@@ -554,6 +564,30 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                   {fmt(r.price, "price") ?? <span className="text-gray-600">—</span>}
                 </td>
 
+                {/* Conviction */}
+                <td className="px-3 py-2 min-w-[80px]">
+                  <span
+                    title={
+                      r.conviction != null && r.dataCoveragePenalty > 0
+                        ? `Conviction ${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty} penalty). Penalty applies when user weights are high on a pillar with low real-data coverage (Q:${r.pillarCoverage ? Math.round(r.pillarCoverage.q*100) : '—'}% V:${r.pillarCoverage ? Math.round(r.pillarCoverage.v*100) : '—'}% G:${r.pillarCoverage ? Math.round(r.pillarCoverage.g*100) : '—'}%).`
+                        : (r.conviction != null ? 'Conviction (0–100) from fundamentals + valuation (see column header for details).' : undefined)
+                    }
+                  >
+                    <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
+                    {r.dataCoveragePenalty > 0 && (
+                      <span className="ml-1 text-[9px] text-amber-400 align-super" title={`−${r.dataCoveragePenalty} data penalty`}>↓</span>
+                    )}
+                    {r.ori && (
+                      <span className="ml-1 text-[8px] text-purple-400 align-super" title={`Ori-reviewed intangibles (score ${r.ori.intangiblesScore ?? '—'}): ${r.ori.intangiblesRationale || r.ori.bottomLine || ''}. Conviction delta ${r.ori.convictionDelta ?? 0}. Cached — no extra API cost after first review.`}>✧</span>
+                    )}
+                  </span>
+                </td>
+
+                {/* Durability / intangibles proxy (cheap Ori equivalent) */}
+                <td className="px-1 py-2 text-center font-mono text-[9px] text-gray-400" title="Durability proxy (0-100): real profitability + capital efficiency + balance sheet safety + data richness + scale. High values make it much harder for 'perfect on paper' junk (unprofitable story stocks, etc.) to rank at the top. Complements data penalty. Full Ori intangibles review (with convictionDelta) on Deep Research for any name — server-cached after first view, no extra cost for the list.">
+                  {r.durabilityProxy ?? <span className="text-gray-600">—</span>}
+                </td>
+
                 {/* Trend Sparkline (real historical prices) */}
                 <td className="px-2 py-2 text-center">
                   {sparklines.has(r.symbol) ? (
@@ -578,8 +612,8 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                   {r.beta != null ? r.beta.toFixed(2) : <span className="text-gray-600">—</span>}
                 </td>
 
-                {/* Heat-mapped columns */}
-                {COLS.slice(7, -1).map((c) => {
+                {/* Heat-mapped columns (pe through div_yield) */}
+                {COLS.slice(9).map((c) => {
                   const val = r[c.key];
                   const formatted = fmt(val, c.type);
                   const hcls = heatClass(val, c.key, heat);
@@ -600,11 +634,6 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                     </td>
                   );
                 })}
-
-                {/* Conviction */}
-                <td className="px-3 py-2 min-w-[80px]">
-                  <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
-                </td>
 
                 {/* Ask Ori */}
                 <td className="px-2 py-2 text-right" style={{ width: '52px' }}>

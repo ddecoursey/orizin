@@ -664,6 +664,24 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   // Start the always-on low-rate background enrichment job (if not disabled)
   startBackgroundEnrichmentIfEnabled();
 
+  // One-time: backfill the screener momentum signal from sparklines we already
+  // have, so the Conviction technicals factor lights up immediately instead of
+  // waiting for the slow re-enrich cycle. Deferred + guarded so it never blocks boot.
+  setTimeout(() => {
+    try {
+      const n = db.backfillMomentum();
+      if (n) console.log(`[momentum] backfilled ~45d momentum for ${n} stocks`);
+    } catch (e) {
+      console.error('[momentum] backfill failed:', e.message);
+    }
+    try {
+      const t = db.backfillTrend();
+      if (t) console.log(`[momentum] backfilled SMA50/200 trend for ${t} stocks`);
+    } catch (e) {
+      console.error('[momentum] trend backfill failed:', e.message);
+    }
+  }, 4000);
+
   // Downgrade accounts whose post-cancellation grace period has ended. Runs at
   // startup and hourly; lazy reconcile in /auth/me handles active users sooner.
   try { db.expireLapsedPro(); } catch (e) { console.error('[billing] startup expire failed:', e.message); }

@@ -89,9 +89,11 @@ function buildSystemPrompt(context, personalization = {}) {
   const shown = stocks?.length || 0;
   const total = totalFiltered ?? shown;
   const viewLine =
-    total > shown
-      ? `${total} (showing the top ${shown} by Orizin Score below)`
-      : `${shown}`;
+    shown === 0
+      ? `${total}`
+      : total > shown
+        ? `${total} (showing the top ${shown} by Conviction below)`
+        : `${shown}`;
 
   let prompt = `You are Ori, a senior equity research analyst with deep expertise in fundamental analysis. You have access to the user's Orizin filtered stock universe.
 
@@ -101,7 +103,7 @@ ${username && username !== "default" ? `You are talking to **${username}**. Addr
 
 IMPORTANT: Always provide a disclaimer that this is analysis for informational purposes, not financial advice.
 
-When a stock's detailed data is provided below, synthesize ALL of it into one coherent view — fundamentals (valuation / quality / growth + the Orizin Score), DCF & analyst targets, technicals (moving-average trend & golden/death cross, RSI, ADX), upcoming earnings + recent beat/miss history, smart-money activity (U.S. Congress + company insider buying/selling as a conviction signal), and the user's personal Fit score. Call out when signals agree or conflict (e.g. strong fundamentals but a death-cross downtrend; Congress or insiders buying ahead of earnings; a high Orizin Score but a low personal Fit because it concentrates the user's portfolio).
+When a stock's detailed data is provided below, synthesize ALL of it into one coherent view — fundamentals (valuation / quality / growth + the Orizin Score), DCF & analyst targets, technicals (moving-average trend & golden/death cross, RSI, ADX), upcoming earnings + recent beat/miss history, insider activity (U.S. Congress + corporate insider buying/selling as a conviction signal), and the user's personal Fit score. Call out when signals agree or conflict (e.g. strong fundamentals but a death-cross downtrend; Congress or insiders buying ahead of earnings; a high Orizin Score but a low personal Fit because it concentrates the user's portfolio).
 
 Many users are BEGINNERS who mainly want to know "what do I actually do with this?" When a 🧭 GAME PLAN is provided for a stock, it is the same beginner verdict the user sees on the page — a HOLD HORIZON (trade / ~1yr / ~3yr / ~5yr / 10+yr) and a RIGHT-NOW action (accumulate / buy / hold / wait for a pullback / trim / avoid). Lead with that plain-English bottom line, then back it with the evidence. Separate the two ideas the way the Game Plan does: how long the business is worth owning (quality/safety/growth) vs. whether today's price is a good entry (valuation/trend). Stay consistent with the on-screen verdict, or say plainly why you'd differ. Keep it concrete enough that a novice knows the next step, while always noting it's educational, not financial advice.
 ${memory?.length ? `
@@ -114,10 +116,13 @@ When the user states a durable preference, constraint, or fact about themselves 
 - Max 2 per reply. Only genuinely durable facts — never transient context ("user asked about NVDA today"), never things already in your memory above, never your own analysis or opinions.
 - The token is stripped before display; never mention or explain it.
 
-SCREENER CONTEXT:
+${view === 'deep-research'
+  ? `DEEP RESEARCH CONTEXT:
+- The user is viewing ONE stock's full research page (its data is below). They are NOT looking at the screener list right now — do not reference a count of stocks "in view".`
+  : `SCREENER CONTEXT:
 - Stocks in view: ${viewLine}
 - Active screener: ${activeScreener || "All Stocks"}
-- Current filters: ${summarizeFilters(filters)}
+- Current filters: ${summarizeFilters(filters)}`}
 - Current scorecard weights: Q=${weights?.q ?? 35} (Quality), V=${weights?.v ?? 35} (Value), G=${weights?.g ?? 30} (Growth). These determine how the final Orizin Score is calculated.
 
 Available Sectors: ${JSON.stringify(availableSectors || [])}
@@ -132,12 +137,12 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
       "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score | Conv | Cov |\n";
     prompt +=
       "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|------|-----|\n";
-    const top = stocks.slice(0, 50);
+    const top = stocks.slice(0, 100);
     for (const s of top) {
       prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} | ${s.conviction != null ? s.conviction : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
     }
-    if (stocks.length > 50)
-      prompt += `\n(Showing top 50 of ${stocks.length} by Conviction. Score = Orizin fundamentals engine; Conv = the unified headline Conviction users see.)\n`;
+    if (stocks.length > 100)
+      prompt += `\n(Showing top 100 of ${stocks.length} by Conviction. Score = Orizin fundamentals engine; Conv = the unified headline Conviction users see.)\n`;
   }
 
   if (pinnedStocks?.length) {
@@ -228,7 +233,16 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
     }
   }
 
-  prompt += `
+  if (view === 'deep-research') {
+    prompt += `
+=== YOU ARE ON THE DEEP RESEARCH PAGE ===
+
+The user is ALREADY on the **Deep Research** page for ${activeStock ? `**${activeStock.symbol}**` : "this stock"} — the comprehensive single-stock dashboard (full profile, key metrics, ratios, DCF, statements, SEC filings, price targets, insiders, exec comp, peers, growth) is open in front of them right now, and that stock's full data is provided above.
+- Do NOT suggest "opening Deep Research", do NOT tell them to "go to the Deep Research page", and NEVER emit a \`[[deep-research:SYMBOL]]\` token — they're already here.
+- Answer about THIS stock in depth, drawing on the rich data above. They came here to go deep, so go deep.
+`;
+  } else {
+    prompt += `
 === DEEP RESEARCH HANDOFF ===
 
 Orizin has a dedicated **Deep Research** page that shows comprehensive single-stock data (full profile, key metrics, ratios, DCF, financial statements, SEC filings, price targets, insider trading, exec comp, peers, and growth).
@@ -237,7 +251,10 @@ When the user asks for a deep/comprehensive dive on ONE specific stock (e.g. "do
 1. Give a brief, useful answer first.
 2. Then ASK if they'd like to open the Deep Research page for that stock, and on its own line at the very end of your message emit the token: \`[[deep-research:SYMBOL]]\` (e.g. \`[[deep-research:NVDA]]\`). The app turns this into an "Open Deep Research" button — do NOT describe the token itself.
 Only emit the token when the user clearly wants an in-depth look at a single named stock. Never emit it for general/screener questions or for multiple stocks at once.
+`;
+  }
 
+  prompt += `
 RESPONSE GUIDELINES:
 - Be specific: name stocks, cite numbers from the data
 - Use markdown tables and bold text for key findings
@@ -419,7 +436,7 @@ The user has this stock open in the company-overview panel right now. Unless the
     if (v.reasons && v.reasons.length) out += `\n  Horizon drivers: ${v.reasons.join("; ")}`;
     if (Array.isArray(v.pillars) && v.pillars.length)
       out += `\n  Pillars (0-100): ${v.pillars.map((p) => `${p.id} ${p.score ?? "—"}`).join(" · ")}`;
-    out += `\n  (confidence: ${v.confidence}). This ONE conviction unifies the Orizin Score (→ fundamentals pillar), personal Fit (→ fit pillar), valuation, technicals, smart money & analysts. Stay consistent with it, or state plainly why you'd differ. You ARE Ori — own the intangibles / future-potential judgment (the Tesla/SpaceX "numbers say no, story says yes" factor) and always give a bull case, a bear case, and what would change your mind.`;
+    out += `\n  (confidence: ${v.confidence}). This ONE conviction unifies the Orizin Score (→ fundamentals pillar), personal Fit (→ fit pillar), valuation, technicals, insiders & analysts. Stay consistent with it, or state plainly why you'd differ. You ARE Ori — own the intangibles / future-potential judgment (the Tesla/SpaceX "numbers say no, story says yes" factor) and always give a bull case, a bear case, and what would change your mind.`;
   }
 
   if (s.performance) {
@@ -511,7 +528,7 @@ The user has this stock open in the company-overview panel right now. Unless the
     if (i && (i.buyers || i.sellers)) {
       parts.push(`Insiders open-market (120d): ${i.buyers} bought / ${i.sellers} sold${i.buyValue ? ` ($${i.buyValue.toLocaleString()} bought)` : ""}`);
     }
-    if (parts.length) out += `\n- Smart money (signal: ${s.smartMoney.signal}): ${parts.join(" | ")}`;
+    if (parts.length) out += `\n- Insiders (signal: ${s.smartMoney.signal}): ${parts.join(" | ")}`;
   }
 
   if (s.fit) {

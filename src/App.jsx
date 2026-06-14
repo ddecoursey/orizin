@@ -24,7 +24,7 @@ import Footer from "./components/Footer.jsx";
 import UpgradeModal from "./components/UpgradeModal.jsx";
 import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
-import { buildFitContext, computeFit } from "./lib/fitScore.js";
+import { computeFit } from "./lib/fitScore.js";
 import { computeVerdict } from "./lib/verdict.js";
 
 export default function App() {
@@ -355,6 +355,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     applyFiltersFromAI,
     weights,
     setWeights,
+    risk,
+    setRisk,
+    setConvictionOverride,
+    fitCtx,
     pins,
     togglePin,
     tabs,
@@ -369,20 +373,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     loadProgress,
     addTicker,
     cancelOperation,
-  } = useScreener(currentUser);
-
-  // Fit Score context (portfolio sectors, held symbols, goal/thesis keywords).
-  // Independent of the Q/V/G weights, so it only recomputes when the universe or
-  // the user's portfolio/goals/theses change — never on a weight drag.
-  const fitCtx = useMemo(
-    () => buildFitContext({
-      portfolios: portfolioGoals.portfolios,
-      goals: portfolioGoals.goals,
-      theses: portfolioGoals.theses,
-      stocks,
-    }),
-    [portfolioGoals.portfolios, portfolioGoals.goals, portfolioGoals.theses, stocks],
-  );
+  } = useScreener(currentUser, portfolioGoals);
+  // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
+  // useScreener so the screener Conviction can fold in personal Fit; we reuse the
+  // SAME context here for Deep Research + Ori chat so all three stay consistent.
   // Bumped after a single-symbol re-gather so the Deep Research detail panes
   // re-fetch the freshly gathered data.
   const [detailReloadToken, setDetailReloadToken] = useState(0);
@@ -513,7 +507,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: detail.earnings,
         smartMoney: detail.smartMoney,
         fit: computeFit(detailRow, fitCtx),
-        verdict: computeVerdict(detailRow, detail, computeFit(detailRow, fitCtx)),
+        verdict: computeVerdict(detailRow, detail, computeFit(detailRow, fitCtx), { risk }),
       }
     : null;
 
@@ -535,7 +529,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: researchDetail.earnings,
         smartMoney: researchDetail.smartMoney,
         fit: computeFit(researchRow, fitCtx),
-        verdict: computeVerdict(researchRow, researchDetail, computeFit(researchRow, fitCtx)),
+        verdict: computeVerdict(researchRow, researchDetail, computeFit(researchRow, fitCtx), { risk }),
       }
     : null;
 
@@ -569,7 +563,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: chatFocusDetail1.earnings,
         smartMoney: chatFocusDetail1.smartMoney,
         fit: computeFit(focusRow1, fitCtx),
-        verdict: computeVerdict(focusRow1, chatFocusDetail1, computeFit(focusRow1, fitCtx)),
+        verdict: computeVerdict(focusRow1, chatFocusDetail1, computeFit(focusRow1, fitCtx), { risk }),
       }
     : null;
 
@@ -592,7 +586,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: chatFocusDetail2.earnings,
         smartMoney: chatFocusDetail2.smartMoney,
         fit: computeFit(focusRow2, fitCtx),
-        verdict: computeVerdict(focusRow2, chatFocusDetail2, computeFit(focusRow2, fitCtx)),
+        verdict: computeVerdict(focusRow2, chatFocusDetail2, computeFit(focusRow2, fitCtx), { risk }),
       }
     : null;
 
@@ -745,6 +739,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           {currentView === 'deep-research' ? (
             <DeepResearchPage
               fitCtx={fitCtx}
+              risk={risk}
+              onConvictionChange={setConvictionOverride}
               symbol={researchSymbol}
               stocks={stocks}
               onSelectSymbol={(sym) => openDeepResearch(sym)}
@@ -772,6 +768,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               theme={theme}
               onSelectStock={handleSelectStock}
               detailStock={detailStock}
+              weights={weights}
+              setWeights={setWeights}
+              risk={risk}
+              setRisk={setRisk}
             />
           ) : (
             <>
@@ -833,8 +833,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     </button>
                   ))}
                 </div>
-
-                <WeightsPopover weights={weights} setWeights={setWeights} />
               </div>
 
               {/* Controls bar — compact (< lg) */}
@@ -893,7 +891,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                         </button>
                       ))}
                     </div>
-                    <WeightsPopover weights={weights} setWeights={setWeights} />
                   </div>
                 </div>
               </div>
@@ -1320,73 +1317,3 @@ function rsiTrend(rsi) {
   };
 }
 
-/**
- * WeightsPopover — compact "Weights" button + dropdown holding the three Q/V/G
- * sliders. Used in both desktop and mobile controls bars for a consistent,
- * uncluttered experience.
- */
-function WeightsPopover({ weights, setWeights }) {
-  const [open, setOpen] = useState(false);
-  const rows = [
-    ["q", "Quality"],
-    ["v", "Value"],
-    ["g", "Growth"],
-  ];
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className={`px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors flex items-center gap-1.5
-          ${open ? "bg-gray-800 border-gray-700 text-gray-100" : "bg-gray-900 border-gray-700 text-gray-300 hover:bg-gray-800"}`}
-      >
-        ⚖ Weights
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg bg-gray-900 border border-gray-700 shadow-xl shadow-black/50 p-3 space-y-3">
-            <div className="text-[10px] uppercase tracking-wider text-gray-500">
-              Fundamentals weights
-            </div>
-            {rows.map(([k, label]) => (
-              <PopoverWeightRow
-                key={k}
-                label={label}
-                value={weights[k]}
-                onChange={(v) => setWeights((w) => ({ ...w, [k]: v }))}
-              />
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function PopoverWeightRow({ label, value, onChange }) {
-  const [local, setLocal] = useState(value);
-  const timeoutRef = useRef(null);
-  useEffect(() => setLocal(value), [value]);
-  const handleChange = (e) => {
-    const v = Number(e.target.value);
-    setLocal(v);
-    if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    timeoutRef.current = setTimeout(() => onChange(v), 120);
-  };
-  return (
-    <div>
-      <div className="flex justify-between text-xs text-gray-300 mb-1">
-        <span>{label}</span>
-        <span className="font-mono text-gray-400">{local}</span>
-      </div>
-      <input
-        type="range"
-        min="0"
-        max="100"
-        value={local}
-        onChange={handleChange}
-        className="w-full accent-blue-500 h-2"
-      />
-    </div>
-  );
-}
