@@ -298,6 +298,11 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
         : { q: 0, v: 0, g: 0 },
       rule_of_40: r40.score,
       passes_rule_of_40: r40.passes,
+      // Durability / intangibles proxy (0-100). Always available, no LLM cost.
+      // High values indicate stronger signals of sustainable business quality
+      // (real profits, efficient capital, clean balance sheet, rich data, scale).
+      // Use to de-emphasize or filter "perfect on paper but likely junk" names.
+      durabilityProxy: scored ? computeDurabilityProxy(r) : null,
     };
   });
 }
@@ -306,6 +311,29 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
 export function computeScores(rows, weights = DEFAULT_WEIGHTS, risk = "balanced") {
   const ranked = computeRankedRows(rows);
   return applyWeights(ranked, weights, risk);
+}
+
+// Cheap, always-available proxy for the kinds of "intangibles" Ori reviews
+// (durable moat / profitability sustainability, balance sheet safety, data richness,
+// scale/stability). High score makes it harder for pure "paper perfect" quantitative
+// names (unprofitable cyclicals, narrative microcaps, etc.) to dominate the list
+// without real business quality signals. 0-100. Complements the dataCoveragePenalty.
+export function computeDurabilityProxy(r) {
+  if (!r) return null;
+  // Profitability sustainability (margins positive and decent)
+  const m = (v, lo, hi) => (v == null || !isFinite(v) ? 0.3 : Math.max(0, Math.min(1, (v - lo) / (hi - lo))));
+  const prof = (m(r.net_margin, 0, 0.15) * 0.3 + m(r.op_margin, 0.02, 0.18) * 0.4 + m(r.fcf_margin, 0, 0.12) * 0.3);
+  // Capital efficiency + safety
+  const roic = m(r.roic, 0.05, 0.2);
+  const bs = r.debt_equity == null ? 0.6 : (r.debt_equity < 0 ? 0.95 : m(3 - r.debt_equity, 0, 2.5));
+  const cap = 0.5 * roic + 0.5 * bs;
+  // Data + stability (harder to fake, more "real" business)
+  const data = r.dataCoverage != null ? r.dataCoverage : 0.5;
+  const scale = r.mcap == null ? 0.4 : (r.mcap > 10e9 ? 1 : r.mcap > 2e9 ? 0.85 : r.mcap > 5e8 ? 0.6 : 0.35);
+  const hasG = (r.revenue_growth != null || r.eps_growth != null || r.fcf_growth != null) ? 0.15 : 0;
+  const stab = 0.5 * data + 0.3 * scale + 0.2 * hasG;
+  const raw = 0.35 * prof + 0.3 * cap + 0.35 * stab;
+  return Math.round(100 * Math.max(0, Math.min(1, raw)));
 }
 
 export const SECTOR_COLORS = {

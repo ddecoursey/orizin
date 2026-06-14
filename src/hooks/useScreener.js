@@ -503,6 +503,65 @@ export function useScreener(currentUser, portfolioGoals = {}) {
     );
   }, [filteredWeighted, convictionOverrides]);
 
+  // Lazy Ori intangibles for top names on the current list (no 20k Gemini calls).
+  // Only the highest-conviction / visible leaders get reviewed (and server caches
+  // game-plan results 24h per symbol, so first viewer pays the cost, everyone else
+  // gets instant "Ori reviewed" data with convictionDelta + intangiblesScore etc.).
+  // This lets us expose the real Ori-reviewed intangibles (and adjust conviction)
+  // on the big list for the names that matter, while using the always-free
+  // durabilityProxy + data penalty as the "close equivalent" to de-risk junk that
+  // looks perfect quantitatively.
+  const [oriData, setOriData] = useState({});
+  const oriFetchedRef = useRef(new Set());
+  useEffect(() => {
+    const leaders = [...filteredWeighted]
+      .filter(r => r.conviction != null && r.conviction >= 65)
+      .sort((a,b) => (b.conviction||0) - (a.conviction||0))
+      .slice(0, 60);  // only the ones users actually see at the top
+    leaders.forEach(async (r) => {
+      const sym = r.symbol;
+      if (oriFetchedRef.current.has(sym) || oriData[sym]) return;
+      oriFetchedRef.current.add(sym);
+      try {
+        const payload = {
+          stats: {
+            price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
+            pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield,
+            roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
+            revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
+            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+          },
+          verdict: {
+            conviction: r.conviction,
+            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+          },
+        };
+        const res = await fetch(`/api/stocks/game-plan/${sym}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          if (j.ori) {
+            setOriData(prev => ({ ...prev, [sym]: j.ori }));
+          }
+        }
+      } catch {}
+    });
+  }, [filteredWeighted, oriData]);  // runs when the weighted list changes; leaders only (oriData to avoid re-fires)
+
+  // Merge any newly arrived Ori deltas into displayed conviction (like DR overrides)
+  const withOri = useMemo(() => {
+    if (!Object.keys(oriData).length) return filtered;
+    return filtered.map(r => {
+      const o = oriData[r.symbol];
+      if (!o || !Number.isFinite(o.convictionDelta)) return r;
+      const adj = Math.max(0, Math.min(100, (r.conviction || r.baseConviction || 0) + o.convictionDelta));
+      return { ...r, conviction: adj, ori: o };
+    });
+  }, [filtered, oriData]);
+
   // ── Data loading ─────────────────────────────────────────────────────────
 
   function cancelCurrentOperation() {
@@ -1050,7 +1109,7 @@ export function useScreener(currentUser, portfolioGoals = {}) {
 
   return {
     stocks,
-    filtered,
+    filtered: withOri,  // includes lazy Ori deltas for top leaders (real intangibles exposure without 20k calls)
     // Filtered set BEFORE weighting (stable when only the Q/V/G sliders move) — the
     // table uses it for the heatmap so dragging weights doesn't recompute it.
     filteredRows,

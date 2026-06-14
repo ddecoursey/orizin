@@ -161,6 +161,17 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
             }
           />
         )}
+        {r.durabilityProxy != null && (
+          <SubChip
+            label="Dur"
+            value={r.durabilityProxy / 100}
+            colors={
+              r.durabilityProxy >= 70 ? { bg: '#14532d', fg: '#86efac' } :
+              r.durabilityProxy >= 50 ? { bg: '#713f12', fg: '#fde68a' } : { bg: '#78350f', fg: '#fcd34d' }
+            }
+            title={`Business durability proxy (${r.durabilityProxy}/100). Combines real profitability sustainability, capital efficiency/safety, data richness, and scale/stability. High = harder for "perfect on paper" quantitative names to rank at the top without underlying business quality. Cheap equivalent to Ori intangibles review (full version on Deep Research for any symbol).`}
+          />
+        )}
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-gray-800 text-gray-400">
           β {r.beta != null ? r.beta.toFixed(1) : '—'}
         </span>

@@ -2,7 +2,6 @@ import { useState, useRef, useMemo, useEffect, useLayoutEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
-import { gradeColor, ratingRank } from "../lib/ratingColor.js";
 import Sparkline from "./Sparkline";
 import { IconSearch } from "./icons.jsx";
 
@@ -88,27 +87,14 @@ function ScoreBar({ score }) {
   );
 }
 
-function RatingBadge({ rating }) {
-  if (!rating) return <span className="text-gray-700">—</span>;
-  const c = gradeColor(rating);
-  return (
-    <span
-      className="inline-flex min-w-7 items-center justify-center rounded px-1.5 py-0.5 text-[10px] font-black leading-none"
-      style={{ background: c.bg, color: c.fg }}
-      title="FMP Ratings Snapshot letter grade"
-    >
-      {rating}
-    </span>
-  );
-}
-
 const COLS = [
   { key: "pin", label: "★", left: true, nosort: true },
   { key: "symbol", label: "Symbol", left: true, plain: true },
   { key: "sector", label: "Sector", left: true, plain: true },
   { key: "mcap", label: "Mkt Cap", plain: true, type: "money" },
   { key: "price", label: "Price", plain: true, type: "price" },
-  { key: "rating", label: "Rating", plain: true },
+  { key: "conviction", label: "Conviction", plain: true, nosort: false },
+  { key: "durabilityProxy", label: "Dur", plain: true },
   { key: "trend", label: "Trend", plain: true, nosort: true },
   { key: "beta", label: "Beta", plain: true, type: "ratio" },
   { key: "pe", label: "P/E", type: "x" },
@@ -135,7 +121,6 @@ const COLS = [
   { key: "current_ratio", label: "Curr R", type: "ratio" },
   { key: "debt_equity", label: "D/E", type: "ratio" },
   { key: "div_yield", label: "Div Yld", type: "pct" },
-  { key: "conviction", label: "Conviction", plain: true, nosort: false },
 ];
 
 const COL_WIDTHS = {
@@ -144,7 +129,8 @@ const COL_WIDTHS = {
   sector: "92px",
   mcap: "78px",
   price: "58px",
-  rating: "58px",
+  conviction: "92px",
+  durabilityProxy: "42px",
   trend: "58px",
   beta: "44px",
   pe: "52px",
@@ -171,7 +157,6 @@ const COL_WIDTHS = {
   current_ratio: "52px",
   debt_equity: "48px",
   div_yield: "58px",
-  conviction: "92px",
 };
 
 export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
@@ -330,8 +315,8 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       const ap = pinnedSet.has(a.symbol),
         bp = pinnedSet.has(b.symbol);
       if (ap !== bp) return ap ? -1 : 1;
-      const av = sortKey === "rating" ? ratingRank(a.rating) : a[sortKey];
-      const bv = sortKey === "rating" ? ratingRank(b.rating) : b[sortKey];
+      const av = a[sortKey];
+      const bv = b[sortKey];
       if (av == null || av === "" || (typeof av === "number" && !isFinite(av))) return 1;
       if (bv == null || bv === "" || (typeof bv === "number" && !isFinite(bv))) return -1;
       if (typeof av === "string" || typeof bv === "string") {
@@ -579,9 +564,28 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                   {fmt(r.price, "price") ?? <span className="text-gray-600">—</span>}
                 </td>
 
-                {/* FMP Ratings Snapshot letter */}
-                <td className="px-3 py-2 text-right">
-                  <RatingBadge rating={r.rating} />
+                {/* Conviction */}
+                <td className="px-3 py-2 min-w-[80px]">
+                  <span
+                    title={
+                      r.conviction != null && r.dataCoveragePenalty > 0
+                        ? `Conviction ${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty} penalty). Penalty applies when user weights are high on a pillar with low real-data coverage (Q:${r.pillarCoverage ? Math.round(r.pillarCoverage.q*100) : '—'}% V:${r.pillarCoverage ? Math.round(r.pillarCoverage.v*100) : '—'}% G:${r.pillarCoverage ? Math.round(r.pillarCoverage.g*100) : '—'}%).`
+                        : (r.conviction != null ? 'Conviction (0–100) from fundamentals + valuation (see column header for details).' : undefined)
+                    }
+                  >
+                    <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
+                    {r.dataCoveragePenalty > 0 && (
+                      <span className="ml-1 text-[9px] text-amber-400 align-super" title={`−${r.dataCoveragePenalty} data penalty`}>↓</span>
+                    )}
+                    {r.ori && (
+                      <span className="ml-1 text-[8px] text-purple-400 align-super" title={`Ori-reviewed intangibles (score ${r.ori.intangiblesScore ?? '—'}): ${r.ori.intangiblesRationale || r.ori.bottomLine || ''}. Conviction delta ${r.ori.convictionDelta ?? 0}. Cached — no extra API cost after first review.`}>✧</span>
+                    )}
+                  </span>
+                </td>
+
+                {/* Durability / intangibles proxy (cheap Ori equivalent) */}
+                <td className="px-1 py-2 text-center font-mono text-[9px] text-gray-400" title="Durability proxy (0-100): real profitability + capital efficiency + balance sheet safety + data richness + scale. High values make it much harder for 'perfect on paper' junk (unprofitable story stocks, etc.) to rank at the top. Complements data penalty. Full Ori intangibles review (with convictionDelta) on Deep Research for any name — server-cached after first view, no extra cost for the list.">
+                  {r.durabilityProxy ?? <span className="text-gray-600">—</span>}
                 </td>
 
                 {/* Trend Sparkline (real historical prices) */}
@@ -608,8 +612,8 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                   {r.beta != null ? r.beta.toFixed(2) : <span className="text-gray-600">—</span>}
                 </td>
 
-                {/* Heat-mapped columns */}
-                {COLS.slice(8, -1).map((c) => {
+                {/* Heat-mapped columns (pe through div_yield) */}
+                {COLS.slice(9).map((c) => {
                   const val = r[c.key];
                   const formatted = fmt(val, c.type);
                   const hcls = heatClass(val, c.key, heat);
@@ -630,22 +634,6 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                     </td>
                   );
                 })}
-
-                {/* Conviction */}
-                <td className="px-3 py-2 min-w-[80px]">
-                  <span
-                    title={
-                      r.conviction != null && r.dataCoveragePenalty > 0
-                        ? `Conviction ${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty} penalty). Penalty applies when user weights are high on a pillar with low real-data coverage (Q:${r.pillarCoverage ? Math.round(r.pillarCoverage.q*100) : '—'}% V:${r.pillarCoverage ? Math.round(r.pillarCoverage.v*100) : '—'}% G:${r.pillarCoverage ? Math.round(r.pillarCoverage.g*100) : '—'}%).`
-                        : (r.conviction != null ? 'Conviction (0–100) from fundamentals + valuation (see column header for details).' : undefined)
-                    }
-                  >
-                    <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
-                    {r.dataCoveragePenalty > 0 && (
-                      <span className="ml-1 text-[9px] text-amber-400 align-super" title={`−${r.dataCoveragePenalty} data penalty`}>↓</span>
-                    )}
-                  </span>
-                </td>
 
                 {/* Ask Ori */}
                 <td className="px-2 py-2 text-right" style={{ width: '52px' }}>
