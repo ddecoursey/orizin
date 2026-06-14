@@ -248,6 +248,7 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
       : 0;
 
     const score = scored ? (q.score * wq + v.score * wv + g.score * wg) / denom : null;
+    const durProxy = scored ? computeDurabilityProxy(r) : null;
     const baseConviction = scored
       ? quickConviction(
           {
@@ -260,6 +261,8 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
             // Speculation inputs for the risk-tolerance tilt.
             mcap: r.mcap, beta: r.beta, net_margin: r.net_margin, op_margin: r.op_margin,
             debt_equity: r.debt_equity, net_debt_ebitda: r.net_debt_ebitda, dataCoverage: coverage,
+            // Intangibles baseline: cached Ori review (row.ori, free) else durabilityProxy.
+            durabilityProxy: durProxy, ori: r.ori || null,
           },
           // Personalized Fit (precomputed per-symbol; null when the user has no
           // portfolio/goals context). Same computeFit() Deep Research uses, so
@@ -301,8 +304,8 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
       // Durability / intangibles proxy (0-100). Always available, no LLM cost.
       // High values indicate stronger signals of sustainable business quality
       // (real profits, efficient capital, clean balance sheet, rich data, scale).
-      // Use to de-emphasize or filter "perfect on paper but likely junk" names.
-      durabilityProxy: scored ? computeDurabilityProxy(r) : null,
+      // Feeds the deterministic Intangibles pillar baseline in quickConviction.
+      durabilityProxy: durProxy,
     };
   });
 }

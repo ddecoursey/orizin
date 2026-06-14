@@ -30,6 +30,21 @@ const pct = (v) => (isNum(v) ? `${(v * 100).toFixed(0)}%` : "—");
 // the full Deep Research technicals pillar (SMA50/200 trend + RSI) overrides it.
 const momFromReturn = (m) => (isNum(m) ? clamp01(0.5 + m * 2) : null);
 
+// Deterministic Intangibles baseline (0..1) for the screener / pre-Ori
+// conviction, so that pillar isn't simply absent until Ori runs:
+//   1. a STILL-FRESH cached Ori review (row.ori, attached server-side) if one
+//      exists — free reuse, no new LLM call; else
+//   2. the cheap durabilityProxy estimate.
+// This closes most of the screener↔Ori conviction gap without Gemini cost.
+const intangiblesBaseline = (row) =>
+  isNum(row?.ori?.intangiblesScore)
+    ? clamp01(row.ori.intangiblesScore / 100)
+    : isNum(row?.durabilityProxy)
+      ? clamp01(row.durabilityProxy / 100)
+      : null;
+// Cached Ori conviction nudge (clamped ±20); 0 when there's no cached review.
+const oriDelta = (row) => (isNum(row?.ori?.convictionDelta) ? Math.max(-20, Math.min(20, row.ori.convictionDelta)) : 0);
+
 // Analyst target-upside sub-signal (0..1) from consensus target vs price. Reads
 // the target from detail (Deep Research) OR the bulk row (screener — joined from
 // ai_enrichment), so both views compute the same number. Shared by the analyst
@@ -250,16 +265,18 @@ export function quickConviction(row, fit = null, risk = DEFAULT_RISK) {
   const fitS = fit && !fit.needsContext && isNum(fit.score) ? clamp01(fit.score / 100) : null;
   // Same pillars & renormalization as computeVerdict with no detail loaded, so
   // this EQUALS the Deep Research conviction on open and only refines (doesn't
-  // jump) as live technicals / grades / insiders / Ori arrive. A null pillar is
-  // excluded — Insiders & Intangibles simply aren't known on the screener.
+  // jump) as live technicals / grades / insiders arrive. Intangibles uses a
+  // deterministic baseline (cached Ori review, else durabilityProxy) + any cached
+  // Ori delta, so good-but-quiet names aren't stuck low until Deep Research.
   const base = convictionFromPillars([
     { score: fund, weight: PILLAR_WEIGHTS.fundamentals },
     { score: val, weight: PILLAR_WEIGHTS.valuation },
     { score: tech, weight: PILLAR_WEIGHTS.technicals },
     { score: analyst, weight: PILLAR_WEIGHTS.analyst },
     { score: fitS, weight: PILLAR_WEIGHTS.fit },
+    { score: intangiblesBaseline(row), weight: PILLAR_WEIGHTS.intangibles },
   ]);
-  return applyRisk(base, riskDelta(row, risk));
+  return applyRisk(applyRisk(base, riskDelta(row, risk)), oriDelta(row));
 }
 
 const HORIZON = {
@@ -451,12 +468,15 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
     pillar("smartMoney", "Insiders", smartMoneyScore(detail.smartMoney), PILLAR_WEIGHTS.smartMoney),
     pillar("analyst", "Analyst", analystScore(r, detail, aiData, price), PILLAR_WEIGHTS.analyst),
     { ...pillar("fit", "Fit for you", fit && !fit.needsContext && isNum(fit.score) ? clamp01(fit.score / 100) : null, PILLAR_WEIGHTS.fit), reasons: fit && !fit.needsContext ? fit.reasons : null },
-    pillar("intangibles", "Intangibles", null, PILLAR_WEIGHTS.intangibles, undefined, true),
+    // Deterministic Intangibles baseline (cached Ori review, else durabilityProxy)
+    // so the pillar isn't empty pre-Ori; the live Ori take overrides it in
+    // mergeOriIntoVerdict on Deep Research.
+    pillar("intangibles", "Intangibles", intangiblesBaseline(r), PILLAR_WEIGHTS.intangibles, undefined, true),
   ];
   // Risk-tolerance tilt (stored so mergeOriIntoVerdict can re-apply it after it
-  // recomputes conviction with Ori's intangibles pillar).
+  // recomputes conviction with Ori's intangibles pillar) + any cached Ori nudge.
   const rDelta = riskDelta(r, risk);
-  const conviction = applyRisk(convictionFromPillars(pillars), rDelta);
+  const conviction = applyRisk(applyRisk(convictionFromPillars(pillars), rDelta), oriDelta(r));
 
   return {
     horizon,

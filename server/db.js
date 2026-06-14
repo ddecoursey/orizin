@@ -453,14 +453,18 @@ export function saveRat(symbol, data) {
 // consensus targets (target_consensus/high/low), and LEFT JOIN the persistent
 // detail cache for ratings snapshots already gathered by detail/deep-research
 // flows. (mom lives on the stocks row.)
+const GAMEPLAN_TTL_MS = 24 * 60 * 60 * 1000;
 export function getAllStocks() {
+  const now = Date.now();
   const rows = db
     .prepare(
       `SELECT s.*, ae.target_consensus, ae.target_high, ae.target_low,
-              rc.data AS ratings_json
+              rc.data AS ratings_json,
+              gp.data AS gameplan_json, gp.updated_at AS gameplan_at
          FROM stocks s
          LEFT JOIN ai_enrichment ae ON ae.symbol = s.symbol
          LEFT JOIN kv_cache rc ON rc.key = ('ratings:' || s.symbol)
+         LEFT JOIN kv_cache gp ON gp.key = ('gameplan:' || s.symbol)
         ORDER BY s.mcap DESC NULLS LAST`,
     )
     .all();
@@ -476,9 +480,23 @@ export function getAllStocks() {
         /* ignore corrupt cache entry */
       }
     }
+    // Fold a STILL-FRESH cached Ori Game Plan onto the row so the screener
+    // Conviction can reuse it — free (no new LLM call), just the 24h cache any
+    // Deep Research visit already populated.
+    let ori = null;
+    if (row.gameplan_json && row.gameplan_at && now - row.gameplan_at < GAMEPLAN_TTL_MS) {
+      try {
+        const parsed = JSON.parse(row.gameplan_json);
+        if (parsed && typeof parsed === "object") ori = parsed;
+      } catch {
+        /* ignore corrupt cache entry */
+      }
+    }
     const clean = { ...row };
     delete clean.ratings_json;
-    return { ...clean, rating, rating_overall_score: ratingOverallScore };
+    delete clean.gameplan_json;
+    delete clean.gameplan_at;
+    return { ...clean, rating, rating_overall_score: ratingOverallScore, ori };
   });
 }
 
