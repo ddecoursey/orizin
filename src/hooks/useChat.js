@@ -31,8 +31,13 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
   }
 
   function buildContext() {
+    const currentView = session.view || 'screener';
+    // On the Deep Research page the user is studying ONE stock — Ori should focus
+    // on it (the activeStock below), NOT a table of other names. Everywhere else,
+    // give Ori a generous slice of the screener (top 100 by Conviction) to work with.
+    const isDeepResearch = currentView === 'deep-research';
     const sorted = [...(filteredStocks || [])].sort((a, b) => (b.conviction || 0) - (a.conviction || 0));
-    const top = sorted.slice(0, 50);
+    const top = isDeepResearch ? [] : sorted.slice(0, 100);
 
     // Provide Ori with the list of available sectors and industries so it uses correct values
     const allSectors = [...new Set((filteredStocks || []).map(s => s.sector).filter(Boolean))].sort();
@@ -110,7 +115,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
               recent: s.earnings.filter((e) => e.epsActual != null).slice(0, 4),
             }
           : null,
-        // Smart money: Congress + insider conviction signal.
+        // Insiders: U.S. Congress + corporate-insider conviction signal.
         smartMoney: s.smartMoney
           ? {
               signal: s.smartMoney.signal,
@@ -172,7 +177,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       availableIndustries: allIndustries,
       focusSymbols,
       scorecardDefinition: {
-        description: "Conviction (0-100) is the unified, user-facing headline score. The 'Orizin Score' is the background fundamentals ENGINE that feeds Conviction's Fundamentals pillar — a weighted average of three pillars (Q/V/G). All inputs are tie-aware 0-1 percentile ranks within the current filtered set. On the screener, Conviction = Fundamentals (Orizin) + Valuation; on Deep Research it also folds in technicals, smart money, analysts, personal Fit, and Ori's intangibles.",
+        description: "Conviction (0-100) is the unified, user-facing headline score. The 'Orizin Score' is the background fundamentals ENGINE that feeds Conviction's Fundamentals pillar — a weighted average of three pillars (Q/V/G). All inputs are tie-aware 0-1 percentile ranks within the current filtered set. On the screener, Conviction = Fundamentals (Orizin) + Valuation; on Deep Research it also folds in technicals, insiders (U.S. Congress + corporate insiders), analysts, personal Fit, and Ori's intangibles.",
         Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
         V: "Value — average rank of: EV/GP, EV/EBITDA, P/E (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
         G: "Growth — average rank of: Revenue growth (TTM), EPS growth (TTM), FCF growth (TTM)",

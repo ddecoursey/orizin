@@ -229,6 +229,16 @@ try {
     // price refresher must not bump updated_at, or it would push rows out of
     // the km/rat staleness rotation without actually refreshing fundamentals.
     ["price_updated_at", "INTEGER"],
+    // ~45-day price return (e.g. 0.10 = +10%), computed during enrichment from
+    // the sparkline. Powers a lightweight Technicals signal in the screener
+    // Conviction so falling "value traps" don't sort to the top.
+    ["mom", "REAL"],
+    // SMA50 / SMA200 computed from the 365-day sparkline. These let the screener
+    // Technicals pillar use the SAME 50-vs-200 trend regime as Deep Research, so
+    // a stock in a long downtrend reads bearish on the screener too (a 45-day
+    // bounce no longer makes it look healthy).
+    ["sma50", "REAL"],
+    ["sma200", "REAL"],
   ];
   for (const [name, type] of NEW_COLS) {
     if (!existingCols.has(name)) {
@@ -439,8 +449,142 @@ export function saveRat(symbol, data) {
   applyRat.run({ symbol, updated_at: Date.now(), ...data });
 }
 
+// The screener universe. LEFT JOIN ai_enrichment so each row carries analyst
+// consensus targets (target_consensus/high/low), and LEFT JOIN the persistent
+// detail cache for ratings snapshots already gathered by detail/deep-research
+// flows. (mom lives on the stocks row.)
 export function getAllStocks() {
-  return db.prepare('SELECT * FROM stocks ORDER BY mcap DESC NULLS LAST').all();
+  const rows = db
+    .prepare(
+      `SELECT s.*, ae.target_consensus, ae.target_high, ae.target_low,
+              rc.data AS ratings_json
+         FROM stocks s
+         LEFT JOIN ai_enrichment ae ON ae.symbol = s.symbol
+         LEFT JOIN kv_cache rc ON rc.key = ('ratings:' || s.symbol)
+        ORDER BY s.mcap DESC NULLS LAST`,
+    )
+    .all();
+  return rows.map((row) => {
+    let rating = null;
+    let ratingOverallScore = null;
+    if (row.ratings_json) {
+      try {
+        const parsed = JSON.parse(row.ratings_json);
+        rating = parsed?.rating ?? null;
+        ratingOverallScore = parsed?.overall_score ?? null;
+      } catch {
+        /* ignore corrupt cache entry */
+      }
+    }
+    const clean = { ...row };
+    delete clean.ratings_json;
+    return { ...clean, rating, rating_overall_score: ratingOverallScore };
+  });
+}
+
+// Persist the ~45-day price return used by the screener Technicals signal.
+const updateMom = db.prepare('UPDATE stocks SET mom = ? WHERE symbol = ?');
+export function saveMomentum(symbol, mom) {
+  updateMom.run(mom == null || !Number.isFinite(mom) ? null : mom, symbol);
+}
+
+// Total return across a sparkline (oldest → newest close). Orientation-safe:
+// sorts by date so it works whether FMP returns newest- or oldest-first. Shared
+// by the enrich pipeline (fresh fetch) and the boot backfill below.
+export function momentumFromSparkline(arr) {
+  if (!Array.isArray(arr) || arr.length < 5) return null;
+  const pts = arr
+    .map((p) => ({ date: p?.date ?? null, price: typeof p === 'number' ? p : (p?.price ?? p?.close) }))
+    .filter((p) => Number.isFinite(p.price) && p.price > 0);
+  if (pts.length < 5) return null;
+  if (pts[0].date && pts[pts.length - 1].date) pts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const first = pts[0].price;
+  const last = pts[pts.length - 1].price;
+  return first > 0 ? (last - first) / first : null;
+}
+
+// SMA50 / SMA200 from a sparkline (oldest → newest). Needs enough history;
+// returns nulls it can't compute. Shared by enrich + the boot backfill.
+export function trendFromSparkline(arr) {
+  if (!Array.isArray(arr) || arr.length < 60) return null;
+  const pts = arr
+    .map((p) => ({ date: p?.date ?? null, price: typeof p === 'number' ? p : (p?.price ?? p?.close) }))
+    .filter((p) => Number.isFinite(p.price) && p.price > 0);
+  if (pts.length < 60) return null;
+  if (pts[0].date && pts[pts.length - 1].date) pts.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const px = pts.map((p) => p.price);
+  const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
+  const sma50 = px.length >= 50 ? mean(px.slice(-50)) : null;
+  // Prefer a true 200-day average; fall back to the full window (≥120d) so newer
+  // listings still get a usable long-trend reference.
+  const sma200 = px.length >= 200 ? mean(px.slice(-200)) : px.length >= 120 ? mean(px) : null;
+  return { sma50, sma200 };
+}
+
+const updateTrend = db.prepare('UPDATE stocks SET sma50 = ?, sma200 = ? WHERE symbol = ?');
+export function saveTrend(symbol, sma50, sma200) {
+  updateTrend.run(Number.isFinite(sma50) ? sma50 : null, Number.isFinite(sma200) ? sma200 : null, symbol);
+}
+
+// One-time backfill: compute SMA50/SMA200 for stocks that have a 365-day
+// sparkline but no stored trend yet.
+export function backfillTrend(limit = 200000) {
+  const rows = db
+    .prepare(
+      `SELECT sp.symbol AS symbol, sp.data AS data
+         FROM sparklines sp
+         JOIN stocks s ON s.symbol = sp.symbol
+        WHERE sp.days = 365 AND s.sma200 IS NULL
+        LIMIT ?`,
+    )
+    .all(limit);
+  let n = 0;
+  const tx = db.transaction((items) => {
+    for (const row of items) {
+      try {
+        const t = trendFromSparkline(JSON.parse(row.data));
+        if (t && t.sma200 != null) {
+          updateTrend.run(Number.isFinite(t.sma50) ? t.sma50 : null, t.sma200, row.symbol);
+          n++;
+        }
+      } catch {
+        /* skip */
+      }
+    }
+  });
+  tx(rows);
+  return n;
+}
+
+// One-time backfill: compute `mom` for already-enriched stocks that have a
+// 45-day sparkline but no momentum yet, so the screener signal lights up
+// immediately instead of waiting for the slow background re-enrich cycle.
+export function backfillMomentum(limit = 200000) {
+  const rows = db
+    .prepare(
+      `SELECT sp.symbol AS symbol, sp.data AS data
+         FROM sparklines sp
+         JOIN stocks s ON s.symbol = sp.symbol
+        WHERE sp.days = 45 AND s.mom IS NULL
+        LIMIT ?`,
+    )
+    .all(limit);
+  let n = 0;
+  const tx = db.transaction((items) => {
+    for (const row of items) {
+      try {
+        const mom = momentumFromSparkline(JSON.parse(row.data));
+        if (mom != null) {
+          updateMom.run(mom, row.symbol);
+          n++;
+        }
+      } catch {
+        /* skip unparseable sparkline */
+      }
+    }
+  });
+  tx(rows);
+  return n;
 }
 
 export function getStock(symbol) {

@@ -15,6 +15,10 @@ import {
   getAiEnrichment,
   getSparkline,
   saveSparkline,
+  saveMomentum,
+  momentumFromSparkline,
+  saveTrend,
+  trendFromSparkline,
   pruneUniverse,
   kvGet,
   kvSet,
@@ -605,6 +609,8 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
                 const spark = await fetchHistoricalPricesLight(symbol, 45);
                 if (spark && spark.length > 0) {
                   saveSparkline(symbol, 45, spark);
+                  // Recompute the ~45-day momentum the screener Conviction uses.
+                  saveMomentum(symbol, momentumFromSparkline(spark));
                 }
               } catch (e) {
                 console.warn(`[Enrich] Sparkline fetch failed for ${symbol}:`, e.message);
@@ -714,11 +720,14 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
                 console.warn(`[Enrich][force] Grades failed for ${symbol}:`, e.message);
               }
 
-              // 365-day sparkline (full history for the detail chart)
+              // 365-day sparkline (full history for the detail chart) + the
+              // SMA50/200 trend the screener Conviction technicals pillar uses.
               try {
                 const fullSpark = await fetchHistoricalPricesLight(symbol, 365);
                 if (fullSpark && fullSpark.length > 0) {
                   saveSparkline(symbol, 365, fullSpark);
+                  const t = trendFromSparkline(fullSpark);
+                  if (t) saveTrend(symbol, t.sma50, t.sma200);
                 }
               } catch (e) {
                 console.warn(`[Enrich][force] 365d sparkline failed for ${symbol}:`, e.message);

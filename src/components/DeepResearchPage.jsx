@@ -9,6 +9,7 @@ import { computeFit } from "../lib/fitScore.js";
 import { computeVerdict, mergeOriIntoVerdict, metricTone } from "../lib/verdict.js";
 import { useGamePlanOri } from "../hooks/useGamePlanOri.js";
 import GamePlan from "./GamePlan.jsx";
+import RatingsSnapshot from "./RatingsSnapshot.jsx";
 import InfoHint from "./InfoHint.jsx";
 
 // Compact period-columns table for financial statements: one row per line
@@ -214,7 +215,7 @@ function smLabel(signal) {
   return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {}, fitCtx = null }) {
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange }) {
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
 
@@ -222,8 +223,8 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // Deterministic core (instant): folds the Orizin Score + Fit + technicals +
   // valuation + smart money + analysts into one conviction / horizon / action.
   const deterministic = useMemo(
-    () => computeVerdict(row || { symbol }, detail, fit),
-    [row, symbol, detail, fit],
+    () => computeVerdict(row || { symbol }, detail, fit, { risk }),
+    [row, symbol, detail, fit, risk],
   );
   // Compact payload Ori's intelligence layer needs (POSTed to the server).
   const oriPayload = useMemo(() => {
@@ -264,11 +265,19 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
     () => (oriState.ori ? mergeOriIntoVerdict(deterministic, oriState.ori) : deterministic),
     [deterministic, oriState.ori],
   );
+  // Lift the refined conviction back to the screener row for this session, so the
+  // sharper number (live technicals/grades/insiders/Ori) shows there too.
+  useEffect(() => {
+    if (symbol && verdict && !verdict.insufficient && Number.isFinite(verdict.conviction)) {
+      onConvictionChange?.(symbol, verdict.conviction);
+    }
+  }, [symbol, verdict, onConvictionChange]);
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
   const {
     profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart,
     technicals, loadingTechnicals, earnings, smartMoney: smart,
+    ratings, loadingRatings,
   } = detail;
 
   // Deep-research-only data (statements, filings, comp, peers, growth) — owned
@@ -524,6 +533,16 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 </div>
               ) : (
                 <Placeholder note="Technical indicators aren't available for this symbol." />
+              )}
+            </Panel>
+
+            <Panel title="Ratings Snapshot" tier="T1" span={1}>
+              {loadingRatings && !ratings ? (
+                <Placeholder note="Loading ratings…" />
+              ) : ratings ? (
+                <RatingsSnapshot ratings={ratings} />
+              ) : (
+                <Placeholder note={`No ratings available for ${symbol}.`} />
               )}
             </Panel>
 

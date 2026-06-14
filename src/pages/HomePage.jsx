@@ -121,6 +121,77 @@ function ScoreBar({ value }) {
   );
 }
 
+// Static, decorative Game Plan card for the showcase section (aria-hidden).
+const MOCK_TONE = { good: "#34d399", ok: "#fbbf24", bad: "#f87171" };
+const MOCK_TONE_LABEL = { good: "Good", ok: "Fair", bad: "Weak" };
+const MOCK_PILLARS = [
+  ["Fundamentals", 86, "good"],
+  ["Valuation", 58, "ok"],
+  ["Technicals", 79, "good"],
+  ["Insiders", 71, "good"],
+  ["Analyst", 64, "ok"],
+  ["Fit", 80, "good"],
+  ["Intangibles", 76, "good"],
+];
+
+function GamePlanMock() {
+  return (
+    <div className="rounded-2xl border border-emerald-800/40 bg-emerald-950/10 backdrop-blur-xl p-5 shadow-2xl shadow-black/40">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</span>
+          <span className="text-xs text-gray-500">· NVDA</span>
+        </div>
+        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">✦ Ori · Pro</span>
+      </div>
+
+      <div className="grid grid-cols-[auto_1fr] gap-3 mb-4">
+        <div className="rounded-xl border border-emerald-700/50 bg-gray-950/50 px-5 py-3 flex flex-col items-center justify-center text-center">
+          <div className="text-4xl font-black leading-none text-emerald-400">82</div>
+          <div className="text-[10px] uppercase tracking-[0.18em] text-gray-500 mt-1">conviction</div>
+        </div>
+        <div className="grid grid-cols-2 gap-2.5 min-w-0">
+          <div className="rounded-lg border border-emerald-700/50 bg-gray-950/40 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-gray-500">Hold for</div>
+            <div className="text-xl font-black leading-tight text-emerald-400">5+ years</div>
+            <div className="text-[11px] text-gray-400">long-term compounder</div>
+          </div>
+          <div className="rounded-lg border border-emerald-700/50 bg-gray-950/40 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-gray-500">Right now</div>
+            <div className="text-base font-extrabold leading-tight text-emerald-400">Accumulate</div>
+            <div className="text-[11px] text-gray-400">fairly valued · uptrend</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3 mb-4">
+        {MOCK_PILLARS.map(([label, val, tone]) => (
+          <div key={label} className="min-w-0">
+            <div className="flex items-baseline justify-between mb-1 gap-1">
+              <span className="text-[10px] uppercase tracking-wider text-gray-500 truncate">
+                {label}
+                {label === "Intangibles" && <span className="ml-0.5 text-violet-400">✦</span>}
+              </span>
+              <span className="text-[10px] font-bold shrink-0" style={{ color: MOCK_TONE[tone] }}>{MOCK_TONE_LABEL[tone]}</span>
+            </div>
+            <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
+              <div className="h-full rounded-full" style={{ width: `${val}%`, background: MOCK_TONE[tone] }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-lg border border-violet-900/50 bg-violet-950/20 p-3">
+        <div className="text-[11px] uppercase tracking-wider font-bold text-violet-300/90 mb-1.5">✦ Ori's Take</div>
+        <p className="text-[12px] text-gray-200 leading-relaxed">
+          Best-in-class compute franchise riding a multi-year AI build-out. Not cheap, but a durable moat and
+          pricing power justify a long hold — accumulate on dips and size for the volatility.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage({ onAuthed }) {
   const reduce = useReducedMotion();
   const [auth, setAuth] = useState({ open: false, mode: "login" });
@@ -336,6 +407,41 @@ export default function HomePage({ onAuthed }) {
                 <div className="text-xs text-gray-500 mt-1">{small}</div>
               </m.div>
             ))}
+          </m.div>
+        </section>
+
+        {/* ── Game Plan showcase ──────────────────────────────────────────── */}
+        <section id="game-plan" className="max-w-6xl mx-auto px-4 sm:px-6 py-20 lg:py-24 scroll-mt-14">
+          <m.div
+            variants={stagger}
+            initial="hidden"
+            whileInView="show"
+            viewport={inView}
+            className="grid lg:grid-cols-2 gap-10 lg:gap-12 items-center"
+          >
+            <m.div variants={fadeUp}>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-violet-800/50 bg-violet-950/30 text-[11px] text-violet-300/90 mb-5">
+                ✦ The Game Plan
+              </div>
+              <h2 className="text-3xl sm:text-4xl text-white tracking-tight mb-4" style={{ ...BRAND_FONT, fontWeight: 700 }}>
+                One number. One plan. Per stock.
+              </h2>
+              <p className="text-base text-gray-400 leading-relaxed mb-6">
+                Every stock gets a single <span className="text-gray-200 font-medium">Conviction</span> score (0–100) that
+                blends fundamentals, valuation, technicals, insider &amp; Congress activity, analyst targets, your personal
+                fit, and Ori's read on the intangibles — then tells you{" "}
+                <span className="text-gray-200 font-medium">how long to hold</span> and{" "}
+                <span className="text-gray-200 font-medium">what to do at today's price</span>. No spreadsheet required.
+              </p>
+              <ul className="space-y-2.5 text-sm text-gray-400">
+                <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Beginner-clear: a hold horizon plus a right-now action</li>
+                <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Tuned to your risk tolerance — retiree or risk-taker</li>
+                <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Ori adds the story a spreadsheet misses (Pro)</li>
+              </ul>
+            </m.div>
+            <m.div variants={fadeUp} aria-hidden="true">
+              <GamePlanMock />
+            </m.div>
           </m.div>
         </section>
 

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { usePortfolioGoals } from '../hooks/usePortfolioGoals.js';
 import BrokeragePanel from '../components/BrokeragePanel.jsx';
+import InvestingPreferences from '../components/InvestingPreferences.jsx';
 import { IconPie } from '../components/icons.jsx';
 
 function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
@@ -61,7 +62,7 @@ function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
   );
 }
 
-export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSelectStock, detailStock }) {
+export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSelectStock, detailStock, weights, setWeights, risk, setRisk }) {
   const { portfolios, goals, theses, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, addThesis, updateThesis, deleteThesis, grandTotal, overallAllocations } = usePortfolioGoals();
   const [goalsVisible, setGoalsVisible] = useState(() => { const saved = localStorage.getItem('portfolio_goals_visible'); return saved !== null ? saved === 'true' : true; });
   const [allocationLimit, setAllocationLimit] = useState(10);
@@ -210,6 +211,11 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
               <p className="text-[10px] text-gray-500 mt-1 leading-snug">Sent to Ori automatically for context.</p>
             </div>
             <div className="flex-1 overflow-auto p-5 space-y-6">
+              {/* Personal investing preferences — risk tolerance + Q/V/G lens */}
+              {weights && setWeights && setRisk && (
+                <InvestingPreferences weights={weights} setWeights={setWeights} risk={risk} setRisk={setRisk} />
+              )}
+
               {/* Investment Goals */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">

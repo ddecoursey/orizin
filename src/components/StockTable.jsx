@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect, useLayoutEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
+import { gradeColor, ratingRank } from "../lib/ratingColor.js";
 import Sparkline from "./Sparkline";
 import { IconSearch } from "./icons.jsx";
 
@@ -87,12 +88,27 @@ function ScoreBar({ score }) {
   );
 }
 
+function RatingBadge({ rating }) {
+  if (!rating) return <span className="text-gray-700">—</span>;
+  const c = gradeColor(rating);
+  return (
+    <span
+      className="inline-flex min-w-7 items-center justify-center rounded px-1.5 py-0.5 text-[10px] font-black leading-none"
+      style={{ background: c.bg, color: c.fg }}
+      title="FMP Ratings Snapshot letter grade"
+    >
+      {rating}
+    </span>
+  );
+}
+
 const COLS = [
   { key: "pin", label: "★", left: true, nosort: true },
   { key: "symbol", label: "Symbol", left: true, plain: true },
   { key: "sector", label: "Sector", left: true, plain: true },
   { key: "mcap", label: "Mkt Cap", plain: true, type: "money" },
   { key: "price", label: "Price", plain: true, type: "price" },
+  { key: "rating", label: "Rating", plain: true },
   { key: "trend", label: "Trend", plain: true, nosort: true },
   { key: "beta", label: "Beta", plain: true, type: "ratio" },
   { key: "pe", label: "P/E", type: "x" },
@@ -121,6 +137,42 @@ const COLS = [
   { key: "div_yield", label: "Div Yld", type: "pct" },
   { key: "conviction", label: "Conviction", plain: true, nosort: false },
 ];
+
+const COL_WIDTHS = {
+  pin: "32px",
+  symbol: "92px",
+  sector: "92px",
+  mcap: "78px",
+  price: "58px",
+  rating: "58px",
+  trend: "58px",
+  beta: "44px",
+  pe: "52px",
+  pb: "52px",
+  ps: "52px",
+  ev_ebitda: "68px",
+  ev_sales: "52px",
+  ev_gp: "52px",
+  fcf_yield: "58px",
+  earnings_yield: "58px",
+  gross_margin: "58px",
+  op_margin: "52px",
+  net_margin: "52px",
+  fcf_margin: "52px",
+  roic: "52px",
+  roe: "52px",
+  roa: "52px",
+  revenue_growth: "58px",
+  eps_growth: "52px",
+  fcf_growth: "52px",
+  op_income_growth: "58px",
+  rule_of_40: "44px",
+  net_debt_ebitda: "52px",
+  current_ratio: "52px",
+  debt_equity: "48px",
+  div_yield: "58px",
+  conviction: "92px",
+};
 
 export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
   const [sortKey, setSortKey] = useState("mcap");
@@ -278,11 +330,13 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       const ap = pinnedSet.has(a.symbol),
         bp = pinnedSet.has(b.symbol);
       if (ap !== bp) return ap ? -1 : 1;
-      const av = a[sortKey],
-        bv = b[sortKey];
-      if (av == null || !isFinite(av)) return 1;
-      if (bv == null || !isFinite(bv)) return -1;
-      if (typeof av === "string") return av.localeCompare(bv) * sortDir;
+      const av = sortKey === "rating" ? ratingRank(a.rating) : a[sortKey];
+      const bv = sortKey === "rating" ? ratingRank(b.rating) : b[sortKey];
+      if (av == null || av === "" || (typeof av === "number" && !isFinite(av))) return 1;
+      if (bv == null || bv === "" || (typeof bv === "number" && !isFinite(bv))) return -1;
+      if (typeof av === "string" || typeof bv === "string") {
+        return String(av).localeCompare(String(bv)) * sortDir;
+      }
       return (av - bv) * sortDir;
     });
   }, [rows, pins, sortKey, sortDir]);
@@ -414,50 +468,21 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
       <table className="w-full border-collapse text-xs">
         {/* Define column widths for stable "lanes" even with virtualization */}
         <colgroup>
-          <col style={{ width: '32px' }} />      {/* Pin */}
-          <col style={{ width: '92px' }} />     {/* Symbol + name */}
-          <col style={{ width: '92px' }} />     {/* Sector */}
-          <col style={{ width: '78px' }} />     {/* Mkt Cap */}
-          <col style={{ width: '58px' }} />     {/* Price */}
-          <col style={{ width: '58px' }} />     {/* Trend */}
-          <col style={{ width: '44px' }} />     {/* Beta */}
-          <col style={{ width: '52px' }} />     {/* P/E */}
-          <col style={{ width: '52px' }} />     {/* P/B */}
-          <col style={{ width: '52px' }} />     {/* P/S */}
-          <col style={{ width: '68px' }} />     {/* EV/EBITDA */}
-          <col style={{ width: '52px' }} />     {/* EV/S */}
-          <col style={{ width: '52px' }} />     {/* EV/GP */}
-          <col style={{ width: '58px' }} />     {/* FCF Yld */}
-          <col style={{ width: '58px' }} />     {/* Gross M */}
-          <col style={{ width: '52px' }} />     {/* Op M */}
-          <col style={{ width: '52px' }} />     {/* Net M */}
-          <col style={{ width: '52px' }} />     {/* FCF M */}
-          <col style={{ width: '52px' }} />     {/* ROIC */}
-          <col style={{ width: '52px' }} />     {/* ROE */}
-          <col style={{ width: '52px' }} />     {/* ROA */}
-          <col style={{ width: '58px' }} />     {/* Rev Gr */}
-          <col style={{ width: '52px' }} />     {/* EPS Gr */}
-          <col style={{ width: '52px' }} />     {/* FCF Gr */}
-          <col style={{ width: '44px' }} />     {/* R40 */}
-          <col style={{ width: '52px' }} />     {/* ND/EB */}
-          <col style={{ width: '52px' }} />     {/* Curr R */}
-          <col style={{ width: '48px' }} />     {/* D/E */}
-          <col style={{ width: '58px' }} />     {/* Div Yld */}
-          <col style={{ width: '92px' }} />     {/* Conviction */}
+          {COLS.map((c) => (
+            <col key={c.key} style={{ width: COL_WIDTHS[c.key] }} />
+          ))}
           <col style={{ width: '52px' }} />     {/* Ask Ori */}
         </colgroup>
 
         <thead className="sticky top-0 z-20 bg-gray-950">
           <tr>
-            {COLS.map((c, i) => {
-              // Widths aligned with colgroup for strong column lanes
-              const widths = ['32px','92px','92px','78px','58px','58px','44px','52px','52px','52px','68px','52px','52px','58px','58px','52px','52px','52px','52px','52px','52px','58px','52px','52px','44px','52px','52px','48px','58px','72px'];
-              const w = widths[i];
+            {COLS.map((c) => {
+              const w = COL_WIDTHS[c.key];
               return (
                 <th
                   key={c.key}
                   onClick={() => handleSort(c.key)}
-                  title={c.key === "conviction" ? "Conviction (0–100): the unified verdict — fundamentals (Orizin engine) + valuation. Refines with technicals, smart money, analysts & Ori's intangibles on the Deep Research page." : undefined}
+                  title={c.key === "conviction" ? "Conviction (0–100): the unified verdict — fundamentals (Orizin engine) + valuation. Refines with technicals, smart money, analysts & Ori's intangibles on the Deep Research page. When a pillar you weighted heavily (via Q/V/G sliders) has mostly missing data, a data-coverage penalty is subtracted from Conviction so low-evidence names don't dominate the ranking." : undefined}
                   style={w ? { width: w } : undefined}
                   className={`px-3 py-2 whitespace-nowrap text-[9px] uppercase tracking-wider
                     font-bold border-b border-gray-800
@@ -554,6 +579,11 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                   {fmt(r.price, "price") ?? <span className="text-gray-600">—</span>}
                 </td>
 
+                {/* FMP Ratings Snapshot letter */}
+                <td className="px-3 py-2 text-right">
+                  <RatingBadge rating={r.rating} />
+                </td>
+
                 {/* Trend Sparkline (real historical prices) */}
                 <td className="px-2 py-2 text-center">
                   {sparklines.has(r.symbol) ? (
@@ -579,7 +609,7 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                 </td>
 
                 {/* Heat-mapped columns */}
-                {COLS.slice(7, -1).map((c) => {
+                {COLS.slice(8, -1).map((c) => {
                   const val = r[c.key];
                   const formatted = fmt(val, c.type);
                   const hcls = heatClass(val, c.key, heat);
@@ -603,7 +633,18 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
 
                 {/* Conviction */}
                 <td className="px-3 py-2 min-w-[80px]">
-                  <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
+                  <span
+                    title={
+                      r.conviction != null && r.dataCoveragePenalty > 0
+                        ? `Conviction ${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty} penalty). Penalty applies when user weights are high on a pillar with low real-data coverage (Q:${r.pillarCoverage ? Math.round(r.pillarCoverage.q*100) : '—'}% V:${r.pillarCoverage ? Math.round(r.pillarCoverage.v*100) : '—'}% G:${r.pillarCoverage ? Math.round(r.pillarCoverage.g*100) : '—'}%).`
+                        : (r.conviction != null ? 'Conviction (0–100) from fundamentals + valuation (see column header for details).' : undefined)
+                    }
+                  >
+                    <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
+                    {r.dataCoveragePenalty > 0 && (
+                      <span className="ml-1 text-[9px] text-amber-400 align-super" title={`−${r.dataCoveragePenalty} data penalty`}>↓</span>
+                    )}
+                  </span>
                 </td>
 
                 {/* Ask Ori */}
