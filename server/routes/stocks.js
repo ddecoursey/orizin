@@ -115,6 +115,11 @@ const UNIVERSE_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 // are cached (non-null object / non-empty array), so a transient failure isn't
 // pinned for the whole TTL.
 const detailCache = new Map(); // key -> { at, data }
+// In-flight coalescing: when several requests for the same uncached key arrive
+// together (e.g. a fresh screener firing Ori reviews for the same leaders across
+// tabs/users on a cold cache), they share ONE underlying fetch/Gemini call
+// instead of each billing the quota. Key -> Promise, cleared when it settles.
+const inFlightDetail = new Map();
 // Cap the in-memory cache so a long-running server doesn't grow it without
 // bound. Map iterates in insertion order, so evicting the first key drops the
 // oldest entry.
@@ -154,10 +159,23 @@ async function cachedDetail(key, ttlMs, fn, force = false) {
     }
   }
   detailCacheStats.misses++;
-  const data = await fn();
-  const useful = Array.isArray(data) ? data.length > 0 : data != null;
-  if (useful) setDetailCache(key, data);
-  return data;
+  // Coalesce concurrent misses for the same key onto a single in-flight call.
+  // (force still shares a refresh in flight — a stampede of refreshes is the
+  // same wasted work we want to avoid.)
+  const pending = inFlightDetail.get(key);
+  if (pending) return pending;
+  const p = (async () => {
+    const data = await fn();
+    const useful = Array.isArray(data) ? data.length > 0 : data != null;
+    if (useful) setDetailCache(key, data);
+    return data;
+  })();
+  inFlightDetail.set(key, p);
+  try {
+    return await p;
+  } finally {
+    inFlightDetail.delete(key);
+  }
 }
 
 // Bound the persistent cache: drop entries unused for 14 days, once a day.

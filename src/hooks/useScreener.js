@@ -71,6 +71,34 @@ function loadRisk(user) {
   }
 }
 
+// Ori intangibles cache (per user). The screener lazily fetches Ori's review for
+// a handful of top names; persisting it means re-opening the screener, reloading
+// the tab, or nudging a filter doesn't re-hit the (Gemini-backed, rate-limited)
+// game-plan endpoint. TTL matches the server's 24h game-plan cache so we never
+// serve a value the server would have refreshed.
+const ORI_CACHE_TTL = 24 * 60 * 60 * 1000;
+function oriKey(user) {
+  return `screener_ori_v1:${user}`;
+}
+function loadOriCache(user) {
+  try {
+    const raw = JSON.parse(localStorage.getItem(oriKey(user)) || "{}");
+    const now = Date.now();
+    const out = {};
+    for (const [sym, v] of Object.entries(raw)) {
+      if (v && typeof v === "object" && now - (v._at || 0) < ORI_CACHE_TTL) out[sym] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+function saveOriCache(user, data) {
+  try {
+    localStorage.setItem(oriKey(user), JSON.stringify(data));
+  } catch {}
+}
+
 // One-time migration: copy pre-multiuser keys to the current user's
 // namespace, so existing single-user installs don't lose their data on
 // upgrade. Runs lazily — only if the new-format key is missing.
@@ -373,7 +401,7 @@ export function applyFilters(all, f, pins) {
   });
 }
 
-export function useScreener(currentUser, portfolioGoals = {}) {
+export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false) {
   const user = currentUser || "default";
   // Run migration synchronously before any state init so loadPins/loadTabs
   // see the migrated values on first render.
@@ -503,24 +531,37 @@ export function useScreener(currentUser, portfolioGoals = {}) {
     );
   }, [filteredWeighted, convictionOverrides]);
 
-  // Lazy Ori intangibles for top names on the current list (no 20k Gemini calls).
-  // Only the highest-conviction / visible leaders get reviewed (and server caches
-  // game-plan results 24h per symbol, so first viewer pays the cost, everyone else
-  // gets instant "Ori reviewed" data with convictionDelta + intangiblesScore etc.).
-  // This lets us expose the real Ori-reviewed intangibles (and adjust conviction)
-  // on the big list for the names that matter, while using the always-free
-  // durabilityProxy + data penalty as the "close equivalent" to de-risk junk that
-  // looks perfect quantitatively.
-  const [oriData, setOriData] = useState({});
-  const oriFetchedRef = useRef(new Set());
+  // Lazy Ori intangibles for the *visible top* of the current list. Every review
+  // is a Gemini-backed game-plan call (rate-limited, shared with Ori chat), so
+  // this path is deliberately frugal:
+  //   • only a small handful of the highest-conviction leaders,
+  //   • Pro/admin only (free users get 402s — don't spend the quota or the burst),
+  //   • persisted per-user for 24h (matches the server cache) so reloads/filters
+  //     don't refetch,
+  //   • debounced so dragging Q/V/G sliders doesn't fire a sweep per frame,
+  //   • run through a tiny concurrency pool so we never burst dozens of parallel
+  //     calls at Gemini (which is what was tripping the "Ori is busy" overloads).
+  // The always-free durabilityProxy + data penalty remain the "close equivalent"
+  // for everything below the reviewed leaders.
+  const ORI_LEADER_COUNT = 12;      // how many top names get a real Ori review
+  const ORI_CONCURRENCY = 2;        // parallel game-plan calls in flight at once
+  const ORI_DEBOUNCE_MS = 800;      // settle slider/filter churn before sweeping
+  const [oriData, setOriData] = useState(() => loadOriCache(user));
+  const oriFetchedRef = useRef(new Set(Object.keys(oriData)));
+  // Persist the cache whenever it grows so the next session starts warm.
+  useEffect(() => { saveOriCache(user, oriData); }, [user, oriData]);
   useEffect(() => {
+    if (!canUseOri) return;  // gate the spend on accounts that can actually use Ori
     const leaders = [...filteredWeighted]
       .filter(r => r.conviction != null && r.conviction >= 65)
-      .sort((a,b) => (b.conviction||0) - (a.conviction||0))
-      .slice(0, 60);  // only the ones users actually see at the top
-    leaders.forEach(async (r) => {
+      .sort((a, b) => (b.conviction || 0) - (a.conviction || 0))
+      .slice(0, ORI_LEADER_COUNT)
+      .filter(r => !oriFetchedRef.current.has(r.symbol));
+    if (!leaders.length) return;
+
+    let cancelled = false;
+    const fetchOne = async (r) => {
       const sym = r.symbol;
-      if (oriFetchedRef.current.has(sym) || oriData[sym]) return;
       oriFetchedRef.current.add(sym);
       try {
         const payload = {
@@ -543,13 +584,32 @@ export function useScreener(currentUser, portfolioGoals = {}) {
         });
         if (res.ok) {
           const j = await res.json();
-          if (j.ori) {
-            setOriData(prev => ({ ...prev, [sym]: j.ori }));
+          if (j.ori && !cancelled) {
+            setOriData(prev => ({ ...prev, [sym]: { ...j.ori, _at: Date.now() } }));
           }
+        } else if (res.status === 503 || res.status === 429) {
+          // Transient overload / throttle — let a later sweep retry this name
+          // instead of permanently marking it fetched.
+          oriFetchedRef.current.delete(sym);
         }
-      } catch {}
-    });
-  }, [filteredWeighted, oriData]);  // runs when the weighted list changes; leaders only (oriData to avoid re-fires)
+      } catch {
+        oriFetchedRef.current.delete(sym);
+      }
+    };
+
+    // Debounce, then drain the leader queue through a fixed-size worker pool.
+    const timer = setTimeout(() => {
+      const queue = [...leaders];
+      const worker = async () => {
+        while (!cancelled && queue.length) {
+          await fetchOne(queue.shift());
+        }
+      };
+      for (let i = 0; i < Math.min(ORI_CONCURRENCY, queue.length); i++) worker();
+    }, ORI_DEBOUNCE_MS);
+
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [filteredWeighted, canUseOri, user]);  // leaders recomputed from the latest list; oriFetchedRef dedupes
 
   // Merge any newly arrived Ori deltas into displayed conviction (like DR overrides)
   const withOri = useMemo(() => {
