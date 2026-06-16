@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { computeRankedRows, applyWeights } from "../lib/scoring.js";
+import { quickConviction } from "../lib/verdict.js";
 import { buildFitContext, computeFit } from "../lib/fitScore.js";
 import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
@@ -611,16 +612,33 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false)
     return () => { cancelled = true; clearTimeout(timer); };
   }, [filteredWeighted, canUseOri, user]);  // leaders recomputed from the latest list; oriFetchedRef dedupes
 
-  // Merge any newly arrived Ori deltas into displayed conviction (like DR overrides)
+  // Fold any lazily-fetched Ori review into the displayed conviction. Two rules:
+  //
+  //   1. A Deep Research override is the CANONICAL, "true" number for its symbol
+  //      and wins untouched — DR already folded Ori in (via mergeOriIntoVerdict),
+  //      so re-touching it would double-count. We only attach `ori` for the ✧
+  //      badge/tooltip.
+  //   2. Other reviewed leaders are recomputed THROUGH the shared quickConviction
+  //      with the cached Ori attached, so the cached intangibles score feeds the
+  //      Intangibles pillar (and Ori's ±20 nudge applies) exactly the way Deep
+  //      Research's computeVerdict does on open — instead of the old ad-hoc
+  //      base+delta, which diverged from DR. We re-apply the same data-coverage
+  //      penalty applyWeights used, so the methodology matches the lean number.
+  //
+  // No extra Gemini cost: oriData is the already-fetched, server-cached game-plan.
   const withOri = useMemo(() => {
     if (!Object.keys(oriData).length) return filtered;
     return filtered.map(r => {
       const o = oriData[r.symbol];
-      if (!o || !Number.isFinite(o.convictionDelta)) return r;
-      const adj = Math.max(0, Math.min(100, (r.conviction || r.baseConviction || 0) + o.convictionDelta));
+      if (!o) return r;
+      if (convictionOverrides[r.symbol] != null) return { ...r, ori: o };
+      const fit = fitMap ? fitMap[r.symbol] || null : null;
+      const lean = quickConviction({ ...r, ori: o }, fit, risk);
+      if (lean == null) return { ...r, ori: o };
+      const adj = Math.max(0, lean - (r.dataCoveragePenalty || 0));
       return { ...r, conviction: adj, ori: o };
     });
-  }, [filtered, oriData]);
+  }, [filtered, oriData, convictionOverrides, fitMap, risk]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
