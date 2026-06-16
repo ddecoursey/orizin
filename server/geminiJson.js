@@ -12,6 +12,28 @@ const REQUEST_TIMEOUT_MS = 30000; // don't let a hung LLM call tie up the reques
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt) => 500 * 2 ** attempt + Math.random() * 250;
+
+// Cap concurrent structured (game-plan / intangibles) Gemini calls. The screener
+// asks for a batch of these at once; without a ceiling they fan out into dozens
+// of simultaneous requests that trip 429/503 "overloaded" — and, because chat
+// shares the same key + quota, that also makes interactive Ori "too busy". This
+// gate keeps the batch path to a trickle so the streaming chat path stays clear.
+// A waiter inherits the releasing call's slot, so `active` never exceeds the cap.
+const MAX_CONCURRENT = 2;
+let active = 0;
+const waiters = [];
+function acquireSlot() {
+  if (active < MAX_CONCURRENT) {
+    active++;
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => waiters.push(resolve));
+}
+function releaseSlot() {
+  const next = waiters.shift();
+  if (next) next();   // hand the slot straight to the next waiter (active unchanged)
+  else active--;
+}
 const retryable = (status, body) =>
   status === 429 || status === 503 || (status >= 500 && /unavailable|overloaded|try again/i.test(body || ""));
 
@@ -42,6 +64,15 @@ export async function geminiGenerateJson({ system, prompt, schema, temperature =
   };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
 
+  await acquireSlot();
+  try {
+    return await runRequest(body, apiKey);
+  } finally {
+    releaseSlot();
+  }
+}
+
+async function runRequest(body, apiKey) {
   let lastStatus = 0;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     let res;
