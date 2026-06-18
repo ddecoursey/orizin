@@ -139,22 +139,67 @@ function convictionFromPillars(pillars) {
   const s = weightedAvg(pillars.map((p) => [p.score, p.weight]));
   return s == null ? null : Math.round(100 * s);
 }
-// Smart-money conviction signal (U.S. Congress + insiders) → 0..1. "quiet" =
-// no signal, so it's excluded from the blend rather than counted as neutral.
+// Smart-money conviction signal (U.S. Congress + corporate insiders) → 0..1.
+// Built from the actual buyer/seller HEAD COUNTS so genuine net buying scores
+// high even when a little selling on the other channel exists — the old coarse
+// "buying/selling/mixed" bucket flattened "8 insiders bought, 0 sold, 1 senator
+// trimmed" all the way to 0.5 (mixed) or worse. All-buy → ~0.85, balanced → 0.5,
+// all-sell → ~0.15. Falls back to the coarse signal when counts aren't present,
+// and stays null ("quiet"/no data) so it's excluded from the blend, not imputed.
 function smartMoneyScore(sm) {
-  if (!sm || !sm.signal) return null;
+  if (!sm) return null;
+  const c = sm.congress || {};
+  const ins = sm.insider || {};
+  const buyers = (Number(c.buyers) || 0) + (Number(ins.buyers) || 0);
+  const sellers = (Number(c.sellers) || 0) + (Number(ins.sellers) || 0);
+  const total = buyers + sellers;
+  if (total > 0) return clamp01(0.15 + 0.7 * (buyers / total));
   if (sm.signal === "buying") return 0.8;
   if (sm.signal === "selling") return 0.2;
   if (sm.signal === "mixed") return 0.5;
   return null;
 }
-// Expert-analyst signal: implied upside to consensus target + recent up/down
-// grade flow → 0..1. Target upside works on the screener too (row fallback); the
-// grade-flow half only adds in once detail is loaded on Deep Research.
+
+// Classify an analyst rating string → "bull" | "bear" | "hold" | null. Order
+// matters: bullish/bearish patterns are tested before the generic "perform"
+// that "outperform"/"underperform" also contain.
+function classifyGrade(g) {
+  const s = String(g || "").toLowerCase();
+  if (!s) return null;
+  if (/strong buy|\bbuy\b|outperform|overweight|accumulate|\badd\b|positive|conviction|top pick/.test(s)) return "bull";
+  if (/strong sell|\bsell\b|underperform|underweight|reduce|negative/.test(s)) return "bear";
+  if (/hold|neutral|market perform|sector perform|equal[- ]?weight|in[- ]?line|peer perform|perform/.test(s)) return "hold";
+  return null;
+}
+
+// Standing analyst consensus from the recent grade ratings (Buy/Hold/Sell) → 0..1.
+// Unlike grade FLOW (upgrades vs downgrades), this counts the rating itself, so a
+// stock every analyst rates "Buy" reads bullish even when the latest actions were
+// reiterations/maintains (the common case — which the old flow-only logic scored
+// as "no signal"). Holds pull toward the middle. null when nothing is classifiable.
+function gradeConsensus(grades) {
+  if (!Array.isArray(grades) || !grades.length) return null;
+  let bull = 0, bear = 0, hold = 0;
+  for (const g of grades.slice(0, 20)) {
+    const c = classifyGrade(g.new_grade || g.previous_grade);
+    if (c === "bull") bull++;
+    else if (c === "bear") bear++;
+    else if (c === "hold") hold++;
+  }
+  const n = bull + bear + hold;
+  return n ? clamp01(0.5 + (bull - bear) / (2 * n)) : null;
+}
+
+// Expert-analyst signal → 0..1, blending three sub-signals (each optional):
+//   • implied upside to the consensus price target (works on the screener too),
+//   • the standing Buy/Hold/Sell consensus across recent grades, and
+//   • recent up/down grade FLOW (revision momentum).
+// The grade halves only add in once per-symbol detail is loaded on Deep Research.
 function analystScore(r, detail, aiData, price) {
-  const up = targetUpside(r, aiData, price);
-  let grade = null;
+  const upside = targetUpside(r, aiData, price);
   const grades = detail?.grades;
+  const consensus = gradeConsensus(grades);
+  let flow = null;
   if (Array.isArray(grades) && grades.length) {
     let u = 0;
     let d = 0;
@@ -163,9 +208,9 @@ function analystScore(r, detail, aiData, price) {
       if (a.includes("up")) u++;
       else if (a.includes("down")) d++;
     }
-    if (u + d > 0) grade = clamp01(0.5 + (u - d) / (2 * (u + d)));
+    if (u + d > 0) flow = clamp01(0.5 + (u - d) / (2 * (u + d)));
   }
-  return avgDefined([up, grade]);
+  return avgDefined([upside, consensus, flow]);
 }
 
 // Recent reported quarters (epsActual present), newest first, from either the

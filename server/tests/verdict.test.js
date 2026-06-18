@@ -109,6 +109,39 @@ test("verdict produces a unified conviction 0-100 and all seven pillars", () => 
   assert.equal(v.pillars.find((p) => p.id === "intangibles").score, null);
 });
 
+test("analyst pillar: standing Buy ratings lift the score even with no up/down actions", () => {
+  const pillarScore = (v, id) => v.pillars.find((p) => p.id === id)?.score;
+  // Target just BELOW price (weak upside), but every analyst rates it Buy and the
+  // latest actions are "maintains" (no up/downgrades). The grade CONSENSUS must
+  // still pull the analyst pillar up — the old flow-only logic ignored maintains.
+  const row = { ...COMPOUNDER, price: 100 };
+  const grades = Array.from({ length: 8 }, (_, i) => ({
+    date: `2026-0${i + 1}-01`, company: `Bank ${i}`, new_grade: "Buy", previous_grade: "Buy", action: "maintains",
+  }));
+  const withGrades = computeVerdict(row, { aiData: { target_consensus: 95 }, grades });
+  const noGrades = computeVerdict(row, { aiData: { target_consensus: 95 } });
+  assert.ok(pillarScore(withGrades, "analyst") > pillarScore(noGrades, "analyst"));
+  assert.ok(pillarScore(withGrades, "analyst") >= 0.6, "all-Buy consensus should read bullish");
+});
+
+test("analyst pillar: unanimous Sell ratings drag the score down", () => {
+  const pillarScore = (v, id) => v.pillars.find((p) => p.id === id)?.score;
+  const grades = Array.from({ length: 6 }, (_, i) => ({ new_grade: "Sell", action: "maintains", date: `2026-0${i + 1}-01` }));
+  const v = computeVerdict({ ...COMPOUNDER, price: 100 }, { aiData: { target_consensus: 100 }, grades });
+  assert.ok(pillarScore(v, "analyst") < 0.45, "all-Sell consensus should read bearish");
+});
+
+test("insider pillar: net insider buying scores high despite minor congressional selling", () => {
+  const pillarScore = (v, id) => v.pillars.find((p) => p.id === id)?.score;
+  const smartMoney = {
+    signal: "mixed", // coarse bucket flattened to 0.5 under the old logic
+    congress: { buyers: 0, sellers: 1, total: 1, recent: [] },
+    insider: { buyers: 8, sellers: 0, total: 8, recent: [] },
+  };
+  const v = computeVerdict(COMPOUNDER, { ...COMPOUNDER_DETAIL, smartMoney });
+  assert.ok(pillarScore(v, "smartMoney") >= 0.7, "8 buyers vs 1 seller should read as buying");
+});
+
 test("mergeOriIntoVerdict: fills intangibles, clamps delta, moves horizon ≤1 notch, flags narrative", () => {
   const det = computeVerdict(
     { symbol: "SPEC", price: 5, mcap: 5e9, roic: -0.1, net_margin: -0.2, op_margin: -0.1, revenue_growth: 0.6, eps_growth: -0.1, debt_equity: 0.3, pe: -10, beta: 1.8, dataCoverage: 0.6 },

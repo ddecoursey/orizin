@@ -538,7 +538,7 @@ function actionStyle(action) {
   return { label: "= Maintain", cls: "bg-gray-800 text-gray-400" };
 }
 
-function GradesList({ grades }) {
+export function GradesList({ grades }) {
   return (
     <div className="space-y-1.5">
       {grades.map((g, i) => {

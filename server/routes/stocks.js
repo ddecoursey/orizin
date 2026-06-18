@@ -1025,7 +1025,8 @@ Your job: weigh what the NUMBERS MISS. Durable moat, brand, founder/management q
 Rules:
 - Be sharp and specific to THIS company, not generic. Use the profile and recent news.
 - Be balanced: always give a real bull case AND a real bear case, plus what would change your mind.
-- intangiblesScore (0-100): how strong the non-financial / future-potential case is. High only with a concrete reason.
+- xFactors: break the intangible case into the specific "X-factors" that drive it, each rated strong/moderate/weak/none with a one-line, company-specific note. Cover the ones that actually apply: MARKET DOMINANCE / MOAT (e.g. a near-monopoly, network effects, switching costs, irreplaceable IP), TOTAL ADDRESSABLE MARKET & OPTIONALITY, MANAGEMENT / FOUNDER quality, BRAND / PRICING POWER, and REGULATORY / MACRO positioning. Omit a factor entirely rather than padding with filler. The intangiblesScore must be the honest roll-up of these — a genuine monopoly/moat should pull it high; "none" across the board should keep it low.
+- intangiblesScore (0-100): how strong the non-financial / future-potential case is, consistent with your xFactors. High only with a concrete reason.
 - convictionDelta (-20..20): how much you'd nudge the data-driven conviction, and no more. The data is the anchor; you adjust within reason.
 - horizonView / actionView: your view, knowing it may be reconciled toward the data verdict.
 - riskLevel: be honest; story-driven names are usually "high" or "speculative".
@@ -1038,6 +1039,19 @@ const GAME_PLAN_SCHEMA = {
     bottomLine: { type: "STRING" },
     intangiblesScore: { type: "INTEGER" },
     intangiblesRationale: { type: "STRING" },
+    xFactors: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          factor: { type: "STRING" },
+          strength: { type: "STRING", enum: ["strong", "moderate", "weak", "none"] },
+          note: { type: "STRING" },
+        },
+        required: ["factor", "strength"],
+        propertyOrdering: ["factor", "strength", "note"],
+      },
+    },
     futurePotential: { type: "STRING" },
     keyFactors: { type: "ARRAY", items: { type: "STRING" } },
     macroTailwinds: { type: "ARRAY", items: { type: "STRING" } },
@@ -1051,12 +1065,12 @@ const GAME_PLAN_SCHEMA = {
     convictionDelta: { type: "INTEGER" },
   },
   required: [
-    "bottomLine", "intangiblesScore", "intangiblesRationale", "futurePotential",
+    "bottomLine", "intangiblesScore", "intangiblesRationale", "xFactors", "futurePotential",
     "bullCase", "bearCase", "whatWouldChangeMyMind", "riskLevel", "horizonView",
     "actionView", "convictionDelta",
   ],
   propertyOrdering: [
-    "bottomLine", "intangiblesScore", "intangiblesRationale", "futurePotential",
+    "bottomLine", "intangiblesScore", "intangiblesRationale", "xFactors", "futurePotential",
     "keyFactors", "macroTailwinds", "macroHeadwinds", "bullCase", "bearCase",
     "whatWouldChangeMyMind", "riskLevel", "horizonView", "actionView", "convictionDelta",
   ],
@@ -1116,12 +1130,25 @@ function sanitizeGamePlan(o) {
   };
   const str = (v, max = 600) => (typeof v === "string" ? v.slice(0, max) : "");
   const arr = (v, max = 6) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, max) : []);
+  const STRENGTH = ["strong", "moderate", "weak", "none"];
+  // X-factors: structured breakdown of the intangible case (moat/monopoly, TAM,
+  // management, brand, regulatory). Drop "none"/blank rows so the UI only shows
+  // factors that actually apply, and cap the list.
+  const xFactors = (Array.isArray(o.xFactors) ? o.xFactors : [])
+    .map((x) => ({
+      factor: str(x?.factor, 60),
+      strength: STRENGTH.includes(x?.strength) ? x.strength : "moderate",
+      note: str(x?.note, 160),
+    }))
+    .filter((x) => x.factor && x.strength !== "none")
+    .slice(0, 6);
   const RISK = ["low", "moderate", "high", "speculative"];
   const HOR = ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"];
   return {
     bottomLine: str(o.bottomLine, 400),
     intangiblesScore: clampInt(o.intangiblesScore, 0, 100, 50),
     intangiblesRationale: str(o.intangiblesRationale),
+    xFactors,
     futurePotential: str(o.futurePotential),
     keyFactors: arr(o.keyFactors),
     macroTailwinds: arr(o.macroTailwinds),
