@@ -23,6 +23,10 @@ data/screener.db-shm
 data/screener.db-wal
 data/*.db*
 
+# Cloudflare Workers local dev
+.dev.vars
+.wrangler/
+
 # Claude / editor dev files
 .claude/
 

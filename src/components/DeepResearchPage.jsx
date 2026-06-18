@@ -3,7 +3,7 @@ import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import { IconResearch, IconRefresh } from "./icons.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
-import { PriceChart, StockNewsList } from "./StockDetailModal.jsx";
+import { PriceChart, StockNewsList, GradesList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
 import { computeFit } from "../lib/fitScore.js";
 import { computeVerdict, mergeOriIntoVerdict, metricTone } from "../lib/verdict.js";
@@ -277,7 +277,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   const {
     profile, aiData, insider, news, loadingProfile, loadingNews, points, rsi, loadingChart,
     technicals, loadingTechnicals, earnings, smartMoney: smart,
-    ratings, loadingRatings,
+    ratings, loadingRatings, grades, loadingGrades,
   } = detail;
 
   // Deep-research-only data (statements, filings, comp, peers, growth) — owned
@@ -673,6 +673,18 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 </StatGrid>
               ) : (
                 <Placeholder note="Analyst price targets not loaded for this symbol yet." />
+              )}
+            </Panel>
+
+            <Panel title="Analyst Grades" tier="T2" span={1}>
+              {loadingGrades && !grades.length ? (
+                <Placeholder note="Loading analyst grades…" />
+              ) : grades.length ? (
+                <div className="max-h-64 overflow-y-auto -mr-1 pr-1">
+                  <GradesList grades={grades.slice(0, 12)} />
+                </div>
+              ) : (
+                <Placeholder note={`No recent analyst grades for ${symbol}.`} />
               )}
             </Panel>
 

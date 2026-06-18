@@ -22,6 +22,32 @@ const RISK = {
   speculative: { text: "text-red-300", bg: "bg-red-950/50 border-red-800/60" },
 };
 
+// Strength styling for Ori's X-factors (the named pieces of the intangible case:
+// moat/monopoly, TAM, management, brand, regulatory). Filled-dot count signals how
+// strong each factor is, so a near-monopoly reads at a glance.
+const STRENGTH = {
+  strong: { dot: "bg-emerald-400", text: "text-emerald-300", filled: 3 },
+  moderate: { dot: "bg-amber-400", text: "text-amber-300", filled: 2 },
+  weak: { dot: "bg-gray-500", text: "text-gray-400", filled: 1 },
+};
+
+function XFactor({ x }) {
+  const s = STRENGTH[x.strength] || STRENGTH.moderate;
+  return (
+    <div className="flex items-start gap-2 py-1 border-b border-violet-900/20 last:border-0">
+      <span className="flex gap-0.5 pt-1 shrink-0" title={x.strength}>
+        {[0, 1, 2].map((i) => (
+          <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < s.filled ? s.dot : "bg-gray-700"}`} />
+        ))}
+      </span>
+      <span className="min-w-0">
+        <span className={`text-[11.5px] font-semibold ${s.text}`}>{x.factor}</span>
+        {x.note && <span className="text-[11px] text-gray-400"> — {x.note}</span>}
+      </span>
+    </div>
+  );
+}
+
 function Pillar({ p, oriState }) {
   const isOri = p.id === "intangibles";
   const loading = isOri && oriState?.loading && p.score == null;
@@ -170,6 +196,20 @@ function OriTake({ ori, oriState }) {
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Future potential</div>
               <p>{ori.futurePotential}</p>
+            </div>
+          )}
+
+          {Array.isArray(ori.xFactors) && ori.xFactors.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1 flex items-center gap-1.5">
+                X-Factors
+                <InfoHint text="The specific edges behind the intangibles score — durable moat / market dominance, total addressable market, management, brand, and regulatory positioning. More filled dots = stronger. These build the single Intangibles pillar; they aren't a separate conviction input." />
+              </div>
+              <div>
+                {ori.xFactors.map((x, i) => (
+                  <XFactor key={i} x={x} />
+                ))}
+              </div>
             </div>
           )}
 
