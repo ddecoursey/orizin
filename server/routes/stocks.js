@@ -1189,6 +1189,14 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
   }
   try {
     const force = req.query.refresh === "1" || req.query.refresh === "true";
+    // A manual retry (the "Try again" button, after a failed first load) skips
+    // the scarce frontier model and leads with the least-busy tier (lite → value)
+    // — retry is "just get me an answer", so go to the most available path, not
+    // the busiest. The first/auto load and Re-gather still lead with frontier.
+    const retry = req.query.retry === "1" || req.query.retry === "true";
+    const ladder = retry
+      ? { models: [liteModel(), valueModel()] }
+      : { leadModel: frontierModel(), models: [valueModel(), liteModel()] };
     const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
     const data = await cachedDetail(`gameplan:${symbol}`, 24 * 60 * 60 * 1000, async () => {
@@ -1199,17 +1207,15 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
         cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
         cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
       ]);
-      // Deep Research is the ONLY caller, so it gets the full ladder led by the
-      // frontier model. Because this whole block is cached 24h per symbol, the
-      // frontier model is hit at most once per stock per 24h. (It appears only on
-      // the primary key in the ladder, so a single generation never spends the
-      // scarce frontier quota twice.)
+      // Model ladder per the request mode. Because this whole block is cached 24h
+      // per symbol, the frontier model is hit at most once per stock per 24h, and
+      // it appears only on the primary key so a single generation never spends the
+      // scarce frontier quota twice.
       const { data: raw, model } = await geminiGenerateJson({
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
-        leadModel: frontierModel(),          // frontier once, primary key only
-        models: [valueModel(), liteModel()], // then value→lite on each key
+        ...ladder,
       });
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
