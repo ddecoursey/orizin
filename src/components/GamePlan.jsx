@@ -1,5 +1,6 @@
 import InfoHint from "./InfoHint.jsx";
 import Tooltip from "./Tooltip.jsx";
+import { IconRefresh } from "./icons.jsx";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
 // Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
@@ -79,7 +80,7 @@ function Pillar({ p, oriState }) {
   return reasons ? <Tooltip content={reasons} maxWidth={200}>{inner}</Tooltip> : inner;
 }
 
-export default function GamePlan({ verdict, oriState = {} }) {
+export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false }) {
   if (!verdict) return null;
 
   if (verdict.insufficient) {
@@ -147,7 +148,7 @@ export default function GamePlan({ verdict, oriState = {} }) {
       <p className="mt-3 text-[12.5px] text-gray-200 leading-relaxed">{verdict.headline}</p>
 
       {/* Ori's Take */}
-      <OriTake ori={ori} oriState={oriState} />
+      <OriTake ori={ori} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} />
 
       {/* Footer */}
       <div className="mt-4 pt-3 border-t border-gray-800/70 flex items-center justify-between gap-3 flex-wrap">
@@ -162,7 +163,7 @@ export default function GamePlan({ verdict, oriState = {} }) {
   );
 }
 
-function OriTake({ ori, oriState }) {
+function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
   const { loading, locked, error } = oriState || {};
   const riskCls = ori?.riskLevel ? RISK[ori.riskLevel] || RISK.high : null;
 
@@ -172,11 +173,25 @@ function OriTake({ ori, oriState }) {
         <h4 className="text-[11px] uppercase tracking-wider font-bold text-violet-300/90 flex items-center gap-1.5">
           <span>✦</span> Ori's Take
         </h4>
-        {ori?.riskLevel && (
-          <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold uppercase tracking-wide ${riskCls.bg} ${riskCls.text}`}>
-            {ori.riskLevel} risk
-          </span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {isAdmin && oriReady && oriState?.refresh && !locked && (
+            <button
+              type="button"
+              onClick={oriState.refresh}
+              disabled={loading}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer"
+              title="Re-run Ori's take with frontier model (bypasses 24h cache)"
+            >
+              <IconRefresh className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Refreshing…" : "Refresh Ori"}
+            </button>
+          )}
+          {ori?.riskLevel && (
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold uppercase tracking-wide ${riskCls.bg} ${riskCls.text}`}>
+              {ori.riskLevel} risk
+            </span>
+          )}
+        </div>
       </div>
 
       {locked ? (

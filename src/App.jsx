@@ -416,8 +416,33 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
   // Bumped after a single-symbol re-gather so the Deep Research detail panes
-  // re-fetch the freshly gathered data.
+  // re-fetch the freshly gathered data. Reset when the DR symbol changes so Ori
+  // waits for the new symbol's auto re-gather before firing.
   const [detailReloadToken, setDetailReloadToken] = useState(0);
+  useEffect(() => {
+    setDetailReloadToken(0);
+  }, [researchSymbol]);
+
+  // Opening a stock on Deep Research auto re-gathers from FMP, then bumps
+  // detailReloadToken so panels + Ori's take use the just-fetched data.
+  const regatherRef = useRef(regatherSymbol);
+  regatherRef.current = regatherSymbol;
+  const lastDrAutoRegather = useRef({ view: null, symbol: null });
+  useEffect(() => {
+    if (currentView !== "deep-research") {
+      lastDrAutoRegather.current = { view: null, symbol: null };
+      return;
+    }
+    if (!researchSymbol) return;
+    if (
+      lastDrAutoRegather.current.view === currentView &&
+      lastDrAutoRegather.current.symbol === researchSymbol
+    ) {
+      return;
+    }
+    lastDrAutoRegather.current = { view: currentView, symbol: researchSymbol };
+    regatherRef.current(researchSymbol, () => setDetailReloadToken((t) => t + 1));
+  }, [currentView, researchSymbol]);
 
   // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
   // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
@@ -782,6 +807,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             <DeepResearchPage
               fitCtx={fitCtx}
               risk={risk}
+              isAdmin={isAdmin}
               onConvictionChange={setConvictionOverride}
               symbol={researchSymbol}
               stocks={stocks}
@@ -797,6 +823,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
               }
               regathering={enrichLoading}
+              detailReloadToken={detailReloadToken}
               detail={researchDetail}
               onBack={() => setCurrentView('screener')}
               onAskOri={(sym) => {

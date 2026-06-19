@@ -215,7 +215,7 @@ function smLabel(signal) {
   return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange }) {
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false }) {
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
 
@@ -255,10 +255,13 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   useEffect(() => {
     oriPayloadRef.current = oriPayload;
   }, [oriPayload]);
-  // Deferred Ori layer (Pro, cached 24h) — fades in after the deterministic core.
+  // Deferred Ori layer (Pro) — runs after auto/manual re-gather so the take
+  // always reflects the latest FMP pull (server cache busted via refresh=1).
+  const oriReady = !!symbol && !regathering && detailReloadToken > 0;
   const oriState = useGamePlanOri(symbol, {
-    enabled: !!symbol && !deterministic.insufficient,
+    enabled: oriReady && !deterministic.insufficient,
     payloadRef: oriPayloadRef,
+    reloadToken: detailReloadToken,
   });
   // Fold Ori in "within reason" once it arrives; otherwise show the data verdict.
   const verdict = useMemo(
@@ -283,7 +286,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // Deep-research-only data (statements, filings, comp, peers, growth) — owned
   // here since nothing outside this page needs it. Server caches make
   // re-opening a symbol free.
-  const deep = useDeepResearch(symbol);
+  const deep = useDeepResearch(symbol, detailReloadToken);
 
   // Technicals, earnings, and smart-money now come from `detail` (useStockDetail)
   // so the same data also reaches Ori's context. Derive the display shapes here.
@@ -406,7 +409,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
       <div className="p-4 sm:p-6 space-y-6">
         {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
         <div className="oz-fade-rise">
-          <GamePlan verdict={verdict} oriState={oriState} />
+          <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} />
         </div>
 
         {/* Price + RSI chart alongside the company profile, under the name bar */}
