@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { computeRankedRows, applyWeights } from "../lib/scoring.js";
-import { quickConviction } from "../lib/verdict.js";
 import { buildFitContext, computeFit } from "../lib/fitScore.js";
 import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
@@ -70,34 +69,6 @@ function loadRisk(user) {
   } catch {
     return DEFAULT_RISK;
   }
-}
-
-// Ori intangibles cache (per user). The screener lazily fetches Ori's review for
-// a handful of top names; persisting it means re-opening the screener, reloading
-// the tab, or nudging a filter doesn't re-hit the (Gemini-backed, rate-limited)
-// game-plan endpoint. TTL matches the server's 24h game-plan cache so we never
-// serve a value the server would have refreshed.
-const ORI_CACHE_TTL = 24 * 60 * 60 * 1000;
-function oriKey(user) {
-  return `screener_ori_v1:${user}`;
-}
-function loadOriCache(user) {
-  try {
-    const raw = JSON.parse(localStorage.getItem(oriKey(user)) || "{}");
-    const now = Date.now();
-    const out = {};
-    for (const [sym, v] of Object.entries(raw)) {
-      if (v && typeof v === "object" && now - (v._at || 0) < ORI_CACHE_TTL) out[sym] = v;
-    }
-    return out;
-  } catch {
-    return {};
-  }
-}
-function saveOriCache(user, data) {
-  try {
-    localStorage.setItem(oriKey(user), JSON.stringify(data));
-  } catch {}
 }
 
 // One-time migration: copy pre-multiuser keys to the current user's
@@ -402,7 +373,7 @@ export function applyFilters(all, f, pins) {
   });
 }
 
-export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false) {
+export function useScreener(currentUser, portfolioGoals = {}) {
   const user = currentUser || "default";
   // Run migration synchronously before any state init so loadPins/loadTabs
   // see the migrated values on first render.
@@ -532,113 +503,13 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false)
     );
   }, [filteredWeighted, convictionOverrides]);
 
-  // Lazy Ori intangibles for the *visible top* of the current list. Every review
-  // is a Gemini-backed game-plan call (rate-limited, shared with Ori chat), so
-  // this path is deliberately frugal:
-  //   • only a small handful of the highest-conviction leaders,
-  //   • Pro/admin only (free users get 402s — don't spend the quota or the burst),
-  //   • persisted per-user for 24h (matches the server cache) so reloads/filters
-  //     don't refetch,
-  //   • debounced so dragging Q/V/G sliders doesn't fire a sweep per frame,
-  //   • run through a tiny concurrency pool so we never burst dozens of parallel
-  //     calls at Gemini (which is what was tripping the "Ori is busy" overloads).
-  // The always-free durabilityProxy + data penalty remain the "close equivalent"
-  // for everything below the reviewed leaders.
-  const ORI_LEADER_COUNT = 12;      // how many top names get a real Ori review
-  const ORI_CONCURRENCY = 2;        // parallel game-plan calls in flight at once
-  const ORI_DEBOUNCE_MS = 800;      // settle slider/filter churn before sweeping
-  const [oriData, setOriData] = useState(() => loadOriCache(user));
-  const oriFetchedRef = useRef(new Set(Object.keys(oriData)));
-  // Persist the cache whenever it grows so the next session starts warm.
-  useEffect(() => { saveOriCache(user, oriData); }, [user, oriData]);
-  useEffect(() => {
-    if (!canUseOri) return;  // gate the spend on accounts that can actually use Ori
-    const leaders = [...filteredWeighted]
-      .filter(r => r.conviction != null && r.conviction >= 65)
-      .sort((a, b) => (b.conviction || 0) - (a.conviction || 0))
-      .slice(0, ORI_LEADER_COUNT)
-      .filter(r => !oriFetchedRef.current.has(r.symbol));
-    if (!leaders.length) return;
-
-    let cancelled = false;
-    const fetchOne = async (r) => {
-      const sym = r.symbol;
-      oriFetchedRef.current.add(sym);
-      try {
-        const payload = {
-          stats: {
-            price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
-            pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield,
-            roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
-            revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
-            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
-          },
-          verdict: {
-            conviction: r.conviction,
-            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
-          },
-        };
-        const res = await fetch(`/api/stocks/game-plan/${sym}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          const j = await res.json();
-          if (j.ori && !cancelled) {
-            setOriData(prev => ({ ...prev, [sym]: { ...j.ori, _at: Date.now() } }));
-          }
-        } else if (res.status === 503 || res.status === 429) {
-          // Transient overload / throttle — let a later sweep retry this name
-          // instead of permanently marking it fetched.
-          oriFetchedRef.current.delete(sym);
-        }
-      } catch {
-        oriFetchedRef.current.delete(sym);
-      }
-    };
-
-    // Debounce, then drain the leader queue through a fixed-size worker pool.
-    const timer = setTimeout(() => {
-      const queue = [...leaders];
-      const worker = async () => {
-        while (!cancelled && queue.length) {
-          await fetchOne(queue.shift());
-        }
-      };
-      for (let i = 0; i < Math.min(ORI_CONCURRENCY, queue.length); i++) worker();
-    }, ORI_DEBOUNCE_MS);
-
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [filteredWeighted, canUseOri, user]);  // leaders recomputed from the latest list; oriFetchedRef dedupes
-
-  // Fold any lazily-fetched Ori review into the displayed conviction. Two rules:
-  //
-  //   1. A Deep Research override is the CANONICAL, "true" number for its symbol
-  //      and wins untouched — DR already folded Ori in (via mergeOriIntoVerdict),
-  //      so re-touching it would double-count. We only attach `ori` for the ✧
-  //      badge/tooltip.
-  //   2. Other reviewed leaders are recomputed THROUGH the shared quickConviction
-  //      with the cached Ori attached, so the cached intangibles score feeds the
-  //      Intangibles pillar (and Ori's ±20 nudge applies) exactly the way Deep
-  //      Research's computeVerdict does on open — instead of the old ad-hoc
-  //      base+delta, which diverged from DR. We re-apply the same data-coverage
-  //      penalty applyWeights used, so the methodology matches the lean number.
-  //
-  // No extra Gemini cost: oriData is the already-fetched, server-cached game-plan.
-  const withOri = useMemo(() => {
-    if (!Object.keys(oriData).length) return filtered;
-    return filtered.map(r => {
-      const o = oriData[r.symbol];
-      if (!o) return r;
-      if (convictionOverrides[r.symbol] != null) return { ...r, ori: o };
-      const fit = fitMap ? fitMap[r.symbol] || null : null;
-      const lean = quickConviction({ ...r, ori: o }, fit, risk);
-      if (lean == null) return { ...r, ori: o };
-      const adj = Math.max(0, lean - (r.dataCoveragePenalty || 0));
-      return { ...r, conviction: adj, ori: o };
-    });
-  }, [filtered, oriData, convictionOverrides, fitMap, risk]);
+  // NOTE: the screener no longer proactively generates Ori intangibles for the
+  // top-conviction leaders. That batch of game-plan (Gemini) calls shared the
+  // chat key/quota and kept tripping "Ori is busy" overloads. Cached reviews are
+  // still surfaced for free: server-side, db.js attaches a fresh `row.ori` from
+  // the gameplan cache, and applyWeights()/quickConviction() already fold that
+  // cached intangibles score into Conviction (+ the ✧ badge). New reviews are now
+  // generated only on demand when a user opens a stock's Deep Research Game Plan.
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
@@ -1187,7 +1058,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false)
 
   return {
     stocks,
-    filtered: withOri,  // includes lazy Ori deltas for top leaders (real intangibles exposure without 20k calls)
+    filtered,  // post-filter/post-weight rows; cached Ori reviews are already folded in server-side
     // Filtered set BEFORE weighting (stable when only the Q/V/G sliders move) — the
     // table uses it for the heatmap so dragging weights doesn't recompute it.
     filteredRows,

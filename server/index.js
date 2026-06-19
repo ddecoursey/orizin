@@ -13,7 +13,7 @@ import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
 import brokerageRouter from './routes/brokerage.js';
 import billingRouter from './routes/billing.js';
-import { sendEmail, welcomeEmail, resetPasswordEmail } from './email.js';
+import { sendEmail, welcomeEmail, resetPasswordEmail, deletedAccountEmail } from './email.js';
 import * as db from './db.js';
 import * as paypal from './paypal.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
@@ -577,7 +577,12 @@ app.delete('/api/users/me', async (req, res) => {
     try { await paypal.cancelSubscription(user.paypal_subscription_id); }
     catch (e) { console.error('[account] subscription cancel on delete failed:', e.message); }
   }
+  // Capture the address BEFORE the row is gone, then confirm the deletion by
+  // email (fire-and-forget; no-op if email isn't configured).
+  const to = user.email && EMAIL_RE.test(user.email) ? user.email
+    : EMAIL_RE.test(user.username) ? user.username : null;
   db.deleteUserCascade(username);
+  if (to) sendEmail({ to, ...deletedAccountEmail() }).catch(() => {});
   res.set('Set-Cookie', buildCookie(COOKIE_NAME, '', { maxAgeMs: 0, secure: req.secure }));
   res.json({ ok: true });
 });

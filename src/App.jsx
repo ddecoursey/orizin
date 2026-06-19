@@ -373,7 +373,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     loadProgress,
     addTicker,
     cancelOperation,
-  } = useScreener(currentUser, portfolioGoals, canUseOri);
+  } = useScreener(currentUser, portfolioGoals);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.

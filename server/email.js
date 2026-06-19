@@ -124,3 +124,15 @@ export function cancelEmail(proUntilMs) {
     html: wrap(`<p>${line}</p><p>You can resubscribe anytime from the app. We'd love to have you back.</p>`),
   };
 }
+
+export function deletedAccountEmail() {
+  return {
+    subject: 'Your Orizin account was deleted',
+    text: "Your Orizin account and all associated data have been permanently deleted, and any active subscription was cancelled so you won't be billed again. We're sorry to see you go — you can create a new account anytime.",
+    html: wrap(
+      `<p>Your Orizin account and all associated data have been <strong>permanently deleted</strong>.</p>
+       <p>Any active subscription was cancelled, so you won't be billed again. We're sorry to see you go — you're welcome back anytime.</p>
+       <p style="font-size:12px;color:#888">If you didn't request this, contact us right away at support@orizin.app.</p>`,
+    ),
+  };
+}

@@ -13,11 +13,12 @@ const REQUEST_TIMEOUT_MS = 30000; // don't let a hung LLM call tie up the reques
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const backoff = (attempt) => 500 * 2 ** attempt + Math.random() * 250;
 
-// Cap concurrent structured (game-plan / intangibles) Gemini calls. The screener
-// asks for a batch of these at once; without a ceiling they fan out into dozens
-// of simultaneous requests that trip 429/503 "overloaded" — and, because chat
-// shares the same key + quota, that also makes interactive Ori "too busy". This
-// gate keeps the batch path to a trickle so the streaming chat path stays clear.
+// Cap concurrent structured (game-plan / intangibles) Gemini calls. These are now
+// generated on demand (a user opening a Deep Research Game Plan), but several can
+// still land at once across users; without a ceiling they fan out into many
+// simultaneous requests that trip 429/503 "overloaded" — and, because chat shares
+// the same key + quota, that also makes interactive Ori "too busy". This gate
+// keeps the structured path to a trickle so the streaming chat path stays clear.
 // A waiter inherits the releasing call's slot, so `active` never exceeds the cap.
 const MAX_CONCURRENT = 2;
 let active = 0;
