@@ -94,6 +94,23 @@ export function subscriptionEmail() {
   };
 }
 
+function linkButton(url, label) {
+  return `<p style="margin:24px 0"><a href="${url}" style="background:#4f46e5;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none;font-weight:600">${label}</a></p>
+    <p style="font-size:12px;color:#888;word-break:break-all">Or paste this link into your browser: ${url}</p>`;
+}
+
+export function resetPasswordEmail(resetUrl) {
+  return {
+    subject: 'Reset your Orizin password',
+    text: `We received a request to reset your Orizin password. Use this link (valid for 1 hour, single use): ${resetUrl}\n\nIf you didn't request this, you can safely ignore this email — your password won't change.`,
+    html: wrap(
+      `<p>We received a request to reset your Orizin password.</p>
+       ${linkButton(resetUrl, 'Reset password')}
+       <p style="font-size:13px;color:#666">This link is valid for <strong>1 hour</strong> and can be used once. If you didn't request a reset, you can safely ignore this email — your password won't change.</p>`,
+    ),
+  };
+}
+
 export function cancelEmail(proUntilMs) {
   const until = proUntilMs ? new Date(proUntilMs).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : null;
   const line = until

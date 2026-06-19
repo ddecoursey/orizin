@@ -16,6 +16,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
   const [confirm, setConfirm] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Reset to the caller's requested mode each time the dialog opens, then let
@@ -47,6 +48,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
   function switchMode(next) {
     setMode(next);
     setError(null);
+    setNotice(null);
     setPassword("");
     setConfirm("");
   }
@@ -54,6 +56,25 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
+
+    // Forgot password: request a reset link. The server always responds the same
+    // way (account or not), so we just show that generic confirmation.
+    if (mode === "forgot") {
+      setSubmitting(true);
+      try {
+        const res = await fetch("/api/auth/forgot-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: user }),
+        });
+        const data = await res.json().catch(() => ({}));
+        setNotice(data.message || "If an account exists for that email, a reset link is on its way.");
+      } catch {
+        setNotice("If an account exists for that email, a reset link is on its way.");
+      }
+      setSubmitting(false);
+      return;
+    }
 
     if (mode === "signup") {
       if (password !== confirm) return setError("Passwords don't match");
@@ -87,12 +108,14 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
   const heading =
     mode === "setup" ? "Create the first admin account"
     : mode === "signup" ? "Create your free account"
+    : mode === "forgot" ? "Reset your password"
     : "Welcome back";
 
   const submitLabel = submitting
-    ? "One moment…"
+    ? (mode === "forgot" ? "Sending…" : "One moment…")
     : mode === "setup" ? "Create admin account"
     : mode === "signup" ? "Create free account"
+    : mode === "forgot" ? "Send reset link"
     : "Sign in";
 
   const inputCls =
@@ -145,25 +168,28 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
                 ? "No users exist yet — this account becomes the administrator."
                 : mode === "signup"
                 ? "Free forever: full screener, Deep Research & portfolio tools. Upgrade anytime to unlock Ori."
+                : mode === "forgot"
+                ? "Enter your account email and we'll send you a link to reset your password."
                 : "Sign in with your username or email."}
             </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
-                  {mode === "signup" ? "Email" : mode === "setup" ? "Username" : "Username or email"}
+                  {mode === "signup" || mode === "forgot" ? "Email" : mode === "setup" ? "Username" : "Username or email"}
                 </label>
                 <input
-                  type={mode === "signup" ? "email" : "text"}
+                  type={mode === "signup" || mode === "forgot" ? "email" : "text"}
                   value={user}
                   onChange={(e) => setUser(e.target.value)}
                   autoFocus
-                  autoComplete={mode === "signup" ? "email" : "username"}
+                  autoComplete={mode === "signup" || mode === "forgot" ? "email" : "username"}
                   className={inputCls}
                   placeholder={mode === "setup" ? "admin" : "you@example.com"}
                 />
               </div>
 
+              {mode !== "forgot" && (
               <div>
                 <label className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
                   Password
@@ -197,6 +223,19 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
                   </button>
                 </div>
               </div>
+              )}
+
+              {mode === "login" && (
+                <div className="-mt-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => switchMode("forgot")}
+                    className="text-xs text-gray-500 hover:text-blue-300 transition-colors duration-150"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              )}
 
               {mode === "signup" && (
                 <div>
@@ -220,9 +259,15 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
                 </div>
               )}
 
+              {notice && (
+                <div className="text-xs text-emerald-300 bg-emerald-950/40 border border-emerald-900/60 rounded-lg px-3 py-2" role="status">
+                  {notice}
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={submitting || !user || !password || (mode === "signup" && !confirm)}
+                disabled={submitting || !user || (mode !== "forgot" && !password) || (mode === "signup" && !confirm)}
                 className="w-full px-4 py-2.5 rounded-lg text-sm font-semibold text-white cursor-pointer
                   bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110
                   disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200
@@ -245,6 +290,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
                 Already have an account?{" "}
                 <button onClick={() => switchMode("login")} className="text-blue-400 hover:text-blue-300 font-medium transition-colors duration-150">
                   Sign in
+                </button>
+              </p>
+            )}
+            {mode === "forgot" && (
+              <p className="text-center text-xs text-gray-500 mt-4">
+                <button onClick={() => switchMode("login")} className="text-blue-400 hover:text-blue-300 font-medium transition-colors duration-150">
+                  ← Back to sign in
                 </button>
               </p>
             )}

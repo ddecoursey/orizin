@@ -210,6 +210,41 @@ test('change-password verifies the current password', async () => {
   assert.equal(relogin.status, 200);
 });
 
+test('forgot-password is generic (no account enumeration); reset-password rejects a bad token', async () => {
+  // Unknown email still returns the same generic 200 — can't probe who's registered.
+  const unknown = await fetch(api('/api/auth/forgot-password'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'nobody-here@example.com' }),
+  });
+  assert.equal(unknown.status, 200);
+  assert.equal((await json(unknown)).ok, true);
+
+  // A real account: also generic 200 (the token is emailed, not returned).
+  const known = await fetch(api('/api/auth/forgot-password'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'viewer' }),
+  });
+  assert.equal(known.status, 200);
+
+  // A bogus token can't reset anyone's password.
+  const bad = await fetch(api('/api/auth/reset-password'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ u: 'viewer', token: 'not-a-real-token', password: 'whateverA1z' }),
+  });
+  assert.equal(bad.status, 400);
+
+  // Too-short passwords are rejected before any token work.
+  const short = await fetch(api('/api/auth/reset-password'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ u: 'viewer', token: 'x', password: 'short' }),
+  });
+  assert.equal(short.status, 400);
+});
+
 // ── Per-user settings ───────────────────────────────────────────────────────
 
 test('settings are stored per user and shallow-merged', async () => {

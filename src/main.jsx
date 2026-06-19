@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import DebugErrorLog from './pages/DebugErrorLog.jsx'
+import ResetPasswordPage from './pages/ResetPasswordPage.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 
 // ── Client-side error reporting to the /debug page ─────────────────────────
@@ -81,6 +82,14 @@ if (window.location.pathname === '/debug') {
     <StrictMode>
       <ErrorBoundary>
         <DebugErrorLog />
+      </ErrorBoundary>
+    </StrictMode>
+  );
+} else if (window.location.pathname === '/reset') {
+  root.render(
+    <StrictMode>
+      <ErrorBoundary>
+        <ResetPasswordPage />
       </ErrorBoundary>
     </StrictMode>
   );

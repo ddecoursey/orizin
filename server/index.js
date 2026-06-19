@@ -13,7 +13,7 @@ import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
 import brokerageRouter from './routes/brokerage.js';
 import billingRouter from './routes/billing.js';
-import { sendEmail, welcomeEmail } from './email.js';
+import { sendEmail, welcomeEmail, resetPasswordEmail } from './email.js';
 import * as db from './db.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
@@ -357,6 +357,77 @@ app.post('/api/auth/signup', loginLimiter, (req, res) => {
     secure: req.secure,
   }));
   res.json({ ok: true, user: email, isAdmin: false, plan: 'free' });
+});
+
+// ── Password reset ───────────────────────────────────────────────────────────
+// sha256 of a reset token — we email the raw token but only ever STORE this hash,
+// so a DB leak can't be turned into account takeovers.
+function hashToken(tok) {
+  return crypto.createHash('sha256').update(String(tok)).digest('hex');
+}
+// Absolute URL for links in emails. Prefer the configured public origin
+// (APP_URL) so links are correct behind proxies; fall back to the request host.
+function publicUrl(req, pathAndQuery) {
+  const base = (process.env.APP_URL || '').replace(/\/+$/, '') ||
+    `${req.protocol}://${req.get('host')}`;
+  return `${base}${pathAndQuery}`;
+}
+
+// Request a reset link. Always returns the SAME generic response whether or not
+// the account exists, so this endpoint can't be used to enumerate registered
+// emails. Rate-limited (loginLimiter).
+app.post('/api/auth/forgot-password', loginLimiter, (req, res) => {
+  const id = String(req.body?.email || '').trim().toLowerCase();
+  const generic = { ok: true, message: 'If an account exists for that email, a reset link is on its way.' };
+  try {
+    const user = id ? (db.getUserByEmail(id) || db.getUserByUsername(id)) : null;
+    if (user) {
+      const to = user.email && EMAIL_RE.test(user.email) ? user.email
+        : EMAIL_RE.test(user.username) ? user.username : null;
+      if (to) {
+        const tok = crypto.randomBytes(32).toString('base64url');
+        db.setResetToken(user.username, hashToken(tok), Date.now() + 60 * 60 * 1000); // 1 hour
+        const url = publicUrl(req, `/reset?token=${tok}&u=${encodeURIComponent(user.username)}`);
+        sendEmail({ to, ...resetPasswordEmail(url) }).catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.error('[auth] forgot-password error:', e.message);
+  }
+  res.json(generic);
+});
+
+// Complete a reset with the emailed token. Validates the single-use, 1-hour,
+// constant-time-compared token, sets the new password (which clears the token),
+// then issues this device a fresh session cookie.
+// NOTE: main has no session-epoch revocation, so any OTHER existing sessions stay
+// valid until their 30-day TTL. Acceptable for a forgot-password flow (token is
+// single-use + short-lived); revisit if we add "log out everywhere".
+app.post('/api/auth/reset-password', loginLimiter, (req, res) => {
+  const username = String(req.body?.u || req.body?.user || '').trim();
+  const token = String(req.body?.token || '');
+  const newPassword = String(req.body?.password || '');
+  if (!username || !token) return res.status(400).json({ error: 'Invalid or missing reset token' });
+  if (newPassword.length < 8 || newPassword.length > 200) {
+    return res.status(400).json({ error: 'Password must be 8–200 characters' });
+  }
+
+  const user = db.getUserByUsername(username);
+  if (!user || !user.reset_token_hash || !user.reset_expires) {
+    return res.status(400).json({ error: 'This reset link is invalid or has expired' });
+  }
+  if (Date.now() > user.reset_expires) {
+    return res.status(400).json({ error: 'This reset link has expired — request a new one' });
+  }
+  if (!safeEqual(hashToken(token), user.reset_token_hash)) {
+    return res.status(400).json({ error: 'This reset link is invalid or has expired' });
+  }
+
+  db.setUserPassword(username, newPassword); // hashes + clears the reset token
+
+  const fresh = signToken({ user: username, isAdmin: !!user.is_admin, exp: Date.now() + SESSION_MAX_AGE_MS });
+  res.set('Set-Cookie', buildCookie(COOKIE_NAME, fresh, { maxAgeMs: SESSION_MAX_AGE_MS, secure: req.secure }));
+  res.json({ ok: true });
 });
 
 app.post('/api/auth/logout', (req, res) => {

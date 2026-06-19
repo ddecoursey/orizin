@@ -156,7 +156,9 @@ try {
     paypal_subscription_id TEXT,         -- PayPal Subscriptions API id (I-XXXXXXXX)
     subscription_status TEXT,            -- PayPal status: ACTIVE | CANCELLED | SUSPENDED | EXPIRED
     subscription_updated_at INTEGER,
-    pro_until INTEGER                    -- grace: Pro access stays until this time after cancellation
+    pro_until INTEGER,                   -- grace: Pro access stays until this time after cancellation
+    reset_token_hash TEXT,               -- sha256 of the active password-reset token (single-use)
+    reset_expires INTEGER                -- reset-token expiry (ms epoch)
   );
 
   -- Brokerage scaffolding: linked external accounts (Plaid-style) and order
@@ -292,6 +294,8 @@ try {
     ["subscription_status", "TEXT"],
     ["subscription_updated_at", "INTEGER"],
     ["pro_until", "INTEGER"],
+    ["reset_token_hash", "TEXT"],
+    ["reset_expires", "INTEGER"],
   ];
   for (const [name, type] of USER_COLS) {
     if (userCols.size > 0 && !userCols.has(name)) {
@@ -1074,6 +1078,25 @@ export function setUserPlan(username, plan) {
     .prepare('UPDATE users SET plan = ?, plan_updated_at = ? WHERE username = ?')
     .run(next, Date.now(), username);
   return info.changes > 0;
+}
+
+// ── Password reset ───────────────────────────────────────────────────────────
+// Store the sha256 hash of a single-use reset token + its expiry. We persist the
+// HASH, never the token itself, so a DB leak can't be used to reset passwords.
+export function setResetToken(username, tokenHash, expiresMs) {
+  return db
+    .prepare('UPDATE users SET reset_token_hash = ?, reset_expires = ? WHERE username = ?')
+    .run(tokenHash, expiresMs, username).changes > 0;
+}
+
+// Set a new password from a plaintext value and clear any pending reset token so
+// the link can't be replayed. (Existing session cookies remain valid until they
+// expire — main has no session-epoch revocation; see note in reset-password.)
+export function setUserPassword(username, plainPassword) {
+  const hash = bcrypt.hashSync(plainPassword, 10);
+  return db
+    .prepare('UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires = NULL WHERE username = ?')
+    .run(hash, username).changes > 0;
 }
 
 // ── PayPal subscription state → plan, with a post-cancellation grace period ───
