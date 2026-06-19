@@ -27,7 +27,7 @@ import {
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
 import { hasOriAccess } from "../access.js";
-import { geminiGenerateJson } from "../geminiJson.js";
+import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
 
 // Rate limiters for expensive operations (per user or IP)
 // Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
@@ -1199,12 +1199,21 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
         cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
         cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
       ]);
-      const raw = await geminiGenerateJson({
+      // Deep Research is the ONLY caller, so it gets the full ladder led by the
+      // frontier model. Because this whole block is cached 24h per symbol, the
+      // frontier model is hit at most once per stock per 24h. (It appears only on
+      // the primary key in the ladder, so a single generation never spends the
+      // scarce frontier quota twice.)
+      const { data: raw, model } = await geminiGenerateJson({
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
+        leadModel: frontierModel(),          // frontier once, primary key only
+        models: [valueModel(), liteModel()], // then value→lite on each key
       });
-      return sanitizeGamePlan(raw);
+      const sane = sanitizeGamePlan(raw);
+      if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
+      return sane;
     }, force);
     res.json({ symbol, ori: data });
   } catch (e) {

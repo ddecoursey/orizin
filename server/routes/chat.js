@@ -9,6 +9,7 @@ import {
   patchUserSettings,
 } from "../db.js";
 import { hasOriAccess } from "../access.js";
+import { geminiKeys, valueModel, liteModel, modelTier } from "../geminiJson.js";
 import { fmt } from "./prompt-helpers.js";
 import { marketStatusLine } from "../marketHours.js";
 
@@ -605,74 +606,59 @@ function summarizeFilters(f) {
 // exponential backoff + jitter and only give up (with a friendly message)
 // after several attempts. Retries happen before we stream any text to the
 // client, so the user never sees a partial answer get clobbered.
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:streamGenerateContent?alt=sse";
-const MAX_GEMINI_RETRIES = 3;
+// Model tiers + keys are shared with the structured path (geminiJson) so chat and
+// the Game Plan stay in lock-step. Chat walks the value→lite ladder — it never
+// touches the scarce frontier model, which is reserved for Deep Research.
+const streamUrl = (model) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-function backoffDelay(attempt) {
-  // 500ms, 1s, 2s (+ up to 250ms jitter)
-  return 500 * 2 ** attempt + Math.random() * 250;
-}
-
-function isOverloaded(status, bodyText) {
-  if (status === 429 || status === 503) return true;
-  if (status >= 500 && /unavailable|overloaded|try again/i.test(bodyText || ""))
-    return true;
+// "Move to the next model/key": rate-limited / overloaded (429/503/5xx) or a
+// model id this key can't serve (404) — so an unavailable model falls through.
+function shouldFailover(status, bodyText) {
+  if (status === 429 || status === 503 || status === 404) return true;
+  if (status >= 500 && /unavailable|overloaded|try again/i.test(bodyText || "")) return true;
   return false;
 }
 
-// Resolves to { res } on success, or { friendly, status, body } when the call
-// ultimately failed (friendly=true means it was an overload we should phrase nicely).
-async function fetchGeminiWithRetry({ apiKey, body, send }) {
+// Walk the (key, model) ladder: value→lite on the primary key, then value→lite on
+// the backup key, failing over on each "too busy"/unavailable response. Resolves
+// to { res, model } on success, or { friendly, status, body } when every combo
+// failed (friendly=true → an overload to phrase nicely).
+async function fetchGeminiWithRetry({ keys, body, send }) {
   let lastStatus = 0;
   let lastBody = "";
+  const models = [valueModel(), liteModel()];
 
-  for (let attempt = 0; attempt <= MAX_GEMINI_RETRIES; attempt++) {
-    let res;
-    try {
-      res = await fetch(GEMINI_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      // Network-level failure — treat as retryable.
-      lastStatus = 0;
-      lastBody = e?.message || String(e);
-      if (attempt < MAX_GEMINI_RETRIES) {
-        send("status", { message: "Ori is busy — retrying…" });
-        await sleep(backoffDelay(attempt));
+  for (const apiKey of keys) {
+    for (const model of models) {
+      let res;
+      try {
+        res = await fetch(streamUrl(model), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+          body: JSON.stringify(body),
+        });
+      } catch (e) {
+        // Network-level failure — try the next model/key.
+        lastStatus = 0;
+        lastBody = e?.message || String(e);
         continue;
       }
-      return { friendly: true, status: 0, body: lastBody };
+
+      if (res.ok) return { res, model };
+
+      lastBody = await res.text();
+      lastStatus = res.status;
+      if (shouldFailover(res.status, lastBody)) {
+        send("status", { message: "Ori is busy — trying another model…" });
+        continue;
+      }
+      // Hard, non-retryable error — stop and surface it.
+      return { friendly: false, status: lastStatus, body: lastBody };
     }
-
-    if (res.ok) return { res };
-
-    lastBody = await res.text();
-    lastStatus = res.status;
-
-    if (isOverloaded(res.status, lastBody) && attempt < MAX_GEMINI_RETRIES) {
-      send("status", { message: "Ori is busy — retrying…" });
-      await sleep(backoffDelay(attempt));
-      continue;
-    }
-
-    // Non-retryable error, or out of retries.
-    return {
-      friendly: isOverloaded(lastStatus, lastBody),
-      status: lastStatus,
-      body: lastBody,
-    };
   }
 
-  return {
-    friendly: isOverloaded(lastStatus, lastBody),
-    status: lastStatus,
-    body: lastBody,
-  };
+  return { friendly: true, status: lastStatus, body: lastBody };
 }
 
 // ── POST /api/chat ─────────────────────────────────────────────────────────
@@ -691,8 +677,8 @@ router.post("/chat", chatLimiter, async (req, res) => {
     });
   }
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === "your_gemini_api_key_here") {
+  const keys = geminiKeys();
+  if (!keys.length) {
     return res.status(503).json({
       error:
         "GEMINI_API_KEY not configured. Add your Gemini API key to .env to enable AI chat.",
@@ -730,9 +716,9 @@ router.post("/chat", chatLimiter, async (req, res) => {
       parts: [{ text: m.content }],
     }));
 
-    const { res: geminiRes, friendly, status, body: errBody } =
+    const { res: geminiRes, model: usedModel, friendly, status, body: errBody } =
       await fetchGeminiWithRetry({
-        apiKey,
+        keys,
         body: {
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: geminiContents,
@@ -750,6 +736,9 @@ router.post("/chat", chatLimiter, async (req, res) => {
       res.end();
       return;
     }
+
+    // Tell the client which model answered (for the "generated by" label).
+    send("model", { model: usedModel, tier: modelTier(usedModel) });
 
     const reader = geminiRes.body.getReader();
     const decoder = new TextDecoder();
