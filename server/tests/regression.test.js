@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 
 import { marketSession } from '../marketHours.js';
 
@@ -374,10 +375,18 @@ test('GET /api/stocks/:symbol 404s for unknown symbols', async () => {
 test('GET /api/status reports counts; key flags are admin-only', async () => {
   const body = await json(await fetch(api('/api/status'), { headers: { cookie: userCookie } }));
   assert.equal(body.stockCount, 0);
+  assert.equal(body.enrichedCount, 0);
   assert.equal(body.apiKeySet, undefined);
   assert.equal(body.chatKeySet, undefined);
   assert.ok(body.dataSync);
   assert.equal(typeof body.dataSync.backgroundRunning, 'boolean');
+  assert.ok(['open', 'pre', 'after', 'closed'].includes(body.dataSync.marketSession));
+  assert.ok(
+    body.dataSync.lastSymbol === null || typeof body.dataSync.lastSymbol === 'string',
+  );
+  assert.ok(
+    body.dataSync.lastUpdate === null || typeof body.dataSync.lastUpdate === 'number',
+  );
 
   const adminBody = await json(await fetch(api('/api/status'), { headers: { cookie: adminCookie } }));
   assert.equal(adminBody.apiKeySet, false);
@@ -400,6 +409,61 @@ test('settings accept watchlists and activeWatchlistId', async () => {
   assert.deepEqual(merged.data.watchlists[0].symbols, ['AAPL', 'MSFT']);
 });
 
+test('settings sanitize watchlists: dedupe, uppercase, list and symbol caps', async () => {
+  const email = `wl_sanitize_${Date.now()}@example.com`;
+  const isoCookie = cookieFrom(await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  }));
+
+  const manySymbols = Array.from({ length: 210 }, (_, i) => `sym${i}`);
+  // Server rejects the whole watchlists key when length > 12 — stay at the cap.
+  const extraLists = Array.from({ length: 10 }, (_, i) => ({
+    id: `wl_${i}`,
+    name: 'x'.repeat(40),
+    symbols: ['aapl', 'aapl', ' msft '],
+    updatedAt: 1,
+  }));
+
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: isoCookie },
+    body: JSON.stringify({
+      watchlists: [
+        { id: 'default', name: 'Primary', symbols: manySymbols, updatedAt: 1 },
+        ...extraLists,
+        { id: '', name: 'Bad', symbols: ['ZZZ'] },
+      ],
+      activeWatchlistId: 'default',
+    }),
+  });
+  assert.equal(put.status, 200);
+
+  const merged = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
+  assert.equal(merged.data.watchlists.length, 11);
+  assert.equal(merged.data.watchlists[0].symbols.length, 200);
+  assert.equal(merged.data.watchlists[0].symbols[0], 'SYM0');
+  assert.deepEqual(merged.data.watchlists[1].symbols, ['AAPL', 'MSFT']);
+  assert.equal(merged.data.watchlists[1].name.length, 28);
+
+  const overCap = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: isoCookie },
+    body: JSON.stringify({
+      watchlists: Array.from({ length: 13 }, (_, i) => ({
+        id: `too_many_${i}`,
+        name: `List ${i}`,
+        symbols: [],
+        updatedAt: 1,
+      })),
+    }),
+  });
+  assert.equal(overCap.status, 200);
+  const afterOverCap = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
+  assert.equal(afterOverCap.data.watchlists.length, 11);
+});
+
 test('refresh and enrich are admin-only', async () => {
   for (const p of ['/api/stocks/refresh', '/api/stocks/enrich']) {
     const res = await fetch(api(p), {
@@ -411,6 +475,41 @@ test('refresh and enrich are admin-only', async () => {
     const body = await json(res);
     assert.ok(body.error);
   }
+});
+
+test('admin enrich reaches SSE handler (not blocked with 403)', async () => {
+  const res = await fetch(api('/api/stocks/enrich'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({}),
+  });
+  assert.notEqual(res.status, 403);
+  const text = await res.text();
+  assert.ok(text.includes('"type":"done"'));
+});
+
+test('GET /api/stocks/estimates/:symbol returns cached forward estimates', async () => {
+  const missing = await json(
+    await fetch(api('/api/stocks/estimates/NOPE'), { headers: { cookie: userCookie } }),
+  );
+  assert.equal(missing.estimates, null);
+  assert.equal(missing.updated_at, null);
+
+  const estimates = [
+    { date: '2026-12-31', estimatedRevenueAvg: 400e9, estimatedEpsAvg: 7.1 },
+  ];
+  const updatedAt = Date.now();
+  const db = new Database(path.join(tmpDir, 'screener.db'));
+  db.prepare(
+    `INSERT INTO ai_enrichment (symbol, estimates_json, updated_at) VALUES (?, ?, ?)`,
+  ).run('AAPL', JSON.stringify(estimates), updatedAt);
+  db.close();
+
+  const cached = await json(
+    await fetch(api('/api/stocks/estimates/aapl'), { headers: { cookie: userCookie } }),
+  );
+  assert.deepEqual(cached.estimates, estimates);
+  assert.equal(cached.updated_at, updatedAt);
 });
 
 test('sparkline endpoint degrades cleanly without an FMP key', async () => {

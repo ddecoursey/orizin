@@ -28,6 +28,7 @@ import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 import { computeFit } from "./lib/fitScore.js";
 import { computeVerdict } from "./lib/verdict.js";
+import { applyWatchlistFilter } from "./lib/screenerDisplay.js";
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -420,11 +421,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
   const watchlists = useWatchlists(currentUser, { tabs });
 
-  const displayedFiltered = useMemo(() => {
-    if (!filters.pinnedOnly) return filtered;
-    const set = watchlists.activeSymbols.size ? watchlists.activeSymbols : pins;
-    return filtered.filter((r) => set.has(r.symbol));
-  }, [filtered, filters.pinnedOnly, watchlists.activeSymbols, pins]);
+  const displayedFiltered = useMemo(
+    () => applyWatchlistFilter(filtered, filters.pinnedOnly, watchlists.activeSymbols, pins),
+    [filtered, filters.pinnedOnly, watchlists.activeSymbols, pins],
+  );
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.

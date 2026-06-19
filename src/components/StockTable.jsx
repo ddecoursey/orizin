@@ -6,6 +6,7 @@ import Sparkline from "./Sparkline";
 import { IconSearch } from "./icons.jsx";
 import Tooltip from "./Tooltip.jsx";
 import OriTip from "./OriTip.jsx";
+import { resolveSortField, tierColumnDefs } from "../lib/screenerDisplay.js";
 
 const GOOD_H = new Set([
   "gross_margin",
@@ -161,13 +162,6 @@ const COL_WIDTHS = {
   div_yield: "58px",
 };
 
-function displayCols(canUseOri) {
-  if (canUseOri) return COLS;
-  return COLS.map((c) =>
-    c.key === "conviction" ? { ...c, key: "orizin", label: "Orizin" } : c,
-  );
-}
-
 export default function StockTable({
   rows,
   heatRows = rows,
@@ -185,7 +179,7 @@ export default function StockTable({
   sortDir = -1,
   onSortChange,
 }) {
-  const cols = useMemo(() => displayCols(canUseOri), [canUseOri]);
+  const cols = useMemo(() => tierColumnDefs(COLS, canUseOri), [canUseOri]);
   const starSet = watchlistSymbols?.size ? watchlistSymbols : pins;
   const onToggleStar = onToggleWatchlist || onTogglePin;
   // symbol -> number[]. localStorage hydration happens lazily per symbol inside
@@ -337,7 +331,7 @@ export default function StockTable({
 
   const sorted = useMemo(() => {
     const pinnedSet = starSet;
-    const sortField = sortKey === "orizin" ? "score" : sortKey;
+    const sortField = resolveSortField(sortKey);
     return [...rows].sort((a, b) => {
       const ap = pinnedSet.has(a.symbol),
         bp = pinnedSet.has(b.symbol);

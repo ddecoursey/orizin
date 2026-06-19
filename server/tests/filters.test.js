@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { applyFilters, DEFAULT_FILTERS } from '../../src/hooks/useScreener.js';
+import { applyWatchlistFilter } from '../../src/lib/screenerDisplay.js';
 
 const ROWS = [
   { symbol: 'AAA', name: 'Alpha', pe: 10, mcap: 5e9, price: 50, beta: 0.9, gross_margin: 0.55, roic: 0.18, volume: 2e6 },
@@ -72,4 +73,16 @@ test('search and pinnedOnly still behave', () => {
   assert.deepEqual(syms(search), ['AAA']);
   const pinned = applyFilters(ROWS, f({ pinnedOnly: true }), new Set(['BBB']));
   assert.deepEqual(syms(pinned), ['BBB']);
+});
+
+test('watchlist-only filter prefers active watchlist over legacy tab pins', () => {
+  const base = applyFilters(ROWS, f({}), NO_PINS);
+  const wlOnly = applyWatchlistFilter(base, true, new Set(['AAA']), new Set(['BBB']));
+  assert.deepEqual(syms(wlOnly), ['AAA']);
+});
+
+test('watchlist-only filter falls back to tab pins when watchlist is empty', () => {
+  const base = applyFilters(ROWS, f({}), NO_PINS);
+  const pinOnly = applyWatchlistFilter(base, true, new Set(), new Set(['BBB']));
+  assert.deepEqual(syms(pinOnly), ['BBB']);
 });
