@@ -1087,9 +1087,18 @@ export function createUser(username, password, isAdmin = false, email = null, pl
   }
 }
 
-// Accepts a username OR an email as the identifier.
+const getUserByUsernameCiStmt = db.prepare(`
+  SELECT * FROM users WHERE username = ? COLLATE NOCASE
+`);
+
+// Accepts a username OR an email as the identifier (trimmed; username is case-insensitive).
 export function verifyUserPassword(identifier, password) {
-  const user = getUserByUsername(identifier) || getUserByEmail(identifier);
+  const id = String(identifier || '').trim();
+  if (!id) return null;
+  const user =
+    getUserByUsername(id) ||
+    getUserByUsernameCiStmt.get(id) ||
+    getUserByEmail(id);
   if (!user) return null;
   const valid = bcrypt.compareSync(password, user.password_hash);
   return valid

@@ -282,7 +282,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   const currentlyAuthEnabled = isAuthEnabled();
   if (!currentlyAuthEnabled) return res.json({ ok: true, user: 'default', authEnabled: false });
 
-  const username = String(req.body?.user || '');
+  const username = String(req.body?.user || '').trim();
   const password = String(req.body?.password || '');
 
   let match = null;

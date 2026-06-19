@@ -8,7 +8,9 @@
   },
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:all": "node server/index.js & vite --host 0.0.0.0",
     "server": "node server/index.js",
+    "reset-password": "node scripts/reset-password.mjs",
     "dev-server": "node --watch server/index.js",
     "start": "node server/index.js",
     "build": "vite build",

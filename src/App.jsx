@@ -64,17 +64,16 @@ export default function App() {
     // matches what the session cookie was issued for.
     try {
       const r = await fetch("/api/auth/me");
+      if (!r.ok) throw new Error("session not established");
       const data = await r.json();
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
       setPlan(data.plan === "pro" ? "pro" : "free");
       setAppEnv(data.env || "production");
+      setAuthState("authed");
     } catch {
-      setCurrentUser("default");
-      setIsAdmin(false);
-      setPlan("free");
+      setAuthState("login");
     }
-    setAuthState("authed");
   }
 
   // Re-read the session after a plan change (subscribe / cancel) so Pro unlocks
