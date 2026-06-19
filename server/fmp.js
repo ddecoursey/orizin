@@ -717,27 +717,47 @@ export async function fetchPriceTarget(symbol) {
   }
 }
 
-export async function fetchFinancialGrowth(symbol, opts = {}) {
-  const url = `${BASE}/financial-growth?symbol=${symbol}&limit=1&period=annual&apikey=${KEY()}`;
+function mapGrowthRow(d) {
+  return {
+    date: d.date ?? null,
+    fiscalYear: d.fiscalYear ?? d.calendarYear ?? null,
+    revenue_growth: n(d.revenueGrowth),
+    eps_growth: n(d.epsgrowth ?? d.epsGrowth),
+    fcf_growth: n(d.freeCashFlowGrowth),
+    op_income_growth: n(d.operatingIncomeGrowth),
+    net_income_growth: n(d.netIncomeGrowth),
+    gross_profit_growth: n(d.grossProfitGrowth),
+  };
+}
+
+// Single FMP pull for financial-growth; higher limits subsume limit=1 TTM fields.
+export async function fetchFinancialGrowthRows(symbol, { limit = 6 } = {}, opts = {}) {
+  const url = `${BASE}/financial-growth?symbol=${symbol}&period=annual&limit=${limit}&apikey=${KEY()}`;
   try {
-    const data = await fetchWithRetry(url, opts.maxRetries ?? 6, opts.timeoutMs ?? 15000);
-    const d = Array.isArray(data) ? data[0] : data;
-    if (!d) return null;
-    return {
-      revenue_growth: n(d.revenueGrowth),
-      net_income_growth: n(d.netIncomeGrowth),
-      eps_growth: n(d.epsgrowth),
-      fcf_growth: n(d.freeCashFlowGrowth),
-      op_income_growth: n(d.operatingIncomeGrowth),
-      gross_profit_growth: n(d.grossProfitGrowth),
-    };
+    const data = await fetchWithRetry(url, opts.maxRetries ?? 2, opts.timeoutMs ?? 12000);
+    if (!Array.isArray(data)) return [];
+    return data.map(mapGrowthRow);
   } catch (e) {
     console.warn(`[FMP] financial-growth ${symbol}:`, e.message);
     if (!e.message?.includes('429')) {
       logError(`[FMP] financial-growth ${symbol}: ${e.message}`, { symbol, endpoint: 'financial-growth' });
     }
-    return null;
+    return [];
   }
+}
+
+export async function fetchFinancialGrowth(symbol, opts = {}) {
+  const rows = await fetchFinancialGrowthRows(symbol, { limit: 1 }, opts);
+  const d = rows[0];
+  if (!d) return null;
+  return {
+    revenue_growth: d.revenue_growth,
+    net_income_growth: d.net_income_growth,
+    eps_growth: d.eps_growth,
+    fcf_growth: d.fcf_growth,
+    op_income_growth: d.op_income_growth,
+    gross_profit_growth: d.gross_profit_growth,
+  };
 }
 
 // Lightweight historical EOD prices for sparklines
@@ -870,24 +890,29 @@ export async function fetchCongressTrades(chamber, symbol, { limit = 80 } = {}) 
   }
 }
 
-// Insider (Form 4) trades for a symbol.
-export async function fetchInsiderBySymbol(symbol, { limit = 80 } = {}) {
+// Shared insider-trading/search fetch — one call serves both route formats.
+async function fetchInsiderRaw(symbol, { limit = 80 } = {}) {
   const url = `${BASE}/insider-trading/search?symbol=${encodeURIComponent(symbol)}&page=0&limit=${limit}&apikey=${KEY()}`;
   try {
     const data = await fetchWithRetry(url, 2, 12000);
-    if (!Array.isArray(data)) return [];
-    return data.map((d) => ({
-      transactionDate: typeof d.transactionDate === "string" ? d.transactionDate.split(" ")[0] : d.transactionDate,
-      name: d.reportingName || "—",
-      role: d.typeOfOwner || null,
-      transactionType: d.transactionType || null,
-      shares: n(d.securitiesTransacted),
-      price: n(d.price),
-    }));
+    return Array.isArray(data) ? data : [];
   } catch (e) {
     console.warn(`[FMP] insider ${symbol}:`, e.message);
     return [];
   }
+}
+
+// Insider (Form 4) trades for a symbol — smart-money rollup format.
+export async function fetchInsiderBySymbol(symbol, { limit = 80 } = {}) {
+  const data = await fetchInsiderRaw(symbol, { limit });
+  return data.map((d) => ({
+    transactionDate: typeof d.transactionDate === "string" ? d.transactionDate.split(" ")[0] : d.transactionDate,
+    name: d.reportingName || "—",
+    role: d.typeOfOwner || null,
+    transactionType: d.transactionType || null,
+    shares: n(d.securitiesTransacted),
+    price: n(d.price),
+  }));
 }
 
 // Ratings snapshot: letter grade + 1–5 sub-scores across key ratios.
@@ -1172,47 +1197,23 @@ export async function fetchStockPeers(symbol) {
 
 // Multi-year growth rates (revenue / EPS / FCF / op income), newest first.
 export async function fetchGrowthHistory(symbol, { limit = 6 } = {}) {
-  const url = `${BASE}/financial-growth?symbol=${symbol}&period=annual&limit=${limit}&apikey=${KEY()}`;
-  try {
-    const data = await fetchWithRetry(url, 2, 12000);
-    if (!Array.isArray(data)) return [];
-    return data.map((d) => ({
-      date: d.date ?? null,
-      fiscalYear: d.fiscalYear ?? d.calendarYear ?? null,
-      revenue_growth: n(d.revenueGrowth),
-      eps_growth: n(d.epsgrowth ?? d.epsGrowth),
-      fcf_growth: n(d.freeCashFlowGrowth),
-      op_income_growth: n(d.operatingIncomeGrowth),
-      net_income_growth: n(d.netIncomeGrowth),
-    }));
-  } catch (e) {
-    console.warn(`[FMP] growth-history ${symbol}:`, e.message);
-    return [];
-  }
+  return fetchFinancialGrowthRows(symbol, { limit });
 }
 
 // Insider trading activity for a symbol (Form 4 buys/sells by executives/directors).
 export async function fetchInsiderTrades(symbol, { limit = 40 } = {}) {
-  const url = `${BASE}/insider-trading/search?symbol=${symbol}&page=0&limit=${limit}&apikey=${KEY()}`;
-  try {
-    const data = await fetchWithRetry(url, 3, 12000);
-    if (!Array.isArray(data)) return [];
-    return data.map((t) => ({
-      filingDate: t.filingDate ?? null,
-      transactionDate: t.transactionDate ?? null,
-      reportingName: t.reportingName ?? null,
-      typeOfOwner: t.typeOfOwner ?? null,
-      transactionType: t.transactionType ?? null,
-      // 'A' = acquisition (buy), 'D' = disposition (sell)
-      acquisitionOrDisposition: t.acquisitionOrDisposition ?? null,
-      securitiesTransacted: n(t.securitiesTransacted),
-      price: n(t.price),
-      securitiesOwned: n(t.securitiesOwned),
-      securityName: t.securityName ?? null,
-      url: t.url ?? null,
-    }));
-  } catch (e) {
-    console.warn(`[FMP] insider-trading ${symbol}:`, e.message);
-    return [];
-  }
+  const data = await fetchInsiderRaw(symbol, { limit: Math.max(limit, 80) });
+  return data.slice(0, limit).map((t) => ({
+    filingDate: t.filingDate ?? null,
+    transactionDate: t.transactionDate ?? null,
+    reportingName: t.reportingName ?? null,
+    typeOfOwner: t.typeOfOwner ?? null,
+    transactionType: t.transactionType ?? null,
+    acquisitionOrDisposition: t.acquisitionOrDisposition ?? null,
+    securitiesTransacted: n(t.securitiesTransacted),
+    price: n(t.price),
+    securitiesOwned: n(t.securitiesOwned),
+    securityName: t.securityName ?? null,
+    url: t.url ?? null,
+  }));
 }

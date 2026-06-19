@@ -272,6 +272,66 @@ test('self-delete: the only admin is blocked; a normal user can delete their own
 
 // ── Per-user settings ───────────────────────────────────────────────────────
 
+test('settings reject unknown keys and oversized payloads', async () => {
+  // Use a dedicated user so a rejected payload cannot pollute later settings tests.
+  const email = `settings_${Date.now()}@example.com`;
+  const signup = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  });
+  const isoCookie = cookieFrom(signup);
+  const bad = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: isoCookie },
+    body: JSON.stringify({ hackerKey: 'nope', tabs: [] }),
+  });
+  assert.equal(bad.status, 200);
+  const afterBad = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
+  assert.equal(afterBad.data.hackerKey, undefined);
+
+  const huge = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: isoCookie },
+    body: JSON.stringify({ goals: ['x'.repeat(5000)] }),
+  });
+  assert.equal(huge.status, 400);
+});
+
+test('admin delete cascades user data so re-registration starts clean', async () => {
+  const email = `cascade_${Date.now()}@example.com`;
+  const signup = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  });
+  assert.equal(signup.status, 200);
+  const victimCookie = cookieFrom(signup);
+
+  await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: victimCookie },
+    body: JSON.stringify({ goals: ['keep me private'] }),
+  });
+
+  const del = await fetch(api(`/api/users/${encodeURIComponent(email)}`), {
+    method: 'DELETE',
+    headers: { cookie: adminCookie },
+  });
+  assert.equal(del.status, 200);
+
+  const signup2 = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'newpass2A!' }),
+  });
+  assert.equal(signup2.status, 200);
+  const freshCookie = cookieFrom(signup2);
+
+  const settings = await json(await fetch(api('/api/settings'), { headers: { cookie: freshCookie } }));
+  assert.equal(settings.data.goals, undefined);
+});
+
 test('settings are stored per user and shallow-merged', async () => {
   const empty = await json(await fetch(api('/api/settings'), { headers: { cookie: userCookie } }));
   assert.deepEqual(empty.data, {});
@@ -311,11 +371,15 @@ test('GET /api/stocks/:symbol 404s for unknown symbols', async () => {
   assert.equal(res.status, 404);
 });
 
-test('GET /api/status reports counts and key flags', async () => {
+test('GET /api/status reports counts; key flags are admin-only', async () => {
   const body = await json(await fetch(api('/api/status'), { headers: { cookie: userCookie } }));
   assert.equal(body.stockCount, 0);
-  assert.equal(body.apiKeySet, false);
-  assert.equal(body.chatKeySet, false);
+  assert.equal(body.apiKeySet, undefined);
+  assert.equal(body.chatKeySet, undefined);
+
+  const adminBody = await json(await fetch(api('/api/status'), { headers: { cookie: adminCookie } }));
+  assert.equal(adminBody.apiKeySet, false);
+  assert.equal(adminBody.chatKeySet, false);
 });
 
 test('refresh and enrich are admin-only', async () => {
@@ -400,6 +464,40 @@ test('Ori is gated behind the Pro plan (402 for free users, open after upgrade)'
     body: JSON.stringify({ plan: 'enterprise' }),
   });
   assert.equal(junk.status, 400);
+});
+
+test('screener lite intangibles endpoint is Pro-gated and validates the symbol', async () => {
+  // A fresh free signup is behind the paywall.
+  const email = `intang_${Date.now()}@example.com`;
+  const cookie = cookieFrom(await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  }));
+  const gated = await fetch(api('/api/stocks/intangibles/AAPL'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: '{}',
+  });
+  assert.equal(gated.status, 402);
+  assert.equal((await json(gated)).code, 'upgrade_required');
+
+  // Admin clears the paywall and reaches generation, which stops at the missing
+  // Gemini key (503) — proving the route is wired without needing a real LLM call.
+  const opened = await fetch(api('/api/stocks/intangibles/AAPL'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: '{}',
+  });
+  assert.equal(opened.status, 503);
+
+  // Invalid symbol is rejected before any work.
+  const bad = await fetch(api('/api/stocks/intangibles/way-too-long-symbol'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: '{}',
+  });
+  assert.equal(bad.status, 400);
 });
 
 test('chat sessions list is per user and empty initially', async () => {

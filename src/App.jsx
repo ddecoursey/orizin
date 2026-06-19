@@ -137,6 +137,12 @@ export default function App() {
   return <MainApp key={currentUser} currentUser={currentUser} isAdmin={isAdmin} plan={plan} appEnv={appEnv} onLogout={handleLogout} onAuthRefresh={refreshAuth} />;
 }
 
+function sanitizeTicker(sym) {
+  if (!sym || typeof sym !== "string") return null;
+  const s = sym.trim().toUpperCase();
+  return /^[A-Z0-9.-]{1,12}$/.test(s) ? s : null;
+}
+
 function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", onLogout, onAuthRefresh }) {
   // Ori access: Pro plan or admin. The server enforces this on /api/chat too —
   // this flag just drives the paywall UI.
@@ -186,16 +192,45 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // Portfolio & Goals (always loaded so it can be sent to Ori chat context)
   const portfolioGoals = usePortfolioGoals();
 
-  // Main view: 'screener' | 'portfolio-goals' | 'deep-research'
-  const [currentView, setCurrentView] = useState('screener');
+  // Main view: 'screener' | 'portfolio-goals' | 'deep-research'. Initialized from
+  // the URL (?v=…&sym=…) so a refresh restores the page you were on instead of
+  // snapping back to the screener. Kept in sync below.
+  const [currentView, setCurrentView] = useState(() => {
+    if (typeof window === "undefined") return "screener";
+    const v = new URLSearchParams(window.location.search).get("v");
+    return v === "deep-research" || v === "portfolio-goals" ? v : "screener";
+  });
   // Symbol currently open in the Deep Research page (single-stock focus).
-  const [researchSymbol, setResearchSymbol] = useState(null);
+  const [researchSymbol, setResearchSymbol] = useState(() => {
+    if (typeof window === "undefined") return null;
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("v") !== "deep-research") return null;
+    return sanitizeTicker(p.get("sym") || "");
+  });
+
+  // Reflect the current view + symbol into the URL (replaceState — no history
+  // spam) so a hard refresh lands back here. Screener is the default → clean URL.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const p = new URLSearchParams(window.location.search);
+    if (currentView === "screener") {
+      p.delete("v");
+      p.delete("sym");
+    } else {
+      p.set("v", currentView);
+      if (currentView === "deep-research" && researchSymbol) p.set("sym", researchSymbol);
+      else p.delete("sym");
+    }
+    const qs = p.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }, [currentView, researchSymbol]);
 
   // Open the comprehensive Deep Research page for a single symbol. Used by the
   // overview sidebar button, global search, and Ori's "enter deep research" flow.
   const openDeepResearch = (symbol) => {
-    if (!symbol) return;
-    setResearchSymbol(typeof symbol === "string" ? symbol : symbol.symbol);
+    const s = sanitizeTicker(typeof symbol === "string" ? symbol : symbol?.symbol);
+    if (!s) return;
+    setResearchSymbol(s);
     setPickingSecond(false);
     // Close the quick-overview panes so Deep Research owns the full width.
     setDetailStock(null);
@@ -357,6 +392,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     setWeights,
     risk,
     setRisk,
+    tableSortKey,
+    tableSortDir,
+    setTableSort,
     setConvictionOverride,
     fitCtx,
     pins,
@@ -373,13 +411,38 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     loadProgress,
     addTicker,
     cancelOperation,
-  } = useScreener(currentUser, portfolioGoals);
+  } = useScreener(currentUser, portfolioGoals, canUseOri, currentView);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
   // Bumped after a single-symbol re-gather so the Deep Research detail panes
-  // re-fetch the freshly gathered data.
+  // re-fetch the freshly gathered data. Reset when the DR symbol changes so Ori
+  // waits for the new symbol's auto re-gather before firing.
   const [detailReloadToken, setDetailReloadToken] = useState(0);
+  useEffect(() => {
+    setDetailReloadToken(0);
+  }, [researchSymbol]);
+
+  // Opening a stock on Deep Research auto re-gathers from FMP, then bumps
+  // detailReloadToken so panels + Ori's take use the just-fetched data.
+  const regatherRef = useRef(regatherSymbol);
+  regatherRef.current = regatherSymbol;
+  const lastDrAutoRegather = useRef({ view: null, symbol: null });
+  useEffect(() => {
+    if (currentView !== "deep-research") {
+      lastDrAutoRegather.current = { view: null, symbol: null };
+      return;
+    }
+    if (!researchSymbol) return;
+    if (
+      lastDrAutoRegather.current.view === currentView &&
+      lastDrAutoRegather.current.symbol === researchSymbol
+    ) {
+      return;
+    }
+    lastDrAutoRegather.current = { view: currentView, symbol: researchSymbol };
+    regatherRef.current(researchSymbol, () => setDetailReloadToken((t) => t + 1));
+  }, [currentView, researchSymbol]);
 
   // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
   // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
@@ -744,6 +807,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             <DeepResearchPage
               fitCtx={fitCtx}
               risk={risk}
+              isAdmin={isAdmin}
               onConvictionChange={setConvictionOverride}
               symbol={researchSymbol}
               stocks={stocks}
@@ -759,6 +823,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
               }
               regathering={enrichLoading}
+              detailReloadToken={detailReloadToken}
               detail={researchDetail}
               onBack={() => setCurrentView('screener')}
               onAskOri={(sym) => {
@@ -814,7 +879,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 <button
                   onClick={copyTickers}
                   className="shrink-0 p-1.5 rounded-md bg-gray-900 border border-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
-                  title="Copy the top on-screen tickers to the clipboard (to paste into another LLM)"
+                  title="Copy visible tickers"
                 >
                   {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
                 </button>
@@ -945,6 +1010,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     onSelectStock={handleSelectStock}
                     enrichLoading={enrichLoading}
                     sparklineForceVersion={sparklineForceVersion}
+                    sortKey={tableSortKey}
+                    sortDir={tableSortDir}
+                    onSortChange={setTableSort}
                   />
                 </div>
               ) : (

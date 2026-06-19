@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { DEFAULT_FILTERS } from '../hooks/useScreener.js';
 import { IconFilters, IconChevronDown } from './icons.jsx';
+import Tooltip from "./Tooltip.jsx";
 
 // Tiny chevrons for the stepper buttons (replaces the ▲/▼ text glyphs).
 function ChevronUp({ className = "" }) {
@@ -348,7 +349,6 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
         {/* Rule of 40 only */}
         <label
           className="group flex items-center gap-2.5 text-[11px] text-gray-400 mb-3 cursor-pointer select-none"
-          title="Rule of 40 = Revenue growth (%) + EBITDA margin (%) ≥ 40. Classic growth-stock health check; needs growth + margin data."
         >
           <input
             type="checkbox"
@@ -360,9 +360,11 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
             ${f.rule40Only ? "bg-emerald-500/15 border-emerald-500/50 text-emerald-400" : "bg-gray-800 border-gray-700 text-gray-500 group-hover:text-emerald-400/70"}`}>
             40
           </span>
-          <span className={`transition-colors duration-150 border-b border-dotted border-gray-700 ${f.rule40Only ? "text-gray-200 font-medium" : "group-hover:text-gray-200"}`}>
-            Rule of 40
-          </span>
+          <Tooltip content="Rev growth % + EBITDA margin % ≥ 40." maxWidth={180}>
+            <span className={`transition-colors duration-150 border-b border-dotted border-gray-700 ${f.rule40Only ? "text-gray-200 font-medium" : "group-hover:text-gray-200"}`}>
+              Rule of 40
+            </span>
+          </Tooltip>
         </label>
 
         <MultiSelect
@@ -403,10 +405,10 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
                 }`}
                 title={
                   val === "us"
-                    ? "US-headquartered companies only (country=US)"
+                    ? "US-headquartered only"
                     : val === "us-listed"
-                    ? "Stocks listed on NYSE/NASDAQ/AMEX including ADRs (TSM, ASML, ARM...)"
-                    : "All markets worldwide (full stock + ETF list from stable endpoints; no mcap floor)."
+                    ? "NYSE/NASDAQ/AMEX + ADRs"
+                    : "All markets worldwide"
                 }
               >
                 {label}

@@ -23,6 +23,7 @@ import {
   kvGet,
   kvSet,
   kvPurgeOlderThan,
+  getUserByUsername,
 } from "../db.js";
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
@@ -64,6 +65,49 @@ const aiDetailLimiter = rateLimit({
   keyGenerator: (req) => req.userId || ipKeyGenerator(req),
   validate: { trustProxy: false },
 });
+
+const sparklineLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 40,
+  message: { error: 'Too many sparkline requests — slow down a moment.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  validate: { trustProxy: false },
+});
+
+const SYM_RE = /^[A-Z0-9.-]{1,12}$/;
+function validSymbol(raw) {
+  const sym = String(raw || "").toUpperCase();
+  return SYM_RE.test(sym) ? sym : null;
+}
+
+function sparklinePricesFromRow(row) {
+  if (!row?.data) return null;
+  try {
+    const prices = JSON.parse(row.data || "[]");
+    return Array.isArray(prices) && prices.length ? prices : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveSparklinePrices(symbol, days, force = false) {
+  if (!force) {
+    const direct = sparklinePricesFromRow(getSparkline(symbol, days));
+    if (direct) return direct.slice(-days);
+    if (days <= 365) {
+      const wider = sparklinePricesFromRow(getSparkline(symbol, 365));
+      if (wider && wider.length >= days) return wider.slice(-days);
+    }
+  }
+  const prices = await fetchHistoricalPricesLight(symbol, days);
+  if (prices?.length) {
+    saveSparkline(symbol, days, prices);
+    if (days >= 45 && prices.length > days) saveSparkline(symbol, 365, prices);
+  }
+  return prices || [];
+}
 
 import {
   fetchProfiles,
@@ -547,6 +591,7 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             // backfill just wrote, not the stale snapshot.
             let mcap = currentRow?.mcap ?? null;
             const needsBasic = !currentRow?.price || !currentRow?.mcap || !currentRow?.sector || currentRow?.sector === '—';
+            let profileBackfilled = false;
             if (needsBasic) {
               try {
                 const prof = await fetchProfile(symbol, ENRICH_OPTS);
@@ -554,6 +599,8 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
                   const profRow = profileToRow(prof);
                   saveScreenerBatch([profRow]);
                   if (profRow.mcap != null) mcap = profRow.mcap;
+                  profileBackfilled = true;
+                  setDetailCache(`profile:${symbol}`, prof);
                 }
               } catch (e) {
                 console.warn(`[Enrich] Profile backfill failed for ${symbol}:`, e.message);
@@ -641,10 +688,21 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             if (force) {
               try {
                 // AI valuation (DCF, targets, owner earnings) — bypass 24h SQLite cache
+                const growthRows = await cachedDetail(`growthhist:${symbol}`, 24 * 60 * 60 * 1000, () =>
+                  fetchGrowthHistory(symbol),
+                );
+                const growthLatest = growthRows?.[0] || null;
                 const settled = await Promise.allSettled([
                   fetchDCF(symbol),
                   fetchPriceTarget(symbol),
-                  fetchFinancialGrowth(symbol),
+                  Promise.resolve(growthLatest ? {
+                    revenue_growth: growthLatest.revenue_growth,
+                    net_income_growth: growthLatest.net_income_growth,
+                    eps_growth: growthLatest.eps_growth,
+                    fcf_growth: growthLatest.fcf_growth,
+                    op_income_growth: growthLatest.op_income_growth,
+                    gross_profit_growth: growthLatest.gross_profit_growth,
+                  } : fetchFinancialGrowth(symbol)),
                   fetchOwnerEarnings(symbol),
                 ]);
                 const val = (s) => (s.status === "fulfilled" ? s.value : null);
@@ -673,27 +731,25 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
                 console.warn(`[Enrich][force] AI data failed for ${symbol}:`, e.message);
               }
 
-              // Profile (description, CEO, employees, etc.)
-              try {
-                const prof = await fetchProfile(symbol);
-                if (prof) {
-                  // Update in-memory detail cache so the panel sees it immediately
-                  setDetailCache(`profile:${symbol}`, prof);
-                  // Also persist basic fields (price, mcap, sector, industry, exchange, country)
-                  // to the main stocks table so the screener shows them (was broken after switching
-                  // to list-based universe which only provides symbol+name).
-                  saveScreenerBatch([profileToRow(prof)]);
+              // Profile — skip if the needsBasic backfill above already fetched it.
+              if (!profileBackfilled) {
+                try {
+                  const prof = await fetchProfile(symbol);
+                  if (prof) {
+                    setDetailCache(`profile:${symbol}`, prof);
+                    saveScreenerBatch([profileToRow(prof)]);
+                  }
+                } catch (e) {
+                  console.warn(`[Enrich][force] Profile failed for ${symbol}:`, e.message);
                 }
-              } catch (e) {
-                console.warn(`[Enrich][force] Profile failed for ${symbol}:`, e.message);
               }
 
-              // Insider trades
+              // Insider trades (shared cache key with GET /insider and smart-money)
               try {
-                const trades = await fetchInsiderTrades(symbol, { limit: 40 });
-                if (Array.isArray(trades)) {
-                  setDetailCache(`insider:${symbol}`, trades);
-                }
+                const trades = await cachedDetail(`insider:${symbol}`, 6 * 60 * 60 * 1000, () =>
+                  fetchInsiderTrades(symbol, { limit: 80 }),
+                true);
+                if (Array.isArray(trades)) setDetailCache(`insider:${symbol}`, trades);
               } catch (e) {
                 console.warn(`[Enrich][force] Insider failed for ${symbol}:`, e.message);
               }
@@ -1016,11 +1072,21 @@ router.get("/stocks/smart-money/:symbol", aiDetailLimiter, async (req, res) => {
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
     const data = await cachedDetail(`smartmoney:${symbol}`, 6 * 60 * 60 * 1000, async () => {
-      const [senate, house, insider] = await Promise.all([
+      const [senate, house, insiderTrades] = await Promise.all([
         fetchCongressTrades("senate", symbol),
         fetchCongressTrades("house", symbol),
-        fetchInsiderBySymbol(symbol),
+        cachedDetail(`insider:${symbol}`, 6 * 60 * 60 * 1000, () =>
+          fetchInsiderTrades(symbol, { limit: 80 }),
+        ),
       ]);
+      const insider = (insiderTrades || []).map((t) => ({
+        transactionDate: typeof t.transactionDate === "string" ? t.transactionDate.split(" ")[0] : t.transactionDate,
+        name: t.reportingName || "—",
+        role: t.typeOfOwner || null,
+        transactionType: t.transactionType || null,
+        shares: t.securitiesTransacted,
+        price: t.price,
+      }));
       return aggregateSmartMoney(symbol, senate, house, insider);
     }, force);
     res.json(data || { symbol, signal: "quiet", congress: { total: 0, recent: [] }, insider: { total: 0, recent: [] } });
@@ -1182,8 +1248,8 @@ function sanitizeGamePlan(o) {
 }
 
 router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
-  const symbol = req.params.symbol.toUpperCase();
-  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  const symbol = validSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   if (!hasOriAccess(req.userId)) {
     return res.status(402).json({ error: "Ori's Game Plan is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
   }
@@ -1199,6 +1265,20 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       : { leadModel: frontierModel(), models: [valueModel(), liteModel()] };
     const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
+
+    // Serve a fresh lite review instantly when frontier hasn't run yet — saves a
+    // frontier Gemini call on first Deep Research open for popular names.
+    if (!force && !retry) {
+      const frontierHit = detailCache.get(`gameplan:${symbol}`);
+      const frontierFresh = frontierHit && Date.now() - frontierHit.at < 24 * 60 * 60 * 1000;
+      if (!frontierFresh) {
+        const lite = kvGet(`gameplan-lite:${symbol}`);
+        if (lite?.data && Date.now() - lite.updatedAt < 24 * 60 * 60 * 1000) {
+          return res.json({ symbol, ori: lite.data, tier: "lite" });
+        }
+      }
+    }
+
     const data = await cachedDetail(`gameplan:${symbol}`, 24 * 60 * 60 * 1000, async () => {
       // Profile/news are enrichment for the prompt, not hard requirements — a
       // transient fetch failure shouldn't sink the whole Game Plan, so degrade
@@ -1227,6 +1307,74 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });
     if (e.code === "bad_json") return res.status(502).json({ error: "Ori couldn't produce a Game Plan — try again." });
     res.status(502).json({ error: "Could not generate Ori's Game Plan." });
+  }
+});
+
+// ── Screener intangibles (lite) ────────────────────────────────────────────
+// Cheap intangibles + X-Factors for the screener, generated on the LITE tier
+// only (A:lite → B:lite via geminiGenerateJson's per-key iteration) and cached
+// under `gameplan-lite:` — a DIFFERENT key from Deep Research's `gameplan:`, so
+// these never clobber DR's premium frontier review (db.getAllStocks prefers the
+// frontier review when both exist). Shared by the on-demand route below and the
+// background "leaders" trickle in index.js.
+//
+// Cap-1 lane: a lite generation never occupies more than one of geminiJson's two
+// global structured slots, so a DR frontier call always keeps a slot. It also
+// serializes the background trickle and any client sweeps so they can't double up.
+let liteActive = 0;
+const liteWaiters = [];
+function acquireLiteLane() {
+  if (liteActive < 1) { liteActive++; return Promise.resolve(); }
+  return new Promise((resolve) => liteWaiters.push(resolve));
+}
+function releaseLiteLane() {
+  const next = liteWaiters.shift();
+  if (next) next();
+  else liteActive--;
+}
+
+export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {} } = {}) {
+  return cachedDetail(`gameplan-lite:${symbol}`, 24 * 60 * 60 * 1000, async () => {
+    await acquireLiteLane();
+    try {
+      const [profile, news] = await Promise.all([
+        cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
+        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
+      ]);
+      const { data: raw, model } = await geminiGenerateJson({
+        system: GAME_PLAN_SYSTEM,
+        prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
+        schema: GAME_PLAN_SCHEMA,
+        models: [liteModel()], // lite ONLY — never value/frontier
+      });
+      const sane = sanitizeGamePlan(raw);
+      if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
+      return sane;
+    } finally {
+      releaseLiteLane();
+    }
+  });
+}
+
+// ── POST /api/stocks/intangibles/:symbol ───────────────────────────────────
+// On-demand lite intangibles for a screener leader. Pro/admin gated + rate
+// limited; result is cached 24h and shared (company-level).
+router.post("/stocks/intangibles/:symbol", aiDetailLimiter, async (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
+  if (!hasOriAccess(req.userId)) {
+    return res.status(402).json({ error: "Ori intangibles is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
+  }
+  try {
+    const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
+    const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
+    const ori = await generateLiteIntangibles(symbol, { stats, verdict });
+    res.json({ symbol, ori });
+  } catch (e) {
+    if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
+    if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });
+    if (e.code === "bad_json") return res.status(502).json({ error: "Ori couldn't produce intangibles — try again." });
+    res.status(502).json({ error: "Could not generate intangibles." });
   }
 });
 
@@ -1302,7 +1450,7 @@ router.get("/stocks/insider/:symbol", async (req, res) => {
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
     const trades = await cachedDetail(`insider:${symbol}`, 6 * 60 * 60 * 1000, () =>
-      fetchInsiderTrades(symbol, { limit: 40 }), force
+      fetchInsiderTrades(symbol, { limit: 80 }), force
     );
     res.json({ symbol, trades });
   } catch (e) {
@@ -1512,60 +1660,39 @@ router.get("/stocks/:symbol", (req, res) => {
 // Dynamic loading is still driven by the frontend (visibility in virtualized table).
 // We just make sure that once we have fetched a symbol's sparkline data, we
 // persist it in SQLite so we don't hammer FMP on every page load.
-router.get("/stocks/sparkline/:symbol", async (req, res) => {
-  const symbol = req.params.symbol.toUpperCase();
-  const days = parseInt(req.query.days) || 45;
+router.get("/stocks/sparkline/:symbol", sparklineLimiter, async (req, res) => {
+  const symbol = validSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  const days = Math.min(1825, Math.max(5, parseInt(req.query.days, 10) || 45));
   const force = req.query.force === '1' || req.query.force === 'true';
 
-  console.log(`[Sparkline] Incoming request for ${symbol} (days=${days}, force=${force})`);
-
   try {
-    if (!force) {
-      // Serve from SQLite if we have any data at all for this (symbol, days).
-      // Sparklines are historical and relatively stable — we only re-fetch
-      // when the user explicitly uses the Force Re-gather button.
-      const cached = getSparkline(symbol, days);
-      if (cached) {
-        const prices = JSON.parse(cached.data || '[]');
-        console.log(`[Sparkline] Cache hit for ${symbol} (${prices.length} points)`);
-        return res.json({ symbol, prices });
-      }
-    }
-
-    // The individual endpoint is now mostly a fallback / convenience.
-    // Primary population happens inside the main /enrich flow (so sparklines
-    // behave exactly like key-metrics and ratios: gathered via the button,
-    // served from DB on refresh, only re-fetched on explicit Force).
-    console.log(`[Sparkline] ${force ? 'Force' : 'No cache'} — fetching from FMP for ${symbol} (standalone request)`);
-    const prices = await fetchHistoricalPricesLight(symbol, days);
-
-    if (prices && prices.length > 0) {
-      saveSparkline(symbol, days, prices);
-      console.log(`[Sparkline] Cached sparkline for ${symbol} (${prices.length} points)`);
-    }
-
+    const prices = await resolveSparklinePrices(symbol, days, force);
     res.json({ symbol, prices });
   } catch (e) {
-    console.error(`[Sparkline] Unexpected error for ${symbol}:`, e);
-    res.status(500).json({ error: e.message });
+    console.error(`[Sparkline] Unexpected error for ${symbol}:`, e.message);
+    res.status(502).json({ error: "Could not load sparkline" });
   }
 });
 
 // ── GET /api/status ────────────────────────────────────────────────────────
 router.get("/status", (req, res) => {
   const lastFetch = getMeta("last_screener_fetch");
-  res.json({
+  const payload = {
     stockCount: getStockCount(),
     enrichedCount: getEnrichedCount(),
-    universeTarget: 8000, // company-screener limit (300M+ floor by default, stocks + ETFs included)
+    universeTarget: 8000,
     lastFetch: lastFetch ? Number(lastFetch) : null,
-    apiKeySet:
-      !!process.env.FMP_API_KEY &&
-      process.env.FMP_API_KEY !== "your_fmp_api_key_here",
-    chatKeySet:
-      !!process.env.GEMINI_API_KEY &&
-      process.env.GEMINI_API_KEY !== "your_gemini_api_key_here",
-  });
+  };
+  // Key configuration is admin-only — don't leak integration status to every user.
+  const adminUser = getUserByUsername(req.userId);
+  if (adminUser?.is_admin) {
+    payload.apiKeySet =
+      !!process.env.FMP_API_KEY && process.env.FMP_API_KEY !== "your_fmp_api_key_here";
+    payload.chatKeySet =
+      !!process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== "your_gemini_api_key_here";
+  }
+  res.json(payload);
 });
 
 export default router;

@@ -1,4 +1,6 @@
 import InfoHint from "./InfoHint.jsx";
+import Tooltip from "./Tooltip.jsx";
+import { IconRefresh } from "./icons.jsx";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
 // Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
@@ -28,7 +30,7 @@ const RISK = {
 const STRENGTH = {
   strong: { dot: "bg-emerald-400", text: "text-emerald-300", filled: 3 },
   moderate: { dot: "bg-amber-400", text: "text-amber-300", filled: 2 },
-  weak: { dot: "bg-gray-500", text: "text-gray-400", filled: 1 },
+  weak: { dot: "bg-red-400", text: "text-red-300", filled: 1 },
 };
 
 function XFactor({ x }) {
@@ -54,8 +56,9 @@ function Pillar({ p, oriState }) {
   const locked = isOri && oriState?.locked && p.score == null;
   const t = TONE[p.tone || "neutral"];
   const pct = p.score != null ? Math.round(p.score * 100) : null;
-  return (
-    <div className="min-w-0" title={Array.isArray(p.reasons) ? p.reasons.join(" · ") : undefined}>
+  const reasons = Array.isArray(p.reasons) ? p.reasons.slice(0, 2).join(" · ") : null;
+  const inner = (
+    <div className="min-w-0">
       <div className="flex items-baseline justify-between mb-1 gap-1">
         <span className="text-[10px] uppercase tracking-wider text-gray-500 truncate">
           {p.label}
@@ -74,9 +77,10 @@ function Pillar({ p, oriState }) {
       </div>
     </div>
   );
+  return reasons ? <Tooltip content={reasons} maxWidth={200}>{inner}</Tooltip> : inner;
 }
 
-export default function GamePlan({ verdict, oriState = {} }) {
+export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false }) {
   if (!verdict) return null;
 
   if (verdict.insufficient) {
@@ -144,7 +148,7 @@ export default function GamePlan({ verdict, oriState = {} }) {
       <p className="mt-3 text-[12.5px] text-gray-200 leading-relaxed">{verdict.headline}</p>
 
       {/* Ori's Take */}
-      <OriTake ori={ori} oriState={oriState} />
+      <OriTake ori={ori} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} />
 
       {/* Footer */}
       <div className="mt-4 pt-3 border-t border-gray-800/70 flex items-center justify-between gap-3 flex-wrap">
@@ -159,7 +163,7 @@ export default function GamePlan({ verdict, oriState = {} }) {
   );
 }
 
-function OriTake({ ori, oriState }) {
+function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
   const { loading, locked, error } = oriState || {};
   const riskCls = ori?.riskLevel ? RISK[ori.riskLevel] || RISK.high : null;
 
@@ -169,11 +173,25 @@ function OriTake({ ori, oriState }) {
         <h4 className="text-[11px] uppercase tracking-wider font-bold text-violet-300/90 flex items-center gap-1.5">
           <span>✦</span> Ori's Take
         </h4>
-        {ori?.riskLevel && (
-          <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold uppercase tracking-wide ${riskCls.bg} ${riskCls.text}`}>
-            {ori.riskLevel} risk
-          </span>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {isAdmin && oriReady && oriState?.refresh && !locked && (
+            <button
+              type="button"
+              onClick={oriState.refresh}
+              disabled={loading}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer"
+              title="Re-run Ori's take with frontier model (bypasses 24h cache)"
+            >
+              <IconRefresh className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "Refreshing…" : "Refresh Ori"}
+            </button>
+          )}
+          {ori?.riskLevel && (
+            <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold uppercase tracking-wide ${riskCls.bg} ${riskCls.text}`}>
+              {ori.riskLevel} risk
+            </span>
+          )}
+        </div>
       </div>
 
       {locked ? (
@@ -203,7 +221,7 @@ function OriTake({ ori, oriState }) {
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1 flex items-center gap-1.5">
                 X-Factors
-                <InfoHint text="The specific edges behind the intangibles score — durable moat / market dominance, total addressable market, management, brand, and regulatory positioning. More filled dots = stronger. These build the single Intangibles pillar; they aren't a separate conviction input." />
+                <InfoHint text="Moat, TAM, management, brand, regulation. Dots = strength. Feeds Intangibles pillar." />
               </div>
               <div>
                 {ori.xFactors.map((x, i) => (
@@ -290,7 +308,7 @@ function Header({ confidence }) {
     <header className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2">
         <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
-        <InfoHint text="One unified verdict: a conviction score (0–100) blending fundamentals (the old Orizin Score), valuation, technicals, insiders (corporate insiders + U.S. Congress buying/selling), analysts, your personal Fit, and Ori's read on intangibles / future potential — plus how long it's worth holding and what to do at today's price. Educational only — not financial advice." />
+        <InfoHint text="0–100 conviction from fundamentals, value, technicals, insiders, analysts, Fit, and Ori — plus hold horizon and action. Not financial advice." />
       </div>
       <div className="flex items-center gap-2">
         {confidence && (

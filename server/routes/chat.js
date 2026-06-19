@@ -138,12 +138,12 @@ ${context && context.scorecardDefinition ? `ORIEN SCORE METHODOLOGY:\n${JSON.str
       "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score | Conv | Cov |\n";
     prompt +=
       "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|------|-----|\n";
-    const top = stocks.slice(0, 100);
+    const top = stocks.slice(0, 30);
     for (const s of top) {
       prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} | ${s.conviction != null ? s.conviction : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
     }
-    if (stocks.length > 100)
-      prompt += `\n(Showing top 100 of ${stocks.length} by Conviction. Score = Orizin fundamentals engine; Conv = the unified headline Conviction users see.)\n`;
+    if (stocks.length > 30)
+      prompt += `\n(Showing top 30 of ${stocks.length} by Conviction. Score = Orizin fundamentals engine; Conv = the unified headline Conviction users see.)\n`;
   }
 
   if (pinnedStocks?.length) {
@@ -828,7 +828,13 @@ router.get("/chat/sessions", (req, res) => {
 router.get("/chat/sessions/:id", (req, res) => {
   const session = getChatSession(req.params.id, req.userId);
   if (!session) return res.status(404).json({ error: "Session not found" });
-  res.json(session);
+  res.json({
+    id: session.id,
+    title: session.title,
+    messages: session.messages,
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+  });
 });
 
 // ── DELETE /api/chat/sessions/:id ──────────────────────────────────────────

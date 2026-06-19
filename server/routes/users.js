@@ -124,8 +124,8 @@ router.delete("/users/:username", (req, res) => {
       return res.status(400).json({ error: "Cannot delete the last remaining admin" });
     }
 
-    const deleted = db.default.prepare('DELETE FROM users WHERE username = ?').run(username);
-    
+    const deleted = db.deleteUserCascade(username);
+
     if (deleted.changes > 0) {
       res.json({ ok: true });
     } else {

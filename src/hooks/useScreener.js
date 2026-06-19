@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { computeRankedRows, applyWeights } from "../lib/scoring.js";
+import { quickConviction } from "../lib/verdict.js";
 import { buildFitContext, computeFit } from "../lib/fitScore.js";
-import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
+import { fetchUserSettings, patchUserSettings, flushUserSettings } from "../lib/userStore.js";
 
 // localStorage keys are namespaced per logged-in user so two people sharing
 // the same browser (or admins switching accounts) don't see each other's
@@ -17,6 +18,9 @@ function activeKey(user) {
 }
 function weightsKey(user) {
   return `screener_weights_v1:${user}`;
+}
+function sortStorageKey(user) {
+  return `screener_sort_v1:${user}`;
 }
 
 // Keep in sync with DEFAULT_WEIGHTS in lib/scoring.js — the old local default
@@ -52,6 +56,35 @@ function saveWeights(user, weights) {
   } catch {}
 }
 
+// Table column sort — global per user (not per screener tab). Persisted like weights.
+const DEFAULT_SORT = { key: "mcap", dir: -1 };
+const SORTABLE_KEYS = new Set([
+  "symbol", "sector", "mcap", "price", "conviction", "durabilityProxy", "beta",
+  "pe", "pb", "ps", "ev_ebitda", "ev_sales", "ev_gp", "fcf_yield", "earnings_yield",
+  "gross_margin", "op_margin", "net_margin", "fcf_margin", "roic", "roe", "roa",
+  "revenue_growth", "eps_growth", "fcf_growth", "op_income_growth", "rule_of_40",
+  "net_debt_ebitda", "current_ratio", "debt_equity", "div_yield",
+]);
+function sanitizeSort(s) {
+  const key = s?.key && SORTABLE_KEYS.has(s.key) ? s.key : DEFAULT_SORT.key;
+  const dir = s?.dir === 1 || s?.dir === -1 ? s.dir : DEFAULT_SORT.dir;
+  return { key, dir };
+}
+function loadSort(user) {
+  try {
+    const raw = localStorage.getItem(sortStorageKey(user));
+    if (!raw) return { ...DEFAULT_SORT };
+    return sanitizeSort(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_SORT };
+  }
+}
+function saveSort(user, sort) {
+  try {
+    localStorage.setItem(sortStorageKey(user), JSON.stringify(sort));
+  } catch {}
+}
+
 // Risk tolerance — a personal preference that tilts Conviction (conservative
 // punishes speculative microcaps/high-beta/unprofitable names; aggressive is
 // lenient). Persisted per-user like weights.
@@ -83,6 +116,7 @@ function migrateLegacyIfNeeded(user) {
   for (const [oldK, newK] of moves) {
     if (localStorage.getItem(newK) == null && localStorage.getItem(oldK) != null) {
       localStorage.setItem(newK, localStorage.getItem(oldK));
+      localStorage.removeItem(oldK);
     }
   }
 }
@@ -373,7 +407,7 @@ export function applyFilters(all, f, pins) {
   });
 }
 
-export function useScreener(currentUser, portfolioGoals = {}) {
+export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false, currentView = "screener") {
   const user = currentUser || "default";
   // Run migration synchronously before any state init so loadPins/loadTabs
   // see the migrated values on first render.
@@ -389,6 +423,9 @@ export function useScreener(currentUser, portfolioGoals = {}) {
   const [activeTab, setActiveTabState] = useState(
     () => localStorage.getItem(activeKey(user)) || "default",
   );
+  const initialSort = loadSort(user);
+  const [tableSortKey, setTableSortKey] = useState(initialSort.key);
+  const [tableSortDir, setTableSortDir] = useState(initialSort.dir);
 
   // Pins are now per active tab/screener (not global)
   const initialActiveTab = localStorage.getItem(activeKey(user)) || "default";
@@ -421,6 +458,30 @@ export function useScreener(currentUser, portfolioGoals = {}) {
     try { localStorage.setItem(riskKey(user), next); } catch {}
     if (hydratedRef.current) patchUserSettings({ risk: next });
   }
+
+  function setTableSort(key, dir) {
+    const next = sanitizeSort({ key, dir });
+    setTableSortKey(next.key);
+    setTableSortDir(next.dir);
+    saveSort(user, next);
+    if (hydratedRef.current) {
+      patchUserSettings({ sort: next });
+      flushUserSettings();
+    }
+  }
+
+  // Re-read sort from localStorage when returning to the screener. The table
+  // unmounts on other views; this also recovers if async server hydration
+  // briefly clobbered in-memory state with a stale server copy.
+  const prevViewRef = useRef(currentView);
+  useEffect(() => {
+    if (currentView === "screener" && prevViewRef.current !== "screener") {
+      const local = loadSort(user);
+      setTableSortKey(local.key);
+      setTableSortDir(local.dir);
+    }
+    prevViewRef.current = currentView;
+  }, [currentView, user]);
 
   // Session-only Conviction overrides: when a stock is deep-researched its
   // Conviction refines (live technicals/grades/insiders/Ori); we lift that
@@ -503,13 +564,90 @@ export function useScreener(currentUser, portfolioGoals = {}) {
     );
   }, [filteredWeighted, convictionOverrides]);
 
-  // NOTE: the screener no longer proactively generates Ori intangibles for the
-  // top-conviction leaders. That batch of game-plan (Gemini) calls shared the
-  // chat key/quota and kept tripping "Ori is busy" overloads. Cached reviews are
-  // still surfaced for free: server-side, db.js attaches a fresh `row.ori` from
-  // the gameplan cache, and applyWeights()/quickConviction() already fold that
-  // cached intangibles score into Conviction (+ the ✧ badge). New reviews are now
-  // generated only on demand when a user opens a stock's Deep Research Game Plan.
+  // Lite intangibles for the *visible top* of the current list — the personalized
+  // half of the screener enrichment (the shared server "leaders" trickle covers
+  // broad names). Each is a LITE-only game-plan call (gemini-3.1-flash-lite,
+  // cap-1 server lane, separate gameplan-lite: cache that never clobbers a Deep
+  // Research frontier review), so it's far gentler than the old frontier/value
+  // sweep that tripped "Ori is busy". Frugal by design:
+  //   • only a handful of the highest-Conviction leaders,
+  //   • Pro/admin only (free users get 402s — don't spend the quota),
+  //   • debounced so dragging Q/V/G sliders doesn't sweep per frame,
+  //   • concurrency 1 (one lite call in flight) so chat/DR stay responsive,
+  //   • in-memory for the session; server-side db.getAllStocks re-attaches the
+  //     cached review on the next data load (persists for free, across users).
+  const ORI_LEADER_COUNT = 15;
+  const ORI_DEBOUNCE_MS = 800;
+  const [oriData, setOriData] = useState({});
+  const oriFetchedRef = useRef(new Set());
+  useEffect(() => {
+    if (!canUseOri) return;
+    const leaders = [...filteredWeighted]
+      .filter((r) => r.conviction != null && r.conviction >= 65 && !r.ori && !oriData[r.symbol])
+      .sort((a, b) => (b.conviction || 0) - (a.conviction || 0))
+      .slice(0, ORI_LEADER_COUNT)
+      .filter((r) => !oriFetchedRef.current.has(r.symbol));
+    if (!leaders.length) return;
+
+    let cancelled = false;
+    const fetchOne = async (r) => {
+      const sym = r.symbol;
+      oriFetchedRef.current.add(sym);
+      try {
+        const payload = {
+          stats: {
+            price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
+            pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield,
+            roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
+            revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
+            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+          },
+          verdict: { conviction: r.conviction, orizinScore: r.score != null ? Math.round(r.score * 100) : null },
+        };
+        const res = await fetch(`/api/stocks/intangibles/${sym}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          const j = await res.json();
+          if (j.ori && !cancelled) setOriData((prev) => ({ ...prev, [sym]: j.ori }));
+        } else if (res.status === 503 || res.status === 429) {
+          oriFetchedRef.current.delete(sym); // transient — let a later sweep retry
+        }
+      } catch {
+        oriFetchedRef.current.delete(sym);
+      }
+    };
+
+    // Debounce, then drain the leader queue one-at-a-time (concurrency 1).
+    const timer = setTimeout(async () => {
+      const queue = [...leaders];
+      while (!cancelled && queue.length) await fetchOne(queue.shift());
+    }, ORI_DEBOUNCE_MS);
+
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [filteredWeighted, canUseOri, oriData]);
+
+  // Fold any fetched lite review into the displayed Conviction, exactly the way
+  // Deep Research's computeVerdict does on open: re-run the shared quickConviction
+  // with the cached Ori attached (so the Intangibles pillar + Ori's ±20 nudge
+  // apply), minus the same data-coverage penalty applyWeights used. A Deep
+  // Research override is canonical and wins untouched (DR already folded Ori in) —
+  // we only attach `ori` there for the ✧ badge/tooltip.
+  const withOri = useMemo(() => {
+    if (!Object.keys(oriData).length) return filtered;
+    return filtered.map((r) => {
+      const o = oriData[r.symbol];
+      if (!o) return r;
+      if (convictionOverrides[r.symbol] != null) return { ...r, ori: r.ori || o };
+      const fit = fitMap ? fitMap[r.symbol] || null : null;
+      const lean = quickConviction({ ...r, ori: o }, fit, risk);
+      if (lean == null) return { ...r, ori: o };
+      const adj = Math.max(0, lean - (r.dataCoveragePenalty || 0));
+      return { ...r, conviction: adj, ori: o };
+    });
+  }, [filtered, oriData, convictionOverrides, fitMap, risk]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
@@ -731,7 +869,7 @@ export function useScreener(currentUser, portfolioGoals = {}) {
       if (cancelled) return;
 
       const hasServerState =
-        server && (Array.isArray(server.tabs) || server.weights || server.activeTab || server.risk);
+        server && (Array.isArray(server.tabs) || server.weights || server.activeTab || server.risk || server.sort);
 
       if (hasServerState) {
         let nextTabs = tabs;
@@ -756,12 +894,26 @@ export function useScreener(currentUser, portfolioGoals = {}) {
           setRiskRaw(cleanRisk);
           try { localStorage.setItem(riskKey(user), cleanRisk); } catch {}
         }
+        // Local sort wins on this device — it's updated synchronously on every
+        // column click, while the server copy may still be the default from an
+        // earlier migrate-up. Only adopt server sort when we have no local copy.
+        const hasLocalSort = localStorage.getItem(sortStorageKey(user)) != null;
+        if (server.sort && !hasLocalSort) {
+          const cleanSort = sanitizeSort(server.sort);
+          setTableSortKey(cleanSort.key);
+          setTableSortDir(cleanSort.dir);
+          saveSort(user, cleanSort);
+        } else if (hasLocalSort) {
+          const localSort = loadSort(user);
+          setTableSortKey(localSort.key);
+          setTableSortDir(localSort.dir);
+        }
         // Re-derive pins from the adopted active tab (parity with mount init).
         const at = nextTabs.find((t) => t.id === nextActive);
         const tp = at?.state?.pins;
         setPins(Array.isArray(tp) ? new Set(tp) : new Set());
       } else {
-        patchUserSettings({ tabs, activeTab, weights, risk });
+        patchUserSettings({ tabs, activeTab, weights, risk, sort: { key: tableSortKey, dir: tableSortDir } });
       }
 
       hydratedRef.current = true;
@@ -1058,7 +1210,7 @@ export function useScreener(currentUser, portfolioGoals = {}) {
 
   return {
     stocks,
-    filtered,  // post-filter/post-weight rows; cached Ori reviews are already folded in server-side
+    filtered: withOri,  // post-filter/weight rows; lite/cached Ori reviews folded into Conviction
     // Filtered set BEFORE weighting (stable when only the Q/V/G sliders move) — the
     // table uses it for the heatmap so dragging weights doesn't recompute it.
     filteredRows,
@@ -1071,6 +1223,9 @@ export function useScreener(currentUser, portfolioGoals = {}) {
     setWeights,
     risk,
     setRisk,
+    tableSortKey,
+    tableSortDir,
+    setTableSort,
     setConvictionOverride,
     fitCtx,
     pins,
