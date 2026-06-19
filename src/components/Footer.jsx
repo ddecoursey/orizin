@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { DONATE_URL } from "../lib/billing.js";
 
 // Slim app footer: trademark, contact, donation, and social links.
-const CONTACT_EMAIL = "dl.decour@gmail.com";
+const CONTACT_EMAIL = "dylan@orizin.io";
 // Socials go nowhere for now — wire up real URLs later.
 const SOCIALS = [
   { name: "X", href: "#", icon: XIcon },

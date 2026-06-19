@@ -15,6 +15,7 @@ import brokerageRouter from './routes/brokerage.js';
 import billingRouter from './routes/billing.js';
 import { sendEmail, welcomeEmail, resetPasswordEmail } from './email.js';
 import * as db from './db.js';
+import * as paypal from './paypal.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 
@@ -558,6 +559,27 @@ app.use('/api', (req, res, next) => {
 app.use('/api', (req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
+});
+
+// Self-service account deletion (right to be forgotten). Cancels any active
+// subscription first so the user isn't billed again, then cascade-deletes all of
+// their data and clears this device's session. Registered as an app-level route
+// BEFORE usersRouter so it wins over usersRouter's admin-only /users/:username.
+app.delete('/api/users/me', async (req, res) => {
+  const username = req.userId;
+  const user = db.getUserByUsername(username);
+  if (!user) return res.status(404).json({ error: 'Account not found' });
+  // Don't let the last admin delete themselves into an unmanageable instance.
+  if (user.is_admin && db.adminCount() <= 1) {
+    return res.status(400).json({ error: 'You are the only admin — promote another admin before deleting your account.' });
+  }
+  if (user.paypal_subscription_id && paypal.isConfigured()) {
+    try { await paypal.cancelSubscription(user.paypal_subscription_id); }
+    catch (e) { console.error('[account] subscription cancel on delete failed:', e.message); }
+  }
+  db.deleteUserCascade(username);
+  res.set('Set-Cookie', buildCookie(COOKIE_NAME, '', { maxAgeMs: 0, secure: req.secure }));
+  res.json({ ok: true });
 });
 
 // API routes

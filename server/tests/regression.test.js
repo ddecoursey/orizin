@@ -245,6 +245,31 @@ test('forgot-password is generic (no account enumeration); reset-password reject
   assert.equal(short.status, 400);
 });
 
+test('self-delete: the only admin is blocked; a normal user can delete their own account', async () => {
+  // The sole admin can't delete themselves into an unmanageable instance.
+  const adminDel = await fetch(api('/api/users/me'), { method: 'DELETE', headers: { cookie: adminCookie } });
+  assert.equal(adminDel.status, 400);
+
+  // A fresh self-service account can delete itself.
+  const email = `selfdel_${Date.now()}@example.com`;
+  const signup = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  });
+  const cookie = cookieFrom(signup);
+  const del = await fetch(api('/api/users/me'), { method: 'DELETE', headers: { cookie } });
+  assert.equal(del.status, 200);
+
+  // The account is gone: the old credentials no longer authenticate.
+  const relogin = await fetch(api('/api/auth/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: email, password: 'strongpass1A' }),
+  });
+  assert.equal(relogin.status, 401);
+});
+
 // ── Per-user settings ───────────────────────────────────────────────────────
 
 test('settings are stored per user and shallow-merged', async () => {

@@ -19,6 +19,7 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
   const [newPw, setNewPw] = useState("");
   const [subStatus, setSubStatus] = useState(null); // { plan, status, subscriptionId }
   const [canceling, setCanceling] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -168,6 +169,27 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
       setError(e.message);
     }
     setChangingPassword(false);
+  }
+
+  async function deleteMyAccount() {
+    if (!confirm(
+      "Permanently delete your account?\n\nThis cancels any active subscription and erases all your data (settings, portfolios, chats). This cannot be undone."
+    )) return;
+    setDeleting(true);
+    setError("");
+    try {
+      const res = await fetch("/api/users/me", { method: "DELETE" });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = {}; }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      // Account + this device's session are gone — hard reload to the (now
+      // signed-out) app, which lands on the login / marketing page.
+      window.location.href = "/";
+    } catch (e) {
+      setError(e.message);
+      setDeleting(false);
+    }
   }
 
   return (
@@ -350,6 +372,26 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
               className="w-full py-1.5 bg-gray-800 hover:bg-gray-700 rounded text-sm disabled:opacity-50"
             >
               {changingPassword ? "Changing..." : "Change Password"}
+            </button>
+          </div>
+        </div>
+        )}
+
+        {/* Danger zone: self-service account deletion */}
+        {showAccount && (
+        <div className="mt-6 pt-4 border-t border-gray-800">
+          <div className="text-xs uppercase tracking-wider text-red-400/80 mb-2">Danger Zone</div>
+          <div className="bg-red-950/20 border border-red-900/50 rounded-lg p-3">
+            <p className="text-[11px] text-gray-400 mb-2.5 leading-snug">
+              Permanently delete your account and all associated data (settings, portfolios, chats).
+              Any active subscription is cancelled. This cannot be undone.
+            </p>
+            <button
+              onClick={deleteMyAccount}
+              disabled={deleting}
+              className="w-full py-1.5 rounded text-sm font-semibold text-red-200 bg-red-900/40 border border-red-800/60 hover:bg-red-900/60 disabled:opacity-50 transition-colors"
+            >
+              {deleting ? "Deleting…" : "Delete my account"}
             </button>
           </div>
         </div>

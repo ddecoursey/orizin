@@ -1080,6 +1080,21 @@ export function setUserPlan(username, plan) {
   return info.changes > 0;
 }
 
+// ── Self-service account deletion ────────────────────────────────────────────
+// Cascade-delete a user and ALL of their per-user data in one transaction, so
+// nothing is left orphaned (and can't be silently inherited if the same
+// username/email signs up again). Returns the users-row delete result (.changes).
+export function deleteUserCascade(username) {
+  const tx = db.transaction((u) => {
+    db.prepare('DELETE FROM chat_sessions WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM linked_accounts WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM brokerage_orders WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM user_settings WHERE user_id = ?').run(u);
+    return db.prepare('DELETE FROM users WHERE username = ?').run(u);
+  });
+  return tx(username);
+}
+
 // ── Password reset ───────────────────────────────────────────────────────────
 // Store the sha256 hash of a single-use reset token + its expiry. We persist the
 // HASH, never the token itself, so a DB leak can't be used to reset passwords.
