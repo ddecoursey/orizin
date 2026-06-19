@@ -8,16 +8,20 @@ import { useEffect, useRef, useState } from "react";
 // updated; we read it at fire time so changing object identity doesn't refire.
 export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken = 0 } = {}) {
   const [state, setState] = useState({ sym: null, ori: null, error: null, locked: false, done: false });
-  const prev = useRef({ symbol: null, token: reloadToken, enabled: false });
+  // Bumped by retry() to re-fire the request after a transient failure (e.g.
+  // "Ori is busy" / 503 overloaded), without changing symbol or reloadToken.
+  const [retryNonce, setRetryNonce] = useState(0);
+  const prev = useRef({ symbol: null, token: reloadToken, enabled: false, nonce: 0 });
 
   useEffect(() => {
     if (!symbol || !enabled) return;
 
     const symbolChanged = prev.current.symbol !== symbol;
     const tokenChanged = prev.current.token !== reloadToken;
+    const nonceChanged = prev.current.nonce !== retryNonce;
     const justEnabled = !prev.current.enabled;
-    prev.current = { symbol, token: reloadToken, enabled };
-    if (!symbolChanged && !tokenChanged && !justEnabled) return;
+    prev.current = { symbol, token: reloadToken, enabled, nonce: retryNonce };
+    if (!symbolChanged && !tokenChanged && !justEnabled && !nonceChanged) return;
 
     let cancelled = false;
     setState({ sym: symbol, ori: null, error: null, locked: false, done: false });
@@ -53,7 +57,7 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [symbol, enabled, reloadToken, payloadRef]);
+  }, [symbol, enabled, reloadToken, payloadRef, retryNonce]);
 
   const forSym = state.sym === symbol;
   return {
@@ -62,5 +66,7 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
     locked: forSym ? state.locked : false,
     // "loading" until this symbol's request settles (and only while enabled).
     loading: !!symbol && enabled && !(forSym && state.done),
+    // Re-attempt after a transient failure; no-op while a request is in flight.
+    retry: () => setRetryNonce((n) => n + 1),
   };
 }

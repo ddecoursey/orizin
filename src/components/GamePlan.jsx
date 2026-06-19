@@ -261,7 +261,17 @@ function OriTake({ ori, oriState }) {
           )}
         </div>
       ) : (
-        <p className="text-[11.5px] text-gray-500">{error || "Ori couldn't weigh in right now. The data-driven Game Plan above still stands."}</p>
+        <div className="text-[11.5px] text-gray-500">
+          <p>{error || "Ori couldn't weigh in right now. The data-driven Game Plan above still stands."}</p>
+          {oriState?.retry && (
+            <button
+              onClick={oriState.retry}
+              className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-semibold px-2.5 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 cursor-pointer"
+            >
+              ↻ Try again
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
