@@ -395,10 +395,10 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <button
                 type="button"
                 onClick={() => onToggleWatchlist(symbol)}
-                className={`text-lg leading-none px-1 cursor-pointer ${isInWatchlist ? "text-amber-400" : "text-gray-600 hover:text-amber-400"}`}
-                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist"}
+                className={`text-lg leading-none px-1 cursor-pointer ${isInWatchlist ? "text-violet-400" : "text-gray-600 hover:text-violet-400"}`}
+                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist (monitor news & price)"}
               >
-                {isInWatchlist ? "★" : "☆"}
+                {isInWatchlist ? "◎" : "○"}
               </button>
             )}
             <div className="text-right">

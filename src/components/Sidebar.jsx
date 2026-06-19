@@ -329,7 +329,7 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
       </div>
       <div className="p-3 sm:p-4 flex-1">
 
-        {/* Active watchlist only */}
+        {/* Pinned only — screener pins, separate from watchlists */}
         <label className="group flex items-center gap-2.5 text-[11px] text-gray-400 mb-2 cursor-pointer select-none">
           <input
             type="checkbox"
@@ -342,7 +342,7 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
             <PinStar className="w-2.5 h-2.5" />
           </span>
           <span className={`transition-colors duration-150 ${f.pinnedOnly ? "text-gray-200 font-medium" : "group-hover:text-gray-200"}`}>
-            Watchlist only
+            Pinned only
           </span>
         </label>
 

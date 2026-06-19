@@ -216,9 +216,9 @@ export default function Header({
             type="button"
             onClick={onOpenWatchlist}
             className="px-2.5 py-1.5 lg:py-1 rounded-full text-xs font-medium text-amber-400/90 hover:text-amber-300 hover:bg-amber-950/40 border border-transparent hover:border-amber-800/40 transition-colors cursor-pointer whitespace-nowrap"
-            title="Open watchlists"
+            title="Open watchlists — monitor news and price moves"
           >
-            ★ {watchlistCount > 0 ? watchlistCount : "List"}
+            ◎ {watchlistCount > 0 ? watchlistCount : "Watch"}
           </button>
         )}
       </nav>

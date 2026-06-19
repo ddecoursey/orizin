@@ -28,7 +28,7 @@ import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 import { computeFit } from "./lib/fitScore.js";
 import { computeVerdict } from "./lib/verdict.js";
-import { applyWatchlistFilter } from "./lib/screenerDisplay.js";
+
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -419,12 +419,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     cancelOperation,
   } = useScreener(currentUser, portfolioGoals, canUseOri, currentView);
 
-  const watchlists = useWatchlists(currentUser, { tabs });
-
-  const displayedFiltered = useMemo(
-    () => applyWatchlistFilter(filtered, filters.pinnedOnly, watchlists.activeSymbols, pins),
-    [filtered, filters.pinnedOnly, watchlists.activeSymbols, pins],
-  );
+  const watchlists = useWatchlists(currentUser);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
@@ -615,12 +610,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       }
     : null;
 
-  // What the user is actively working with: their pinned watchlist and the
-  // screener (tab) they're in. Pinned rows pull from the filtered set first
-  // (so they carry live scores), falling back to the full universe.
+  // Pinned screener rows (per-tab) — separate from watchlists used for monitoring.
   const activeScreenerName = tabs.find((t) => t.id === activeTab)?.name || null;
-  const watchlistSyms = watchlists.activeSymbols.size ? [...watchlists.activeSymbols] : [...pins];
-  const pinnedStocks = watchlistSyms
+  const pinnedStocks = [...pins]
     .map((sym) => filtered.find((r) => r.symbol === sym) || stocks.find((r) => r.symbol === sym))
     .filter(Boolean);
 
@@ -675,7 +667,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       }
     : null;
 
-  const chat = useChat(displayedFiltered, filters, weights, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
+  const chat = useChat(filtered, filters, weights, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
     // Which main view the user is on ('screener' | 'portfolio-goals') so Ori can
     // shift its focus: portfolio analysis vs. screener recommendations.
     view: currentView,
@@ -773,7 +765,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       )}
       <Header
         status={status}
-        filtered={displayedFiltered}
+        filtered={filtered}
         onOpenWatchlist={() => setShowWatchlist(true)}
         watchlistCount={watchlists.activeList?.symbols?.length || 0}
         lastFetch={lastFetch}
@@ -911,7 +903,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 </div>
 
                 <span className="text-xs text-gray-600 whitespace-nowrap">
-                  {displayedFiltered.length} / {stocks.length}
+                  {filtered.length} / {stocks.length}
                 </span>
 
                 <button
@@ -975,7 +967,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
                   </button>
                   <span className="text-xs text-gray-600 whitespace-nowrap">
-                    {displayedFiltered.length} / {stocks.length}
+                    {filtered.length} / {stocks.length}
                   </span>
 
                   <div className="ml-auto flex items-center gap-2">
@@ -1040,11 +1032,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               ) : view === "table" ? (
                 <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
                   <StockTable
-                    rows={displayedFiltered}
+                    rows={filtered}
                     heatRows={filteredRows}
                     pins={pins}
-                    watchlistSymbols={watchlists.activeSymbols}
-                    onToggleWatchlist={watchlists.toggleSymbol}
                     canUseOri={canUseOri}
                     onUpgradeToPro={openUpgradeModal}
                     onTogglePin={togglePin}
@@ -1128,7 +1118,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         )}
 
         {chat.isOpen && (
-          <ChatPanel chat={chat} canUseOri={canUseOri} floating={!!(detailStock && detailStock2)} onUpgradeToPro={openUpgradeModal} />
+          <ChatPanel
+            chat={chat}
+            canUseOri={canUseOri}
+            floating={!!(detailStock && detailStock2)}
+            elevated={showWatchlist}
+            onUpgradeToPro={openUpgradeModal}
+          />
         )}
       </div>
 
@@ -1285,8 +1281,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         setActiveWatchlist={watchlists.setActiveWatchlist}
         createWatchlist={watchlists.createWatchlist}
         deleteWatchlist={watchlists.deleteWatchlist}
+        addSymbol={watchlists.addSymbol}
         removeSymbol={watchlists.removeSymbol}
-        toggleSymbol={watchlists.toggleSymbol}
         stocks={stocks}
         canUseOri={canUseOri}
         onSelectSymbol={(sym) => {

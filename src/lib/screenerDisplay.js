@@ -23,9 +23,3 @@ export function tierColumnDefs(cols, canUseOri) {
   );
 }
 
-/** Watchlist-only filter: prefers active watchlist symbols, falls back to tab pins. */
-export function applyWatchlistFilter(rows, pinnedOnly, watchlistSymbols, tabPins) {
-  if (!pinnedOnly) return rows;
-  const set = watchlistSymbols?.size ? watchlistSymbols : tabPins;
-  return rows.filter((r) => set.has(r.symbol));
-}

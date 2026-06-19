@@ -3,7 +3,6 @@ import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 import {
   defaultWatchlists,
   normalizeWatchlists,
-  migratePinsIntoDefaultWatchlist,
   MAX_WATCHLISTS as MAX_LISTS,
 } from "../lib/watchlistNormalize.js";
 
@@ -28,15 +27,12 @@ function saveLocal(user, lists, activeId) {
   } catch { /* ignore */ }
 }
 
-export { pinsFromTabs } from "../lib/watchlistNormalize.js";
-
-export function useWatchlists(currentUser, { tabs = [], hydrated = true } = {}) {
+export function useWatchlists(currentUser, { hydrated = true } = {}) {
   const user = currentUser || "default";
   const initial = loadLocal(user);
   const [lists, setLists] = useState(() => normalizeWatchlists(initial.lists));
   const [activeId, setActiveId] = useState(initial.activeId);
   const hydratedRef = useRef(false);
-  const migratedRef = useRef(false);
 
   const persist = useCallback((nextLists, nextActive) => {
     const norm = normalizeWatchlists(nextLists);
@@ -50,20 +46,15 @@ export function useWatchlists(currentUser, { tabs = [], hydrated = true } = {}) 
     return { lists: norm, activeId: aid };
   }, [user]);
 
-  // Hydrate from server; migrate tab pins → default watchlist once.
+  // Hydrate from server (watchlists are independent of screener pins).
   useEffect(() => {
     if (!hydrated || hydratedRef.current) return;
     let cancelled = false;
     fetchUserSettings().then((server) => {
       if (cancelled) return;
       hydratedRef.current = true;
-      let nextLists = normalizeWatchlists(server?.watchlists);
+      const nextLists = normalizeWatchlists(server?.watchlists);
       let nextActive = server?.activeWatchlistId || activeId;
-
-      if (!migratedRef.current) {
-        migratedRef.current = true;
-        nextLists = migratePinsIntoDefaultWatchlist(nextLists, tabs);
-      }
 
       if (!nextLists.some((w) => w.id === nextActive)) nextActive = "default";
       setLists(nextLists);
@@ -73,7 +64,7 @@ export function useWatchlists(currentUser, { tabs = [], hydrated = true } = {}) 
       hydratedRef.current = true;
     });
     return () => { cancelled = true; };
-  }, [hydrated, user, tabs, activeId]);
+  }, [hydrated, user, activeId]);
 
   const activeList = useMemo(
     () => lists.find((w) => w.id === activeId) || lists[0] || normalizeWatchlists([])[0],

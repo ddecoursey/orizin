@@ -167,8 +167,6 @@ export default function StockTable({
   heatRows = rows,
   pins,
   onTogglePin,
-  watchlistSymbols = null,
-  onToggleWatchlist,
   canUseOri = true,
   onUpgradeToPro,
   onAskAI,
@@ -180,8 +178,6 @@ export default function StockTable({
   onSortChange,
 }) {
   const cols = useMemo(() => tierColumnDefs(COLS, canUseOri), [canUseOri]);
-  const starSet = watchlistSymbols?.size ? watchlistSymbols : pins;
-  const onToggleStar = onToggleWatchlist || onTogglePin;
   // symbol -> number[]. localStorage hydration happens lazily per symbol inside
   // fetchSparklineInternal (getSparklineFromLocal) — the old eager loop parsed
   // every persisted sparkline JSON blob synchronously at mount, which scaled
@@ -330,7 +326,7 @@ export default function StockTable({
   };
 
   const sorted = useMemo(() => {
-    const pinnedSet = starSet;
+    const pinnedSet = pins;
     const sortField = resolveSortField(sortKey);
     return [...rows].sort((a, b) => {
       const ap = pinnedSet.has(a.symbol),
@@ -345,7 +341,7 @@ export default function StockTable({
       }
       return (av - bv) * sortDir;
     });
-  }, [rows, starSet, sortKey, sortDir]);
+  }, [rows, pins, sortKey, sortDir]);
 
   // Virtualization setup - Battle-tested pattern for large tables in flex layouts
   const parentRef = useRef(null);
@@ -532,7 +528,7 @@ export default function StockTable({
             const r = sorted[virtualRow.index];
             if (!r) return null;
 
-            const pinned = starSet.has(r.symbol);
+            const pinned = pins.has(r.symbol);
 
             return (
               <tr
@@ -548,11 +544,11 @@ export default function StockTable({
                   style={{ width: '32px', minWidth: '32px' }}
                 >
                   <button
-                    onClick={() => onToggleStar(r.symbol)}
+                    onClick={() => onTogglePin(r.symbol)}
                     className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
                       pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
                     }`}
-                    title={pinned ? "Remove from watchlist" : "Add to watchlist"}
+                    title={pinned ? "Unpin from screener" : "Pin to screener"}
                   >
                     {pinned ? "★" : "☆"}
                   </button>
