@@ -202,6 +202,15 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
           <span>✦</span> Ori's Take
         </h4>
         <div className="flex items-center gap-2 shrink-0">
+          {loading && oriState?.cancel && (
+            <button
+              type="button"
+              onClick={oriState.cancel}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-gray-900/50 text-gray-300 border border-gray-700/60 hover:bg-gray-800/60 transition-colors active:scale-95 cursor-pointer"
+            >
+              Cancel
+            </button>
+          )}
           {isAdmin && oriReady && oriState?.refresh && !locked && (
             <button
               type="button"
@@ -316,7 +325,11 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
         </div>
       ) : (
         <div className="text-[11.5px] text-gray-500">
-          <p>{error || "Ori couldn't weigh in right now. The data-driven Game Plan above still stands."}</p>
+          <p>
+            {oriState?.cancelled
+              ? "Cancelled. The data-driven Game Plan above still stands."
+              : error || "Ori couldn't weigh in right now. The data-driven Game Plan above still stands."}
+          </p>
           {oriState?.retry && (
             <button
               onClick={oriState.retry}
