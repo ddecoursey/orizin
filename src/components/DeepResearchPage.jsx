@@ -401,7 +401,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
                     ? "bg-violet-950/50 text-violet-200 border-violet-700/60 hover:border-violet-600"
                     : "bg-gray-900 text-gray-400 border-gray-700 hover:border-violet-700/50 hover:text-violet-300"
                 }`}
-                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist to track news and price"}
+                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist — priority refresh & alerts"}
               >
                 {isInWatchlist ? "On watchlist" : "Add to watchlist"}
               </button>

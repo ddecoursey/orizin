@@ -1244,6 +1244,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     createTab,
     deleteTab,
     loadStocks,
+    mergeStocks,
     // scope='visible' (default): act only on the on-screen (filtered) rows — fetch
     //   the ones still missing data, or force-refresh them all if they're already
     //   enriched.

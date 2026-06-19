@@ -43,6 +43,16 @@ export function isMarketOpen(date = new Date()) {
 }
 
 // Human-readable session descriptor for prompts and the debug page.
+/** YYYY-MM-DD in America/New_York (for per-session price baselines). */
+export function etSessionDate(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
 export function marketStatusLine(date = new Date()) {
   const session = marketSession(date);
   const et = new Intl.DateTimeFormat('en-US', {

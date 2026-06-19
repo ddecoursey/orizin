@@ -1,12 +1,15 @@
 import { Router } from "express";
-import { getUserSettings, patchUserSettings } from "../db.js";
+import { getUserSettings, patchUserSettings, markWatchlistGatherDue, deleteWatchlistAlertState } from "../db.js";
 import { normalizeWatchlists } from "../../src/lib/watchlistNormalize.js";
+import { sanitizeWatchlistAlerts } from "../../src/lib/watchlistAlertsConfig.js";
+import { invalidateWatchlistUnionCache } from "../watchlistSymbols.js";
 
 const router = Router();
 
 const ALLOWED_KEYS = new Set([
   "tabs", "activeTab", "weights", "risk", "sort", "theme", "sidebarCollapsed",
   "portfolios", "goals", "theses", "oriMemory", "watchlists", "activeWatchlistId",
+  "watchlistAlerts",
 ]);
 const MAX_WATCHLIST_PAYLOAD_LISTS = 20;
 const MAX_BODY_BYTES = 256 * 1024;
@@ -96,8 +99,24 @@ function sanitizeSettings(partial) {
       out.watchlists = normalizeWatchlists(v);
       continue;
     }
+    if (k === "watchlistAlerts" && v && typeof v === "object") {
+      out.watchlistAlerts = sanitizeWatchlistAlerts(v);
+      continue;
+    }
   }
   return Object.keys(out).length ? out : {};
+}
+
+function diffNewWatchlistSymbols(prevLists, nextLists) {
+  const prev = new Set(normalizeWatchlists(prevLists)[0]?.symbols || []);
+  const next = normalizeWatchlists(nextLists)[0]?.symbols || [];
+  return next.filter((s) => !prev.has(s));
+}
+
+function diffRemovedWatchlistSymbols(prevLists, nextLists) {
+  const next = new Set(normalizeWatchlists(nextLists)[0]?.symbols || []);
+  const prev = normalizeWatchlists(prevLists)[0]?.symbols || [];
+  return prev.filter((s) => !next.has(s));
 }
 
 // All routes require authentication — the /api middleware in index.js sets
@@ -115,7 +134,19 @@ router.put("/settings", (req, res) => {
   if (partial === null) {
     return res.status(400).json({ error: "Invalid or oversized settings payload" });
   }
+
+  const prev = partial.watchlists ? getUserSettings(req.userId) : null;
+
   const merged = patchUserSettings(req.userId, partial);
+
+  if (partial.watchlists) {
+    invalidateWatchlistUnionCache();
+    const added = diffNewWatchlistSymbols(prev?.watchlists, merged.watchlists);
+    const removed = diffRemovedWatchlistSymbols(prev?.watchlists, merged.watchlists);
+    if (added.length) markWatchlistGatherDue(added);
+    for (const sym of removed) deleteWatchlistAlertState(req.userId, sym);
+  }
+
   res.json({ data: merged });
 });
 

@@ -110,6 +110,7 @@ export default function Header({
   onNavigate,
   stocks = [],
   onOpenWatchlist,
+  watchlistUnread = 0,
 }) {
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
@@ -218,10 +219,15 @@ export default function Header({
           <button
             type="button"
             onClick={onOpenWatchlist}
-            className="px-2.5 py-1.5 lg:px-2 lg:py-1 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700/80 hover:border-gray-600 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            className="relative px-2.5 py-1.5 lg:px-2 lg:py-1 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700/80 hover:border-gray-600 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             title="Open watchlist panel — track news and price moves"
           >
             Watchlist
+            {watchlistUnread > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-violet-600 text-[9px] font-bold text-white flex items-center justify-center">
+                {watchlistUnread > 9 ? "9+" : watchlistUnread}
+              </span>
+            )}
           </button>
         )}
         {/* Data menu (Refresh / Gather) — admin only: normal users cannot trigger universe or data refreshes from FMP */}

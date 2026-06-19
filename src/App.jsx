@@ -1,6 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from "react";
 import { useWatchlists } from "./hooks/useWatchlists.js";
+import { useWatchlistAlerts } from "./hooks/useWatchlistAlerts.js";
 import WatchlistPanel from "./components/WatchlistPanel.jsx";
+import NotificationHost from "./components/NotificationHost.jsx";
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from "./lib/motion.js";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
@@ -408,6 +410,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     createTab,
     deleteTab,
     loadStocks,
+    mergeStocks,
     enrichAll,
     regatherSymbol,
     enrichLoading,
@@ -419,6 +422,29 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   } = useScreener(currentUser, portfolioGoals, canUseOri, currentView);
 
   const watchlists = useWatchlists(currentUser);
+  const wlAlerts = useWatchlistAlerts({ enabled: currentUser && currentUser !== "default" });
+  const watchlistSymbols = watchlists.watchlist?.symbols || [];
+  const pendingWlSymbols = useMemo(() => {
+    const wl = watchlists.watchlist;
+    if (!wl?.symbols?.length) return new Set();
+    const listRecent = wl.updatedAt && Date.now() - wl.updatedAt < 10 * 60 * 1000;
+    if (!listRecent) return new Set();
+    const stale = new Set();
+    for (const sym of wl.symbols) {
+      const snap = wlAlerts.snapshots[sym];
+      const row = stocks.find((s) => s.symbol === sym);
+      const pu = snap?.priceUpdatedAt ?? row?.price_updated_at;
+      if (!pu || Date.now() - pu > 5 * 60 * 1000) stale.add(sym);
+    }
+    return stale;
+  }, [watchlists.watchlist, wlAlerts.snapshots, stocks]);
+
+  useEffect(() => {
+    if (!watchlistSymbols.length || !mergeStocks) return;
+    mergeStocks(watchlistSymbols);
+    const id = setInterval(() => mergeStocks(watchlistSymbols), 3 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [watchlistSymbols.join(","), mergeStocks]);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
@@ -765,7 +791,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       <Header
         status={status}
         filtered={filtered}
-        onOpenWatchlist={() => setShowWatchlist(true)}
+        onOpenWatchlist={() => {
+          wlAlerts.markRead();
+          setShowWatchlist(true);
+        }}
+        watchlistUnread={wlAlerts.unread}
 
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
@@ -1278,11 +1308,19 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         addSymbol={watchlists.addSymbol}
         removeSymbol={watchlists.removeSymbol}
         stocks={stocks}
+        snapshots={wlAlerts.snapshots}
+        pendingSymbols={pendingWlSymbols}
         canUseOri={canUseOri}
         onSelectSymbol={(sym) => {
           setShowWatchlist(false);
           openDeepResearch(sym);
         }}
+      />
+
+      <NotificationHost
+        alerts={wlAlerts.alerts}
+        onDismiss={wlAlerts.dismiss}
+        onOpenSymbol={(sym) => openDeepResearch(sym)}
       />
 
       {showUpgradeModal && (

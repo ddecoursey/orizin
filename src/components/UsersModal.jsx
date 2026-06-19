@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { PRO_PRICE_LABEL } from "../lib/billing.js";
+import { DEFAULT_WATCHLIST_ALERTS } from "../lib/watchlistAlertsConfig.js";
+import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
 // `mode` controls which surface this modal shows:
 //   'account' → personal Account Settings (plan + change your password)
@@ -20,6 +22,8 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
   const [subStatus, setSubStatus] = useState(null); // { plan, status, subscriptionId }
   const [canceling, setCanceling] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [wlAlerts, setWlAlerts] = useState({ ...DEFAULT_WATCHLIST_ALERTS });
+  const [wlAlertsSaving, setWlAlertsSaving] = useState(false);
 
   async function loadUsers() {
     setLoading(true);
@@ -42,6 +46,26 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
     if (showUsers) loadUsers();
     else setLoading(false);
   }, [showUsers]);
+
+  useEffect(() => {
+    if (!showAccount) return;
+    fetchUserSettings().then((s) => {
+      if (s?.watchlistAlerts) setWlAlerts({ ...DEFAULT_WATCHLIST_ALERTS, ...s.watchlistAlerts });
+    }).catch(() => {});
+  }, [showAccount]);
+
+  async function saveWlAlerts(patch) {
+    const next = { ...wlAlerts, ...patch };
+    setWlAlerts(next);
+    setWlAlertsSaving(true);
+    try {
+      await patchUserSettings({ watchlistAlerts: next });
+    } catch {
+      // revert on failure
+      setWlAlerts(wlAlerts);
+    }
+    setWlAlertsSaving(false);
+  }
 
   // Account mode: load the current user's subscription status (for the Cancel UI).
   useEffect(() => {
@@ -343,6 +367,34 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
                   ? 'You have full access to Ori, the AI analyst.'
                   : `Free includes the full screener, Deep Research, and portfolio tools. Pro (${PRO_PRICE_LABEL}) unlocks Ori — the portfolio-aware AI analyst.`}
               </p>
+            </div>
+          </div>
+        )}
+
+        {showAccount && (
+          <div className="mb-6">
+            <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Watchlist alerts</div>
+            <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-2.5">
+              <p className="text-[11px] text-gray-500 leading-snug">
+                Watched symbols refresh automatically (~hourly). Get in-app toasts, a daily email digest (8am ET), and optional instant email for large price moves.
+              </p>
+              {[
+                ["enabled", "Alerts enabled"],
+                ["inApp", "In-app notifications"],
+                ["emailDigest", "Daily email digest"],
+                ["emailInstant", "Instant email for large moves (≥8%)"],
+              ].map(([key, label]) => (
+                <label key={key} className="flex items-center justify-between gap-3 text-xs text-gray-300 cursor-pointer">
+                  <span>{label}</span>
+                  <input
+                    type="checkbox"
+                    checked={!!wlAlerts[key]}
+                    disabled={wlAlertsSaving}
+                    onChange={(e) => saveWlAlerts({ [key]: e.target.checked })}
+                    className="accent-violet-500"
+                  />
+                </label>
+              ))}
             </div>
           </div>
         )}

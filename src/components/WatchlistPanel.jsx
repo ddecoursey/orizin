@@ -13,6 +13,22 @@ function ScoreMini({ row, canUseOri }) {
   return <span className={`text-[10px] font-bold font-mono tabular-nums ${color}`}>{v}</span>;
 }
 
+function fmtAge(ms) {
+  if (!ms || !Number.isFinite(ms)) return null;
+  const age = Date.now() - ms;
+  if (age < 60_000) return "just now";
+  if (age < 3_600_000) return `${Math.round(age / 60_000)}m ago`;
+  if (age < 86_400_000) return `${Math.round(age / 3_600_000)}h ago`;
+  return `${Math.round(age / 86_400_000)}d ago`;
+}
+
+function pctCls(pct) {
+  if (pct == null) return "text-gray-500";
+  if (pct >= 2) return "text-emerald-400";
+  if (pct <= -2) return "text-red-400";
+  return "text-gray-400";
+}
+
 export default function WatchlistPanel({
   open,
   onClose,
@@ -21,6 +37,8 @@ export default function WatchlistPanel({
   removeSymbol,
   stocks = [],
   sparklines = new Map(),
+  snapshots = {},
+  pendingSymbols = new Set(),
   canUseOri = false,
   onSelectSymbol,
 }) {
@@ -36,7 +54,7 @@ export default function WatchlistPanel({
         <header className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 shrink-0">
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold text-gray-100">Watchlist</h2>
-            <p className="text-[10px] text-gray-500">Track news &amp; price — separate from screener ★ pins</p>
+            <p className="text-[10px] text-gray-500">Priority refresh ~hourly · alerts on big moves</p>
           </div>
           <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-200 px-1 cursor-pointer shrink-0">×</button>
         </header>
@@ -59,7 +77,12 @@ export default function WatchlistPanel({
             <ul className="divide-y divide-gray-800/80">
               {symbols.map((sym) => {
                 const row = stockMap.get(sym) || { symbol: sym };
+                const snap = snapshots[sym];
                 const pts = sparklines.get(sym);
+                const syncing = pendingSymbols.has(sym);
+                const pct = snap?.pctSession;
+                const priceAge = fmtAge(snap?.priceUpdatedAt ?? row.price_updated_at);
+                const dataAge = fmtAge(snap?.dataUpdatedAt ?? row.updated_at);
                 return (
                   <li key={sym} className="flex items-center gap-2 px-4 py-2.5 hover:bg-gray-900/60 group">
                     <button
@@ -68,11 +91,26 @@ export default function WatchlistPanel({
                       className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-gray-100 text-xs">{sym}</span>
                           <ScoreMini row={row} canUseOri={canUseOri} />
+                          {pct != null && (
+                            <span className={`text-[10px] font-mono font-semibold ${pctCls(pct)}`}>
+                              {pct >= 0 ? "+" : ""}{pct}%
+                            </span>
+                          )}
+                          {syncing && (
+                            <span className="text-[9px] text-violet-400/90 animate-pulse">syncing…</span>
+                          )}
                         </div>
                         <div className="text-[10px] text-gray-500 truncate">{row.name || "—"}</div>
+                        {(priceAge || dataAge) && (
+                          <div className="text-[9px] text-gray-600 mt-0.5">
+                            {priceAge ? `Price · ${priceAge}` : ""}
+                            {priceAge && dataAge ? " · " : ""}
+                            {dataAge ? `Data · ${dataAge}` : ""}
+                          </div>
+                        )}
                       </div>
                       {pts?.length > 1 ? (
                         <Sparkline
@@ -80,7 +118,9 @@ export default function WatchlistPanel({
                           color={pts.at(-1) >= pts[0] ? "#22c55e" : "#ef4444"}
                         />
                       ) : (
-                        <span className="text-[10px] font-mono text-gray-400 w-14 text-right">{fmt(row.price, "price") ?? "—"}</span>
+                        <span className="text-[10px] font-mono text-gray-400 w-14 text-right">
+                          {fmt(snap?.price ?? row.price, "price") ?? "—"}
+                        </span>
                       )}
                     </button>
                     <button
