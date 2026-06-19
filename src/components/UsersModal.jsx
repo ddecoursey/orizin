@@ -6,7 +6,18 @@ import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 // `mode` controls which surface this modal shows:
 //   'account' → personal Account Settings (plan + change your password)
 //   'users'   → admin User Management (add/remove users, grant admin, set plan)
-export default function UsersModal({ onClose, currentUser, isAdmin = false, plan = 'free', mode = 'account', onAuthRefresh, onUpgradeToPro }) {
+export default function UsersModal({
+  onClose,
+  currentUser,
+  isAdmin = false,
+  plan = 'free',
+  mode = 'account',
+  onAuthRefresh,
+  onUpgradeToPro,
+  appEnv = 'production',
+  onTestWatchlistAlert,
+  testWatchlistAlertBusy = false,
+}) {
   const showUsers = mode === 'users' && isAdmin;
   const showAccount = mode === 'account';
   const [users, setUsers] = useState([]);
@@ -395,6 +406,16 @@ export default function UsersModal({ onClose, currentUser, isAdmin = false, plan
                   />
                 </label>
               ))}
+              {appEnv === 'development' && onTestWatchlistAlert && (
+                <button
+                  type="button"
+                  disabled={testWatchlistAlertBusy}
+                  onClick={onTestWatchlistAlert}
+                  className="w-full mt-2 text-[11px] font-semibold px-2 py-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 text-amber-200 hover:bg-amber-900/40 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {testWatchlistAlertBusy ? 'Sending…' : 'Send test notification (dev)'}
+                </button>
+              )}
             </div>
           </div>
         )}

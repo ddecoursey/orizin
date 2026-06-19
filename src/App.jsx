@@ -423,6 +423,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
   const watchlists = useWatchlists(currentUser);
   const wlAlerts = useWatchlistAlerts({ enabled: currentUser && currentUser !== "default" });
+  const [wlTestBusy, setWlTestBusy] = useState(false);
+  const handleWlTestAlert = async () => {
+    setWlTestBusy(true);
+    await wlAlerts.triggerTestAlert({
+      symbol: watchlists.watchlist?.symbols?.[0],
+      type: "price",
+    });
+    setWlTestBusy(false);
+  };
   const watchlistSymbols = watchlists.watchlist?.symbols || [];
   const pendingWlSymbols = useMemo(() => {
     const wl = watchlists.watchlist;
@@ -1280,6 +1289,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           mode={usersModalMode}
           onAuthRefresh={onAuthRefresh}
           onUpgradeToPro={() => { setShowUsersModal(false); openUpgradeModal(); }}
+          appEnv={appEnv}
+          onTestWatchlistAlert={handleWlTestAlert}
+          testWatchlistAlertBusy={wlTestBusy}
         />
       )}
 
@@ -1315,6 +1327,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           setShowWatchlist(false);
           openDeepResearch(sym);
         }}
+        showDevTest={appEnv === "development"}
+        onTestAlert={handleWlTestAlert}
+        testAlertBusy={wlTestBusy}
       />
 
       <NotificationHost

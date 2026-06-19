@@ -3,10 +3,39 @@ import assert from 'node:assert/strict';
 
 import { sanitizeWatchlistAlerts } from '../../src/lib/watchlistAlertsConfig.js';
 import { invalidateWatchlistUnionCache, getUnionWatchlistSymbols } from '../watchlistSymbols.js';
+import { devAlertsTestEnabled, injectTestAlert } from '../watchlistAlerts.js';
 import sqliteDb, * as db from '../db.js';
 
 const TEST_USER_A = '__wl_test_a__';
 const TEST_USER_B = '__wl_test_b__';
+
+test('devAlertsTestEnabled is false under NODE_ENV=test', () => {
+  const prevNode = process.env.NODE_ENV;
+  const prevApp = process.env.APP_ENV;
+  process.env.NODE_ENV = 'test';
+  process.env.APP_ENV = 'development';
+  try {
+    assert.equal(devAlertsTestEnabled(), false);
+  } finally {
+    if (prevNode === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = prevNode;
+    if (prevApp === undefined) delete process.env.APP_ENV;
+    else process.env.APP_ENV = prevApp;
+  }
+});
+
+test('injectTestAlert queues a sample price alert', () => {
+  const userId = '__wl_inject_test__';
+  db.patchUserSettings(userId, {
+    watchlists: [{ id: 'default', name: 'Watchlist', symbols: ['WLINJ'], updatedAt: 1 }],
+  });
+  const { alert, symbol } = injectTestAlert(userId, { symbol: 'WLINJ', type: 'price' });
+  assert.equal(symbol, 'WLINJ');
+  assert.equal(alert.type, 'price');
+  assert.ok(alert.title.includes('WLINJ'));
+  const st = db.getWatchlistAlertState(userId, 'WLINJ');
+  assert.ok(st.pending_digest?.some((a) => a.id === alert.id));
+});
 
 test('sanitizeWatchlistAlerts clamps thresholds and preserves booleans', () => {
   const s = sanitizeWatchlistAlerts({

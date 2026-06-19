@@ -41,6 +41,9 @@ export default function WatchlistPanel({
   pendingSymbols = new Set(),
   canUseOri = false,
   onSelectSymbol,
+  showDevTest = false,
+  onTestAlert,
+  testAlertBusy = false,
 }) {
   if (!open) return null;
 
@@ -138,8 +141,20 @@ export default function WatchlistPanel({
           )}
         </div>
 
-        <footer className="px-4 py-2 border-t border-gray-800 text-[10px] text-gray-600 shrink-0">
-          {symbols.length} {symbols.length === 1 ? "symbol" : "symbols"} · tap a row for Deep Research
+        <footer className="px-4 py-2 border-t border-gray-800 text-[10px] text-gray-600 shrink-0 space-y-2">
+          <div>
+            {symbols.length} {symbols.length === 1 ? "symbol" : "symbols"} · tap a row for Deep Research
+          </div>
+          {showDevTest && onTestAlert && (
+            <button
+              type="button"
+              disabled={testAlertBusy}
+              onClick={() => onTestAlert()}
+              className="w-full text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 text-amber-200 hover:bg-amber-900/40 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {testAlertBusy ? "Sending…" : "Test notification (dev)"}
+            </button>
+          )}
         </footer>
       </aside>
     </div>

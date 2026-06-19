@@ -59,5 +59,27 @@ export function useWatchlistAlerts({ enabled = true, pollMs = 60_000 } = {}) {
     };
   }, [enabled, poll, pollMs]);
 
-  return { alerts, snapshots, unread, dismiss, markRead, refresh: poll };
+  const triggerTestAlert = useCallback(async (opts = {}) => {
+    try {
+      const res = await fetch("/api/watchlist/alerts/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) return { error: res.status === 404 ? "Dev only" : "Failed" };
+      const data = await res.json();
+      if (data.alert?.id) {
+        seenIds.current.add(data.alert.id);
+        setAlerts((prev) => [data.alert, ...prev].slice(0, 30));
+        setUnread((n) => n + 1);
+        sinceRef.current = Math.max(sinceRef.current, data.alert.ts || 0);
+      }
+      await poll();
+      return { ok: true, alert: data.alert };
+    } catch {
+      return { error: "Network error" };
+    }
+  }, [poll]);
+
+  return { alerts, snapshots, unread, dismiss, markRead, refresh: poll, triggerTestAlert };
 }

@@ -15,6 +15,62 @@ const MAX_URGENT_EMAILS_DAY = 2;
 
 const newsCache = new Map();
 
+/** Dev/local only — never expose the test injector in production or CI. */
+export function devAlertsTestEnabled() {
+  if (process.env.NODE_ENV === 'test') return false;
+  const env = process.env.APP_ENV || (process.env.PAYPAL_ENV === 'live' ? 'production' : 'development');
+  return env === 'development';
+}
+
+/** Inject a sample alert into pending_digest so the in-app toast can be previewed. */
+export function injectTestAlert(userId, { symbol, type = 'price' } = {}) {
+  const settings = db.getUserSettings(userId);
+  const lists = normalizeWatchlists(settings.watchlists);
+  const symbols = lists[0]?.symbols || [];
+  const sym = String(symbol || symbols[0] || 'AAPL').trim().toUpperCase();
+  const row = db.getStock(sym);
+  const now = Date.now();
+
+  let alert;
+  if (type === 'news') {
+    alert = {
+      id: `${userId}:${sym}:news:test:${now}`,
+      type: 'news',
+      symbol: sym,
+      title: `${sym}: [Dev test] Sample headline`,
+      message: 'Test news notification',
+      url: 'https://example.com/watchlist-test',
+      ts: now,
+    };
+  } else if (type === 'conviction') {
+    alert = {
+      id: `${userId}:${sym}:conviction:test:${now}`,
+      type: 'conviction',
+      symbol: sym,
+      title: `${sym} conviction rose to 72`,
+      message: 'Dev test — conviction shift (+9)',
+      conviction: 72,
+      ts: now,
+    };
+  } else {
+    const px = row?.price ?? 100;
+    alert = {
+      id: `${userId}:${sym}:price:test:${now}`,
+      type: 'price',
+      symbol: sym,
+      title: `${sym} up 6.1%`,
+      message: `Dev test — now $${Number(px).toFixed(2)} vs session baseline`,
+      pct: 6.1,
+      ts: now,
+    };
+  }
+
+  const st = db.getWatchlistAlertState(userId, sym);
+  const pending = [...(st?.pending_digest || []), alert].slice(-MAX_DIGEST_ITEMS);
+  db.saveWatchlistAlertState(userId, sym, { pending_digest: pending });
+  return { alert, symbol: sym };
+}
+
 function userEmail(user) {
   if (!user) return null;
   const e = user.email || user.username;
