@@ -409,7 +409,7 @@ test('settings accept watchlists and activeWatchlistId', async () => {
   assert.deepEqual(merged.data.watchlists[0].symbols, ['AAPL', 'MSFT']);
 });
 
-test('settings sanitize watchlists: dedupe, uppercase, list and symbol caps', async () => {
+test('settings sanitize watchlists: single list, dedupe, uppercase, symbol cap', async () => {
   const email = `wl_sanitize_${Date.now()}@example.com`;
   const isoCookie = cookieFrom(await fetch(api('/api/auth/signup'), {
     method: 'POST',
@@ -417,51 +417,37 @@ test('settings sanitize watchlists: dedupe, uppercase, list and symbol caps', as
     body: JSON.stringify({ email, password: 'strongpass1A' }),
   }));
 
-  const manySymbols = Array.from({ length: 210 }, (_, i) => `sym${i}`);
-  // Server rejects the whole watchlists key when length > 12 — stay at the cap.
-  const extraLists = Array.from({ length: 10 }, (_, i) => ({
-    id: `wl_${i}`,
-    name: 'x'.repeat(40),
-    symbols: ['aapl', 'aapl', ' msft '],
-    updatedAt: 1,
-  }));
-
   const put = await fetch(api('/api/settings'), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', cookie: isoCookie },
     body: JSON.stringify({
       watchlists: [
-        { id: 'default', name: 'Primary', symbols: manySymbols, updatedAt: 1 },
-        ...extraLists,
-        { id: '', name: 'Bad', symbols: ['ZZZ'] },
+        { id: 'default', name: 'Primary', symbols: ['aapl', 'aapl'], updatedAt: 1 },
+        { id: 'wl_1', name: 'Extra', symbols: [' msft ', 'nvda'], updatedAt: 1 },
       ],
-      activeWatchlistId: 'default',
+      activeWatchlistId: 'wl_1',
     }),
   });
   assert.equal(put.status, 200);
 
   const merged = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
-  assert.equal(merged.data.watchlists.length, 11);
-  assert.equal(merged.data.watchlists[0].symbols.length, 200);
-  assert.equal(merged.data.watchlists[0].symbols[0], 'SYM0');
-  assert.deepEqual(merged.data.watchlists[1].symbols, ['AAPL', 'MSFT']);
-  assert.equal(merged.data.watchlists[1].name.length, 28);
+  assert.equal(merged.data.watchlists.length, 1);
+  assert.equal(merged.data.watchlists[0].id, 'default');
+  assert.equal(merged.data.activeWatchlistId, 'default');
+  assert.deepEqual(merged.data.watchlists[0].symbols, ['AAPL', 'MSFT', 'NVDA']);
 
-  const overCap = await fetch(api('/api/settings'), {
+  const manySymbols = Array.from({ length: 210 }, (_, i) => `sym${i}`);
+  const capped = await fetch(api('/api/settings'), {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', cookie: isoCookie },
     body: JSON.stringify({
-      watchlists: Array.from({ length: 13 }, (_, i) => ({
-        id: `too_many_${i}`,
-        name: `List ${i}`,
-        symbols: [],
-        updatedAt: 1,
-      })),
+      watchlists: [{ id: 'default', name: 'W', symbols: manySymbols, updatedAt: 1 }],
     }),
   });
-  assert.equal(overCap.status, 200);
-  const afterOverCap = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
-  assert.equal(afterOverCap.data.watchlists.length, 11);
+  assert.equal(capped.status, 200);
+  const afterCap = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
+  assert.equal(afterCap.data.watchlists[0].symbols.length, 200);
+  assert.equal(afterCap.data.watchlists[0].symbols[0], 'SYM0');
 });
 
 test('refresh and enrich are admin-only', async () => {

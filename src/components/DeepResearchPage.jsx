@@ -8,7 +8,7 @@ import { useDeepResearch } from "../hooks/useDeepResearch.js";
 import { computeFit } from "../lib/fitScore.js";
 import { computeVerdict, mergeOriIntoVerdict, metricTone } from "../lib/verdict.js";
 import { useGamePlanOri } from "../hooks/useGamePlanOri.js";
-import GamePlan from "./GamePlan.jsx";
+import GamePlan, { GamePlanProGate } from "./GamePlan.jsx";
 import RatingsSnapshot from "./RatingsSnapshot.jsx";
 import InfoHint from "./InfoHint.jsx";
 import { computePortfolioOverlap, overlapChipText } from "../lib/portfolioAnalysis.js";
@@ -216,7 +216,7 @@ function smLabel(signal) {
   return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgradeToPro, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
 
@@ -272,10 +272,11 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // Lift the refined conviction back to the screener row for this session, so the
   // sharper number (live technicals/grades/insiders/Ori) shows there too.
   useEffect(() => {
+    if (!canUseOri) return;
     if (symbol && verdict && !verdict.insufficient && Number.isFinite(verdict.conviction)) {
       onConvictionChange?.(symbol, verdict.conviction);
     }
-  }, [symbol, verdict, onConvictionChange]);
+  }, [canUseOri, symbol, verdict, onConvictionChange]);
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
   // so a re-gather reloads it once rather than double-fetching from FMP.
   const {
@@ -395,10 +396,14 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               <button
                 type="button"
                 onClick={() => onToggleWatchlist(symbol)}
-                className={`text-lg leading-none px-1 cursor-pointer ${isInWatchlist ? "text-violet-400" : "text-gray-600 hover:text-violet-400"}`}
-                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist (monitor news & price)"}
+                className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-md border shrink-0 cursor-pointer whitespace-nowrap ${
+                  isInWatchlist
+                    ? "bg-violet-950/50 text-violet-200 border-violet-700/60 hover:border-violet-600"
+                    : "bg-gray-900 text-gray-400 border-gray-700 hover:border-violet-700/50 hover:text-violet-300"
+                }`}
+                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist to track news and price"}
               >
-                {isInWatchlist ? "◎" : "○"}
+                {isInWatchlist ? "On watchlist" : "Add to watchlist"}
               </button>
             )}
             <div className="text-right">
@@ -445,7 +450,11 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
               {overlapNote}
             </div>
           )}
-          <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} canUseOri={canUseOri} />
+          {canUseOri ? (
+            <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} canUseOri={canUseOri} />
+          ) : (
+            <GamePlanProGate onUpgrade={onUpgradeToPro} />
+          )}
         </div>
 
         {/* Price + RSI chart alongside the company profile, under the name bar */}

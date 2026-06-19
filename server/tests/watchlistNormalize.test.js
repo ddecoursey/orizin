@@ -13,6 +13,7 @@ import {
 test('defaultWatchlists returns a single empty default list', () => {
   const lists = defaultWatchlists();
   assert.equal(lists.length, 1);
+  assert.equal(MAX_WATCHLISTS, 1);
   assert.equal(lists[0].id, 'default');
   assert.deepEqual(lists[0].symbols, []);
 });
@@ -26,17 +27,22 @@ test('normalizeWatchlists uppercases, dedupes, and drops invalid entries', () =>
   ];
   const out = normalizeWatchlists(raw);
   assert.equal(out.length, 1);
-  assert.deepEqual(out[0].symbols, ['AAPL', 'MSFT']);
+  assert.equal(out[0].id, 'default');
+  assert.deepEqual(out[0].symbols, ['AAPL', 'MSFT', 'X']);
 });
 
-test('normalizeWatchlists caps list count and symbol count', () => {
-  const manyLists = Array.from({ length: MAX_WATCHLISTS + 3 }, (_, i) => ({
-    id: `wl${i}`,
-    name: `List ${i}`,
-    symbols: [],
-  }));
-  assert.equal(normalizeWatchlists(manyLists).length, MAX_WATCHLISTS);
+test('normalizeWatchlists merges legacy multi-list payloads into one list', () => {
+  const raw = [
+    { id: 'default', name: 'A', symbols: ['AAPL'] },
+    { id: 'wl_1', name: 'B', symbols: ['MSFT', 'aapl'] },
+    { id: 'wl_2', name: 'C', symbols: ['NVDA'] },
+  ];
+  const out = normalizeWatchlists(raw);
+  assert.equal(out.length, 1);
+  assert.deepEqual(out[0].symbols, ['AAPL', 'MSFT', 'NVDA']);
+});
 
+test('normalizeWatchlists caps symbol count', () => {
   const manySyms = Array.from({ length: MAX_WATCHLIST_SYMBOLS + 5 }, (_, i) => `S${i}`);
   const out = normalizeWatchlists([{ id: 'default', name: 'W', symbols: manySyms }]);
   assert.equal(out[0].symbols.length, MAX_WATCHLIST_SYMBOLS);
@@ -56,19 +62,9 @@ test('pinsFromTabs collects legacy tab pins', () => {
   assert.deepEqual(pinsFromTabs(tabs).sort(), ['AAPL', 'MSFT']);
 });
 
-test('migratePinsIntoDefaultWatchlist merges tab pins once when default is empty', () => {
+test('migratePinsIntoDefaultWatchlist merges tab pins when default is empty', () => {
   const tabs = [{ state: { pins: ['nvda'] } }];
   const lists = [{ id: 'default', name: 'Watchlist', symbols: [], updatedAt: 1 }];
   const migrated = migratePinsIntoDefaultWatchlist(lists, tabs);
   assert.deepEqual(migrated[0].symbols, ['NVDA']);
-
-  const withSymbols = [{ id: 'default', name: 'Watchlist', symbols: ['AAPL'], updatedAt: 1 }];
-  const skipped = migratePinsIntoDefaultWatchlist(withSymbols, tabs);
-  assert.deepEqual(skipped[0].symbols, ['AAPL']);
-});
-
-test('migratePinsIntoDefaultWatchlist is a no-op without legacy pins', () => {
-  const lists = [{ id: 'default', name: 'Watchlist', symbols: [], updatedAt: 1 }];
-  const out = migratePinsIntoDefaultWatchlist(lists, []);
-  assert.deepEqual(out[0].symbols, []);
 });

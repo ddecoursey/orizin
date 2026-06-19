@@ -767,7 +767,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         status={status}
         filtered={filtered}
         onOpenWatchlist={() => setShowWatchlist(true)}
-        watchlistCount={watchlists.activeList?.symbols?.length || 0}
+        watchlistCount={watchlists.symbolCount}
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
         onGatherData={(scope) => {
@@ -1275,12 +1275,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       <WatchlistPanel
         open={showWatchlist}
         onClose={() => setShowWatchlist(false)}
-        lists={watchlists.lists}
-        activeId={watchlists.activeId}
-        activeList={watchlists.activeList}
-        setActiveWatchlist={watchlists.setActiveWatchlist}
-        createWatchlist={watchlists.createWatchlist}
-        deleteWatchlist={watchlists.deleteWatchlist}
+        watchlist={watchlists.watchlist}
         addSymbol={watchlists.addSymbol}
         removeSymbol={watchlists.removeSymbol}
         stocks={stocks}

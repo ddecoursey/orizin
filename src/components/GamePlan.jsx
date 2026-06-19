@@ -1,6 +1,7 @@
 import InfoHint from "./InfoHint.jsx";
 import Tooltip from "./Tooltip.jsx";
 import { IconRefresh } from "./icons.jsx";
+import { PRO_PRICE_LABEL } from "../lib/billing.js";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
 // Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
@@ -78,6 +79,33 @@ function Pillar({ p, oriState }) {
     </div>
   );
   return reasons ? <Tooltip content={reasons} maxWidth={200}>{inner}</Tooltip> : inner;
+}
+
+/** Shown on Deep Research when the user is on the free tier. */
+export function GamePlanProGate({ onUpgrade }) {
+  return (
+    <section className="rounded-xl p-4 sm:p-5 border border-violet-900/45 bg-violet-950/25">
+      <header className="flex items-center gap-2 mb-2">
+        <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
+        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/60 text-violet-300/90 border border-violet-800/50">Pro</span>
+      </header>
+      <p className="text-sm text-gray-200 leading-relaxed">
+        Unified conviction, hold horizon, right-now action, and Ori&apos;s intangibles read — the full verdict for a stock.
+      </p>
+      <p className="text-xs text-gray-500 mt-2">
+        Free accounts still get charts, financials, and the Orizin fundamentals score in the header.
+      </p>
+      {onUpgrade && (
+        <button
+          type="button"
+          onClick={onUpgrade}
+          className="mt-4 text-xs font-semibold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer"
+        >
+          Upgrade to Pro — {PRO_PRICE_LABEL}
+        </button>
+      )}
+    </section>
+  );
 }
 
 export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false, canUseOri = true }) {
