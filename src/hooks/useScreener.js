@@ -435,6 +435,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     : new Set();
 
   const [pins, setPins] = useState(initialPins);
+  const [enrichNotice, setEnrichNotice] = useState(null);
   // True once we've reconciled local state with the server copy. Until then we
   // don't push writes up, so the initial local/default values can't clobber
   // settings that exist server-side before hydration finishes.
@@ -1049,6 +1050,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
                   // those rows; larger ones → full reload.
                   if (symbols && symbols.length > 0 && symbols.length <= 5) {
                     mergeStocks(symbols);
+                    setEnrichNotice({ symbols: [...symbols], at: Date.now() });
                   } else {
                     loadStocks(false, true);
                   }
@@ -1267,6 +1269,8 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       return enrichAll([symbol], true, onComplete);
     },
     enrichLoading,
+    enrichNotice,
+    clearEnrichNotice: () => setEnrichNotice(null),
     loadProgress,
     hasEnrichedOnce,
     addTicker,

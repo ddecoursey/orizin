@@ -80,7 +80,7 @@ function Pillar({ p, oriState }) {
   return reasons ? <Tooltip content={reasons} maxWidth={200}>{inner}</Tooltip> : inner;
 }
 
-export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false }) {
+export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false, canUseOri = true }) {
   if (!verdict) return null;
 
   if (verdict.insufficient) {
@@ -102,7 +102,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
 
   return (
     <section className={`rounded-xl p-4 sm:p-5 border ${ht.border} ${ht.bg}`}>
-      <Header confidence={verdict.confidence} />
+      <Header confidence={verdict.confidence} canUseOri={canUseOri} />
 
       {/* Conviction · Horizon · Action */}
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4">
@@ -303,12 +303,14 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
   );
 }
 
-function Header({ confidence }) {
+function Header({ confidence, canUseOri = true }) {
   return (
     <header className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2">
         <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
-        <InfoHint text="0–100 conviction from fundamentals, value, technicals, insiders, analysts, Fit, and Ori — plus hold horizon and action. Not financial advice." />
+        <InfoHint text={canUseOri
+          ? "0–100 conviction from fundamentals, value, technicals, insiders, analysts, Fit, and Ori — plus hold horizon and action. Not financial advice."
+          : "Fundamentals-only view from shared data. Upgrade to Pro for full conviction and Ori's take."} />
       </div>
       <div className="flex items-center gap-2">
         {confidence && (
@@ -316,7 +318,11 @@ function Header({ confidence }) {
             {confidence} confidence
           </span>
         )}
-        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">✦ Ori · Pro</span>
+        {canUseOri ? (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">✦ Full conviction · Pro</span>
+        ) : (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700">Fundamentals view</span>
+        )}
       </div>
     </header>
   );

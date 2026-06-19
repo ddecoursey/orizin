@@ -28,6 +28,8 @@ import {
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
 import { hasOriAccess } from "../access.js";
+import { enrichmentManager } from "../enrichment.js";
+import { marketSession } from "../marketHours.js";
 import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
 
 // Rate limiters for expensive operations (per user or IP)
@@ -1649,6 +1651,24 @@ router.get("/stocks/ai/:symbol", aiDetailLimiter, async (req, res) => {
   }
 });
 
+// ── GET /api/stocks/estimates/:symbol ──────────────────────────────────────
+// Forward analyst estimates from shared SQLite (populated by enrich/ai-enrich).
+router.get("/stocks/estimates/:symbol", aiDetailLimiter, (req, res) => {
+  const symbol = req.params.symbol.toUpperCase();
+  try {
+    const cached = getAiEnrichment(symbol);
+    let estimates = null;
+    if (cached?.estimates_json) {
+      try {
+        estimates = JSON.parse(cached.estimates_json);
+      } catch { /* ignore */ }
+    }
+    res.json({ estimates, updated_at: cached?.updated_at ?? null });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── GET /api/stocks/:symbol ────────────────────────────────────────────────
 router.get("/stocks/:symbol", (req, res) => {
   const row = getStock(req.params.symbol.toUpperCase());
@@ -1678,11 +1698,19 @@ router.get("/stocks/sparkline/:symbol", sparklineLimiter, async (req, res) => {
 // ── GET /api/status ────────────────────────────────────────────────────────
 router.get("/status", (req, res) => {
   const lastFetch = getMeta("last_screener_fetch");
+  const enrich = enrichmentManager.getStatus();
   const payload = {
     stockCount: getStockCount(),
     enrichedCount: getEnrichedCount(),
     universeTarget: 8000,
     lastFetch: lastFetch ? Number(lastFetch) : null,
+    dataSync: {
+      backgroundRunning: enrich.running,
+      lastSymbol: enrich.lastSymbol,
+      lastUpdate: enrich.lastUpdate,
+      marketSession: marketSession(),
+      missingCount: enrich.missingCount ?? null,
+    },
   };
   // Key configuration is admin-only — don't leak integration status to every user.
   const adminUser = getUserByUsername(req.userId);

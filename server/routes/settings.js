@@ -5,8 +5,10 @@ const router = Router();
 
 const ALLOWED_KEYS = new Set([
   "tabs", "activeTab", "weights", "risk", "sort", "theme", "sidebarCollapsed",
-  "portfolios", "goals", "theses", "oriMemory",
+  "portfolios", "goals", "theses", "oriMemory", "watchlists", "activeWatchlistId",
 ]);
+const MAX_WATCHLISTS = 12;
+const MAX_WATCHLIST_SYMBOLS = 200;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TABS = 30;
 const MAX_ORI_MEMORY = 80;
@@ -83,6 +85,24 @@ function sanitizeSettings(partial) {
     }
     if (k === "activeTab" && typeof v === "string" && v.length <= 64) {
       out.activeTab = v;
+      continue;
+    }
+    if (k === "activeWatchlistId" && typeof v === "string" && v.length <= 64) {
+      out.activeWatchlistId = v.slice(0, 64);
+      continue;
+    }
+    if (k === "watchlists") {
+      if (!Array.isArray(v) || v.length > MAX_WATCHLISTS) continue;
+      out.watchlists = v.slice(0, MAX_WATCHLISTS).map((w) => {
+        if (!w || typeof w !== "object") return null;
+        const id = typeof w.id === "string" ? w.id.slice(0, 64) : null;
+        const name = typeof w.name === "string" ? w.name.slice(0, 28) : "Watchlist";
+        if (!id) return null;
+        const symbols = Array.isArray(w.symbols)
+          ? [...new Set(w.symbols.map((s) => String(s || "").trim().toUpperCase()).filter(Boolean))].slice(0, MAX_WATCHLIST_SYMBOLS)
+          : [];
+        return { id, name, symbols, updatedAt: typeof w.updatedAt === "number" ? w.updatedAt : Date.now() };
+      }).filter(Boolean);
       continue;
     }
   }

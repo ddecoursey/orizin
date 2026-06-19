@@ -1,4 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from "react";
+import { useWatchlists } from "./hooks/useWatchlists.js";
+import WatchlistPanel from "./components/WatchlistPanel.jsx";
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from "./lib/motion.js";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
@@ -165,6 +167,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const openUpgradeModal = () => setShowUpgradeModal(true);
   const [showAddTicker, setShowAddTicker] = useState(false);
+  const [showWatchlist, setShowWatchlist] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
   const [detailStock2, setDetailStock2] = useState(null);
   const [pickingSecond, setPickingSecond] = useState(false);
@@ -408,10 +411,20 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     enrichAll,
     regatherSymbol,
     enrichLoading,
+    enrichNotice,
+    clearEnrichNotice,
     loadProgress,
     addTicker,
     cancelOperation,
   } = useScreener(currentUser, portfolioGoals, canUseOri, currentView);
+
+  const watchlists = useWatchlists(currentUser, { tabs });
+
+  const displayedFiltered = useMemo(() => {
+    if (!filters.pinnedOnly) return filtered;
+    const set = watchlists.activeSymbols.size ? watchlists.activeSymbols : pins;
+    return filtered.filter((r) => set.has(r.symbol));
+  }, [filtered, filters.pinnedOnly, watchlists.activeSymbols, pins]);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
@@ -423,26 +436,30 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     setDetailReloadToken(0);
   }, [researchSymbol]);
 
-  // Opening a stock on Deep Research auto re-gathers from FMP, then bumps
-  // detailReloadToken so panels + Ori's take use the just-fetched data.
+  // Deep Research data load: admins re-gather from FMP (shared SQLite for all users);
+  // everyone else reads the shared cache only — background job keeps it fresh.
   const regatherRef = useRef(regatherSymbol);
   regatherRef.current = regatherSymbol;
-  const lastDrAutoRegather = useRef({ view: null, symbol: null });
+  const lastDrOpen = useRef({ view: null, symbol: null });
   useEffect(() => {
     if (currentView !== "deep-research") {
-      lastDrAutoRegather.current = { view: null, symbol: null };
+      lastDrOpen.current = { view: null, symbol: null };
       return;
     }
     if (!researchSymbol) return;
     if (
-      lastDrAutoRegather.current.view === currentView &&
-      lastDrAutoRegather.current.symbol === researchSymbol
+      lastDrOpen.current.view === currentView &&
+      lastDrOpen.current.symbol === researchSymbol
     ) {
       return;
     }
-    lastDrAutoRegather.current = { view: currentView, symbol: researchSymbol };
-    regatherRef.current(researchSymbol, () => setDetailReloadToken((t) => t + 1));
-  }, [currentView, researchSymbol]);
+    lastDrOpen.current = { view: currentView, symbol: researchSymbol };
+    if (isAdmin) {
+      regatherRef.current(researchSymbol, () => setDetailReloadToken((t) => t + 1));
+    } else {
+      setDetailReloadToken(1);
+    }
+  }, [currentView, researchSymbol, isAdmin]);
 
   // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
   // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
@@ -602,7 +619,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // screener (tab) they're in. Pinned rows pull from the filtered set first
   // (so they carry live scores), falling back to the full universe.
   const activeScreenerName = tabs.find((t) => t.id === activeTab)?.name || null;
-  const pinnedStocks = [...pins]
+  const watchlistSyms = watchlists.activeSymbols.size ? [...watchlists.activeSymbols] : [...pins];
+  const pinnedStocks = watchlistSyms
     .map((sym) => filtered.find((r) => r.symbol === sym) || stocks.find((r) => r.symbol === sym))
     .filter(Boolean);
 
@@ -657,7 +675,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       }
     : null;
 
-  const chat = useChat(filtered, filters, weights, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
+  const chat = useChat(displayedFiltered, filters, weights, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
     // Which main view the user is on ('screener' | 'portfolio-goals') so Ori can
     // shift its focus: portfolio analysis vs. screener recommendations.
     view: currentView,
@@ -745,9 +763,19 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   return (
     <LazyMotion features={domAnimation} strict>
     <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
+      {isAdmin && enrichNotice && (
+        <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-emerald-950/50 border-b border-emerald-800/50 text-xs text-emerald-200">
+          <span>
+            Refreshed <strong>{enrichNotice.symbols.join(", ")}</strong> — visible to all users
+          </span>
+          <button type="button" onClick={clearEnrichNotice} className="text-emerald-400/80 hover:text-emerald-200 cursor-pointer">Dismiss</button>
+        </div>
+      )}
       <Header
         status={status}
-        filtered={filtered}
+        filtered={displayedFiltered}
+        onOpenWatchlist={() => setShowWatchlist(true)}
+        watchlistCount={watchlists.activeList?.symbols?.length || 0}
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
         onGatherData={(scope) => {
@@ -808,6 +836,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               fitCtx={fitCtx}
               risk={risk}
               isAdmin={isAdmin}
+              canUseOri={canUseOri}
+              onToggleWatchlist={watchlists.toggleSymbol}
+              isInWatchlist={researchSymbol ? watchlists.isInActive(researchSymbol) : false}
               onConvictionChange={setConvictionOverride}
               symbol={researchSymbol}
               stocks={stocks}
@@ -819,14 +850,21 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     { symbol: researchSymbol }
                   : null
               }
-              onRegather={(sym) =>
-                regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
+              onRegather={
+                isAdmin
+                  ? (sym) => regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
+                  : undefined
               }
-              regathering={enrichLoading}
+              regathering={isAdmin && enrichLoading}
               detailReloadToken={detailReloadToken}
               detail={researchDetail}
               onBack={() => setCurrentView('screener')}
+              onUpgradeToPro={openUpgradeModal}
               onAskOri={(sym) => {
+                if (!canUseOri) {
+                  openUpgradeModal();
+                  return;
+                }
                 chat.setIsOpen(true);
                 chat.askAboutStock(sym);
               }}
@@ -873,7 +911,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 </div>
 
                 <span className="text-xs text-gray-600 whitespace-nowrap">
-                  {filtered.length} / {stocks.length}
+                  {displayedFiltered.length} / {stocks.length}
                 </span>
 
                 <button
@@ -937,7 +975,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
                   </button>
                   <span className="text-xs text-gray-600 whitespace-nowrap">
-                    {filtered.length} / {stocks.length}
+                    {displayedFiltered.length} / {stocks.length}
                   </span>
 
                   <div className="ml-auto flex items-center gap-2">
@@ -1002,11 +1040,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               ) : view === "table" ? (
                 <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
                   <StockTable
-                    rows={filtered}
+                    rows={displayedFiltered}
                     heatRows={filteredRows}
                     pins={pins}
+                    watchlistSymbols={watchlists.activeSymbols}
+                    onToggleWatchlist={watchlists.toggleSymbol}
+                    canUseOri={canUseOri}
+                    onUpgradeToPro={openUpgradeModal}
                     onTogglePin={togglePin}
-                    onAskAI={chat.askAboutStock}
+                    onAskAI={canUseOri ? chat.askAboutStock : undefined}
                     onSelectStock={handleSelectStock}
                     enrichLoading={enrichLoading}
                     sparklineForceVersion={sparklineForceVersion}
@@ -1233,6 +1275,25 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           }}
         />
       )}
+
+      <WatchlistPanel
+        open={showWatchlist}
+        onClose={() => setShowWatchlist(false)}
+        lists={watchlists.lists}
+        activeId={watchlists.activeId}
+        activeList={watchlists.activeList}
+        setActiveWatchlist={watchlists.setActiveWatchlist}
+        createWatchlist={watchlists.createWatchlist}
+        deleteWatchlist={watchlists.deleteWatchlist}
+        removeSymbol={watchlists.removeSymbol}
+        toggleSymbol={watchlists.toggleSymbol}
+        stocks={stocks}
+        canUseOri={canUseOri}
+        onSelectSymbol={(sym) => {
+          setShowWatchlist(false);
+          openDeepResearch(sym);
+        }}
+      />
 
       {showUpgradeModal && (
         <UpgradeModal

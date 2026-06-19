@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import { IconResearch, IconRefresh } from "./icons.jsx";
@@ -11,6 +11,7 @@ import { useGamePlanOri } from "../hooks/useGamePlanOri.js";
 import GamePlan from "./GamePlan.jsx";
 import RatingsSnapshot from "./RatingsSnapshot.jsx";
 import InfoHint from "./InfoHint.jsx";
+import { computePortfolioOverlap, overlapChipText } from "../lib/portfolioAnalysis.js";
 
 // Compact period-columns table for financial statements: one row per line
 // item, one column per fiscal year (newest first, up to `maxCols`).
@@ -215,7 +216,7 @@ function smLabel(signal) {
   return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false }) {
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
 
@@ -259,7 +260,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // always reflects the latest FMP pull (server cache busted via refresh=1).
   const oriReady = !!symbol && !regathering && detailReloadToken > 0;
   const oriState = useGamePlanOri(symbol, {
-    enabled: oriReady && !deterministic.insufficient,
+    enabled: canUseOri && oriReady && !deterministic.insufficient,
     payloadRef: oriPayloadRef,
     reloadToken: detailReloadToken,
   });
@@ -287,6 +288,19 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   // here since nothing outside this page needs it. Server caches make
   // re-opening a symbol free.
   const deep = useDeepResearch(symbol, detailReloadToken);
+  const [estimates, setEstimates] = useState(null);
+  useEffect(() => {
+    if (!symbol) return;
+    let cancelled = false;
+    fetch(`/api/stocks/estimates/${symbol}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) setEstimates(d?.estimates || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [symbol, detailReloadToken]);
+
+  const overlap = useMemo(() => computePortfolioOverlap(row || { symbol }, fitCtx), [row, symbol, fitCtx]);
+  const overlapNote = overlapChipText(overlap);
 
   // Technicals, earnings, and smart-money now come from `detail` (useStockDetail)
   // so the same data also reaches Ori's context. Derive the display shapes here.
@@ -324,7 +338,9 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
   const sec = SECTOR_COLORS[row?.sector] || { bg: "#1e293b", fg: "#94a3b8" };
   // Header shows the unified Conviction (from the Game Plan verdict), falling
   // back to the row's lean conviction / Orizin score for arbitrary symbols.
-  const sc = verdict?.conviction ?? row?.conviction ?? (row?.score != null ? Math.round(row.score * 100) : null);
+  const sc = canUseOri
+    ? (verdict?.conviction ?? row?.conviction ?? (row?.score != null ? Math.round(row.score * 100) : null))
+    : (row?.score != null ? Math.round(row.score * 100) : null);
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   // DCF margin of safety vs current price (when both present).
@@ -372,14 +388,24 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
 
           <div className="ml-auto flex items-center gap-2.5 sm:gap-4 shrink-0">
             {/* Switch to another stock without leaving Deep Research */}
-            <div className="hidden md:block w-56">
+            <div className="w-full sm:w-48 md:w-56 order-last sm:order-none basis-full sm:basis-auto">
               <GlobalSearch stocks={stocks} onSelect={handleSearch} />
             </div>
+            {onToggleWatchlist && (
+              <button
+                type="button"
+                onClick={() => onToggleWatchlist(symbol)}
+                className={`text-lg leading-none px-1 cursor-pointer ${isInWatchlist ? "text-amber-400" : "text-gray-600 hover:text-amber-400"}`}
+                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist"}
+              >
+                {isInWatchlist ? "★" : "☆"}
+              </button>
+            )}
             <div className="text-right">
               <div className="text-lg font-bold font-mono text-gray-100">{fmt(row?.price, "price") ?? "—"}</div>
               {sc != null && (
                 <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  Conviction {sc}
+                  {canUseOri ? `Conviction ${sc}` : `Orizin ${sc}`}
                 </div>
               )}
             </div>
@@ -397,9 +423,14 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
             {onAskOri && (
               <button
                 onClick={() => onAskOri(symbol)}
-                className="text-xs font-semibold px-3 py-2 lg:py-1.5 rounded-md bg-gradient-to-br from-blue-600/30 to-violet-600/30 text-violet-200 border border-violet-800/50 hover:brightness-125 transition-all active:scale-95 cursor-pointer"
+                className={`text-xs font-semibold px-3 py-2 lg:py-1.5 rounded-md border transition-all active:scale-95 cursor-pointer ${
+                  canUseOri
+                    ? "bg-gradient-to-br from-blue-600/30 to-violet-600/30 text-violet-200 border-violet-800/50 hover:brightness-125"
+                    : "bg-gray-800/80 text-gray-400 border-gray-700 hover:border-violet-800/50 hover:text-violet-300"
+                }`}
+                title={canUseOri ? "Open Ori chat about this stock" : "Pro feature — upgrade to chat with Ori"}
               >
-                Ask Ori
+                {canUseOri ? "Ask Ori" : "Ask Ori · Pro"}
               </button>
             )}
           </div>
@@ -409,7 +440,12 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
       <div className="p-4 sm:p-6 space-y-6">
         {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
         <div className="oz-fade-rise">
-          <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} />
+          {overlapNote && (
+            <div className="mb-3 rounded-lg border border-amber-800/40 bg-amber-950/25 px-3 py-2 text-[11px] text-amber-200">
+              {overlapNote}
+            </div>
+          )}
+          <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} canUseOri={canUseOri} />
         </div>
 
         {/* Price + RSI chart alongside the company profile, under the name bar */}
@@ -688,6 +724,25 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                 </div>
               ) : (
                 <Placeholder note={`No recent analyst grades for ${symbol}.`} />
+              )}
+            </Panel>
+
+            <Panel title="Forward Estimates (annual)" tier="T2" span={1}>
+              {Array.isArray(estimates) && estimates.length ? (
+                <StatementTable
+                  periods={estimates.map((e) => ({
+                    fiscalYear: e.date ? String(e.date).slice(0, 4) : "—",
+                    revenue: e.revenue_avg,
+                    eps: e.eps_avg,
+                  }))}
+                  lines={[
+                    ["Revenue (avg)", "revenue", "money"],
+                    ["EPS (avg)", "eps", "ratio"],
+                  ]}
+                  maxCols={3}
+                />
+              ) : (
+                <Placeholder note="Forward estimates populate after admin/background enrich." />
               )}
             </Panel>
 

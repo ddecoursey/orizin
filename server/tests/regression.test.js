@@ -376,10 +376,28 @@ test('GET /api/status reports counts; key flags are admin-only', async () => {
   assert.equal(body.stockCount, 0);
   assert.equal(body.apiKeySet, undefined);
   assert.equal(body.chatKeySet, undefined);
+  assert.ok(body.dataSync);
+  assert.equal(typeof body.dataSync.backgroundRunning, 'boolean');
 
   const adminBody = await json(await fetch(api('/api/status'), { headers: { cookie: adminCookie } }));
   assert.equal(adminBody.apiKeySet, false);
   assert.equal(adminBody.chatKeySet, false);
+});
+
+test('settings accept watchlists and activeWatchlistId', async () => {
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({
+      watchlists: [{ id: 'default', name: 'Watchlist', symbols: ['AAPL', 'MSFT'], updatedAt: 1 }],
+      activeWatchlistId: 'default',
+    }),
+  });
+  assert.equal(put.status, 200);
+  const merged = await json(await fetch(api('/api/settings'), { headers: { cookie: userCookie } }));
+  assert.equal(merged.data.activeWatchlistId, 'default');
+  assert.equal(merged.data.watchlists.length, 1);
+  assert.deepEqual(merged.data.watchlists[0].symbols, ['AAPL', 'MSFT']);
 });
 
 test('refresh and enrich are admin-only', async () => {

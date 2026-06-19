@@ -161,11 +161,22 @@ const COL_WIDTHS = {
   div_yield: "58px",
 };
 
+function displayCols(canUseOri) {
+  if (canUseOri) return COLS;
+  return COLS.map((c) =>
+    c.key === "conviction" ? { ...c, key: "orizin", label: "Orizin" } : c,
+  );
+}
+
 export default function StockTable({
   rows,
   heatRows = rows,
   pins,
   onTogglePin,
+  watchlistSymbols = null,
+  onToggleWatchlist,
+  canUseOri = true,
+  onUpgradeToPro,
   onAskAI,
   onSelectStock,
   enrichLoading = false,
@@ -174,6 +185,9 @@ export default function StockTable({
   sortDir = -1,
   onSortChange,
 }) {
+  const cols = useMemo(() => displayCols(canUseOri), [canUseOri]);
+  const starSet = watchlistSymbols?.size ? watchlistSymbols : pins;
+  const onToggleStar = onToggleWatchlist || onTogglePin;
   // symbol -> number[]. localStorage hydration happens lazily per symbol inside
   // fetchSparklineInternal (getSparklineFromLocal) — the old eager loop parsed
   // every persisted sparkline JSON blob synchronously at mount, which scaled
@@ -322,13 +336,14 @@ export default function StockTable({
   };
 
   const sorted = useMemo(() => {
-    const pinnedSet = pins;
+    const pinnedSet = starSet;
+    const sortField = sortKey === "orizin" ? "score" : sortKey;
     return [...rows].sort((a, b) => {
       const ap = pinnedSet.has(a.symbol),
         bp = pinnedSet.has(b.symbol);
       if (ap !== bp) return ap ? -1 : 1;
-      const av = a[sortKey];
-      const bv = b[sortKey];
+      const av = a[sortField];
+      const bv = b[sortField];
       if (av == null || av === "" || (typeof av === "number" && !isFinite(av))) return 1;
       if (bv == null || bv === "" || (typeof bv === "number" && !isFinite(bv))) return -1;
       if (typeof av === "string" || typeof bv === "string") {
@@ -336,7 +351,7 @@ export default function StockTable({
       }
       return (av - bv) * sortDir;
     });
-  }, [rows, pins, sortKey, sortDir]);
+  }, [rows, starSet, sortKey, sortDir]);
 
   // Virtualization setup - Battle-tested pattern for large tables in flex layouts
   const parentRef = useRef(null);
@@ -402,7 +417,7 @@ export default function StockTable({
   }, [sparklineForceVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSort(key) {
-    const col = COLS.find((c) => c.key === key);
+    const col = cols.find((c) => c.key === key);
     if (col?.nosort || !onSortChange) return;
     if (sortKey === key) onSortChange(key, -sortDir);
     else onSortChange(key, key === "symbol" || key === "sector" ? 1 : -1);
@@ -470,8 +485,8 @@ export default function StockTable({
 
         <thead className="sticky top-0 z-20 bg-gray-950">
           <tr>
-            {COLS.map((c) => {
-              const w = COL_WIDTHS[c.key];
+            {cols.map((c) => {
+              const w = COL_WIDTHS[c.key] || COL_WIDTHS[c.key === "orizin" ? "conviction" : c.key];
               return (
                 <th
                   key={c.key}
@@ -487,9 +502,13 @@ export default function StockTable({
                 >
                   {c.key === "conviction" ? (
                     <Tooltip
-                      content="0–100 verdict: fundamentals + valuation. Refines on Deep Research. −penalty when weighted Q/V/G pillars lack data."
+                      content="Pro: 0–100 full conviction (fundamentals + Ori). Refines on Deep Research."
                       maxWidth={220}
                     >
+                      {c.label} <span className="text-violet-400/80">Pro</span>
+                    </Tooltip>
+                  ) : c.key === "orizin" ? (
+                    <Tooltip content="Q/V/G fundamentals score (0–100). Upgrade for full conviction + Ori." maxWidth={200}>
                       {c.label}
                     </Tooltip>
                   ) : (
@@ -512,14 +531,14 @@ export default function StockTable({
               slice and jumping/dragging through a large universe misbehaved. */}
           {paddingTop > 0 && (
             <tr aria-hidden="true">
-              <td colSpan={COLS.length + (onAskAI ? 1 : 0)} style={{ height: `${paddingTop}px`, padding: 0, border: 0 }} />
+              <td colSpan={cols.length + (onAskAI ? 1 : 0)} style={{ height: `${paddingTop}px`, padding: 0, border: 0 }} />
             </tr>
           )}
           {virtualItems.map((virtualRow) => {
             const r = sorted[virtualRow.index];
             if (!r) return null;
 
-            const pinned = pins.has(r.symbol);
+            const pinned = starSet.has(r.symbol);
 
             return (
               <tr
@@ -535,11 +554,11 @@ export default function StockTable({
                   style={{ width: '32px', minWidth: '32px' }}
                 >
                   <button
-                    onClick={() => onTogglePin(r.symbol)}
+                    onClick={() => onToggleStar(r.symbol)}
                     className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
                       pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
                     }`}
-                    title={pinned ? "Unpin" : "Pin"}
+                    title={pinned ? "Remove from watchlist" : "Add to watchlist"}
                   >
                     {pinned ? "★" : "☆"}
                   </button>
@@ -581,29 +600,35 @@ export default function StockTable({
                   {fmt(r.price, "price") ?? <span className="text-gray-600">—</span>}
                 </td>
 
-                {/* Conviction */}
+                {/* Conviction (Pro) or Orizin Score (free) */}
                 <td className="px-3 py-2 min-w-[80px]">
-                  <span className="inline-flex items-center">
-                    <Tooltip
-                      content={
-                        r.conviction != null && r.dataCoveragePenalty > 0
-                          ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
-                          : (r.conviction != null ? "Fundamentals + valuation (0–100)." : undefined)
-                      }
-                    >
-                      <span><ScoreBar score={r.conviction != null ? r.conviction / 100 : null} /></span>
+                  {canUseOri ? (
+                    <span className="inline-flex items-center">
+                      <Tooltip
+                        content={
+                          r.conviction != null && r.dataCoveragePenalty > 0
+                            ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
+                            : (r.conviction != null ? "Full conviction (0–100)." : undefined)
+                        }
+                      >
+                        <span><ScoreBar score={r.conviction != null ? r.conviction / 100 : null} /></span>
+                      </Tooltip>
+                      {r.dataCoveragePenalty > 0 && (
+                        <Tooltip content={`−${r.dataCoveragePenalty} penalty`}>
+                          <span className="ml-1 text-[9px] text-amber-400 align-super">↓</span>
+                        </Tooltip>
+                      )}
+                      {r.ori && (
+                        <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
+                          <span className="ml-1 text-[8px] text-purple-400 align-super cursor-help">✧</span>
+                        </Tooltip>
+                      )}
+                    </span>
+                  ) : (
+                    <Tooltip content="Fundamentals Q/V/G blend. Pro unlocks full conviction + Ori.">
+                      <span><ScoreBar score={r.score} /></span>
                     </Tooltip>
-                    {r.dataCoveragePenalty > 0 && (
-                      <Tooltip content={`−${r.dataCoveragePenalty} penalty`}>
-                        <span className="ml-1 text-[9px] text-amber-400 align-super">↓</span>
-                      </Tooltip>
-                    )}
-                    {r.ori && (
-                      <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
-                        <span className="ml-1 text-[8px] text-purple-400 align-super cursor-help">✧</span>
-                      </Tooltip>
-                    )}
-                  </span>
+                  )}
                 </td>
 
                 {/* Durability / intangibles proxy (cheap Ori equivalent) */}

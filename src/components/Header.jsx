@@ -10,6 +10,7 @@ import {
   IconRefresh,
   IconChevronDown,
 } from "./icons.jsx";
+import DataSyncChip from "./DataSyncChip.jsx";
 
 // Dropdown that opens on hover (fluid) and also on click (so touch works).
 // Closing is handled by mouse-leave (with a small delay so crossing the gap to
@@ -108,6 +109,8 @@ export default function Header({
   currentView = 'screener',
   onNavigate,
   stocks = [],
+  onOpenWatchlist,
+  watchlistCount = 0,
 }) {
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
@@ -188,11 +191,12 @@ export default function Header({
 
       {/* Compact status — just the dot once loaded (message on hover) */}
       <div
-        className="flex items-center gap-1.5 text-xs text-gray-400 border-l border-gray-800 pl-2 sm:pl-3 shrink-0"
+        className="flex items-center gap-2 text-xs text-gray-400 border-l border-gray-800 pl-2 sm:pl-3 shrink-0 min-w-0"
         title={status.msg}
       >
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
         {status.type !== "ready" && <span className="hidden sm:inline truncate max-w-[220px]">{status.msg}</span>}
+        <DataSyncChip isAdmin={isAdmin} />
       </div>
 
       {/* Top-level page navigation */}
@@ -207,6 +211,16 @@ export default function Header({
         <NavButton active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
           Portfolio
         </NavButton>
+        {onOpenWatchlist && (
+          <button
+            type="button"
+            onClick={onOpenWatchlist}
+            className="px-2.5 py-1.5 lg:py-1 rounded-full text-xs font-medium text-amber-400/90 hover:text-amber-300 hover:bg-amber-950/40 border border-transparent hover:border-amber-800/40 transition-colors cursor-pointer whitespace-nowrap"
+            title="Open watchlists"
+          >
+            ★ {watchlistCount > 0 ? watchlistCount : "List"}
+          </button>
+        )}
       </nav>
 
       {/* Right: Data menu + Profile menu */}
