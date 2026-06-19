@@ -1171,8 +1171,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           onClose={() => setShowUpgradeModal(false)}
           onSuccess={() => {
             // Server already granted Pro (verified the subscription). Re-read the
-            // session so the UI unlocks Ori immediately.
+            // session so the UI unlocks Ori immediately, and return to the home
+            // (screener) view so closing the success screen lands there rather
+            // than wherever the upgrade was triggered (e.g. a Deep Research page).
             onAuthRefresh?.();
+            setCurrentView('screener');
+            setDetailStock(null);
+            setDetailStock2(null);
           }}
         />
       )}
