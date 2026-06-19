@@ -7,32 +7,21 @@ import {
   tierColumnDefs,
 } from '../../src/lib/screenerDisplay.js';
 
-test('displayColKeys swaps conviction → orizin for free tier', () => {
-  const pro = displayColKeys(true);
-  assert.ok(pro.includes('conviction'));
-  assert.equal(pro.includes('orizin'), false);
-
-  const free = displayColKeys(false);
-  assert.ok(free.includes('orizin'));
-  assert.equal(free.includes('conviction'), false);
-  assert.deepEqual(
-    free,
-    pro.map((k) => (k === 'conviction' ? 'orizin' : k)),
-  );
+test('displayColKeys always includes conviction', () => {
+  const keys = displayColKeys();
+  assert.ok(keys.includes('conviction'));
+  assert.equal(keys.includes('orizin'), false);
 });
 
-test('resolveSortField maps orizin to fundamentals score', () => {
-  assert.equal(resolveSortField('orizin'), 'score');
+test('resolveSortField passes through sort keys', () => {
+  assert.equal(resolveSortField('conviction'), 'conviction');
   assert.equal(resolveSortField('mcap'), 'mcap');
 });
 
-test('tierColumnDefs swaps conviction column metadata', () => {
+test('tierColumnDefs returns columns unchanged', () => {
   const cols = [
     { key: 'symbol', label: 'Symbol' },
     { key: 'conviction', label: 'Conviction' },
   ];
-  assert.deepEqual(tierColumnDefs(cols, true), cols);
-  const free = tierColumnDefs(cols, false);
-  assert.equal(free[1].key, 'orizin');
-  assert.equal(free[1].label, 'Orizin');
+  assert.deepEqual(tierColumnDefs(cols), cols);
 });

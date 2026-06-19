@@ -177,7 +177,7 @@ export default function StockTable({
   sortDir = -1,
   onSortChange,
 }) {
-  const cols = useMemo(() => tierColumnDefs(COLS, canUseOri), [canUseOri]);
+  const cols = useMemo(() => tierColumnDefs(COLS), []);
   // symbol -> number[]. localStorage hydration happens lazily per symbol inside
   // fetchSparklineInternal (getSparklineFromLocal) — the old eager loop parsed
   // every persisted sparkline JSON blob synchronously at mount, which scaled
@@ -492,14 +492,14 @@ export default function StockTable({
                 >
                   {c.key === "conviction" ? (
                     <Tooltip
-                      content="Pro: 0–100 full conviction (fundamentals + Ori). Refines on Deep Research."
+                      content={
+                        canUseOri
+                          ? "0–100 conviction from fundamentals + Ori when available. Refines on Deep Research."
+                          : "0–100 conviction from fundamentals and market data — no Ori on Free."
+                      }
                       maxWidth={220}
                     >
-                      {c.label} <span className="text-violet-400/80">Pro</span>
-                    </Tooltip>
-                  ) : c.key === "orizin" ? (
-                    <Tooltip content="Q/V/G fundamentals score (0–100). Upgrade for full conviction + Ori." maxWidth={200}>
-                      {c.label}
+                      {c.label}{canUseOri ? <> <span className="text-violet-400/80">+ Ori</span></> : null}
                     </Tooltip>
                   ) : (
                     c.label
@@ -592,33 +592,31 @@ export default function StockTable({
 
                 {/* Conviction (Pro) or Orizin Score (free) */}
                 <td className="px-3 py-2 min-w-[80px]">
-                  {canUseOri ? (
-                    <span className="inline-flex items-center">
-                      <Tooltip
-                        content={
-                          r.conviction != null && r.dataCoveragePenalty > 0
-                            ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
-                            : (r.conviction != null ? "Full conviction (0–100)." : undefined)
-                        }
-                      >
-                        <span><ScoreBar score={r.conviction != null ? r.conviction / 100 : null} /></span>
-                      </Tooltip>
-                      {r.dataCoveragePenalty > 0 && (
-                        <Tooltip content={`−${r.dataCoveragePenalty} penalty`}>
-                          <span className="ml-1 text-[9px] text-amber-400 align-super">↓</span>
-                        </Tooltip>
-                      )}
-                      {r.ori && (
-                        <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
-                          <span className="ml-1 text-[8px] text-purple-400 align-super cursor-help">✧</span>
-                        </Tooltip>
-                      )}
-                    </span>
-                  ) : (
-                    <Tooltip content="Fundamentals Q/V/G blend. Pro unlocks full conviction + Ori.">
-                      <span><ScoreBar score={r.score} /></span>
+                  <span className="inline-flex items-center">
+                    <Tooltip
+                      content={
+                        r.conviction != null && r.dataCoveragePenalty > 0
+                          ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
+                          : r.conviction != null
+                            ? canUseOri
+                              ? "Conviction (0–100) with Ori when available."
+                              : "Conviction (0–100) from fundamentals — no Ori on Free."
+                            : undefined
+                      }
+                    >
+                      <span><ScoreBar score={r.conviction != null ? r.conviction / 100 : null} /></span>
                     </Tooltip>
-                  )}
+                    {r.dataCoveragePenalty > 0 && (
+                      <Tooltip content={`−${r.dataCoveragePenalty} penalty`}>
+                        <span className="ml-1 text-[9px] text-amber-400 align-super">↓</span>
+                      </Tooltip>
+                    )}
+                    {canUseOri && r.ori && (
+                      <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
+                        <span className="ml-1 text-[8px] text-purple-400 align-super cursor-help">✧</span>
+                      </Tooltip>
+                    )}
+                  </span>
                 </td>
 
                 {/* Durability / intangibles proxy (cheap Ori equivalent) */}

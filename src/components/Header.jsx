@@ -110,7 +110,6 @@ export default function Header({
   onNavigate,
   stocks = [],
   onOpenWatchlist,
-  watchlistCount = 0,
 }) {
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
@@ -211,20 +210,20 @@ export default function Header({
         <NavButton active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
           Portfolio
         </NavButton>
+      </nav>
+
+      {/* Right: watchlist panel + data menu + profile */}
+      <div className="ml-auto flex items-center gap-1.5 shrink-0">
         {onOpenWatchlist && (
           <button
             type="button"
             onClick={onOpenWatchlist}
-            className="px-2.5 py-1.5 lg:py-1 rounded-full text-xs font-medium text-amber-400/90 hover:text-amber-300 hover:bg-amber-950/40 border border-transparent hover:border-amber-800/40 transition-colors cursor-pointer whitespace-nowrap"
-            title="Open watchlist — monitor news and price moves"
+            className="px-2.5 py-1.5 lg:px-2 lg:py-1 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700/80 hover:border-gray-600 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            title="Open watchlist panel — track news and price moves"
           >
-            Watch{watchlistCount > 0 ? ` (${watchlistCount})` : ""}
+            Watchlist
           </button>
         )}
-      </nav>
-
-      {/* Right: Data menu + Profile menu */}
-      <div className="ml-auto flex items-center gap-1.5 shrink-0">
         {/* Data menu (Refresh / Gather) — admin only: normal users cannot trigger universe or data refreshes from FMP */}
         {isAdmin && (
           <HeaderMenu

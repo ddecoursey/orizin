@@ -767,7 +767,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         status={status}
         filtered={filtered}
         onOpenWatchlist={() => setShowWatchlist(true)}
-        watchlistCount={watchlists.symbolCount}
+
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
         onGatherData={(scope) => {
@@ -1049,7 +1049,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
-                  <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} pins={pins} onTogglePin={togglePin} />
+                  <ScorecardGrid rows={filtered} canUseOri={canUseOri} onSelectStock={handleSelectStock} pins={pins} onTogglePin={togglePin} />
                 </div>
               )}
             </>

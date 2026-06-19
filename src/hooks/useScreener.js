@@ -514,9 +514,15 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     [stocks, filters, pinsForFilter]
   );
 
+  // Free tier: conviction uses fundamentals only — no cached Gemini/Ori reviews.
+  const scoringRows = useMemo(
+    () => (canUseOri ? filteredRows : filteredRows.map((r) => (r.ori ? { ...r, ori: null } : r))),
+    [filteredRows, canUseOri],
+  );
+
   const rankedData = useMemo(
-    () => computeRankedRows(filteredRows),
-    [filteredRows]
+    () => computeRankedRows(scoringRows),
+    [scoringRows]
   );
 
   // Personalized Fit context + per-symbol Fit map. Built from the user's
