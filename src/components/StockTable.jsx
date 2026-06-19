@@ -543,15 +543,25 @@ export default function StockTable({
                   className={`px-3 py-2 text-left sticky left-0 z-10 border-r border-gray-950 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-900"}`}
                   style={{ width: '32px', minWidth: '32px' }}
                 >
-                  <button
-                    onClick={() => onTogglePin(r.symbol)}
-                    className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
-                      pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
-                    }`}
-                    title={pinned ? "Unpin from screener" : "Pin to screener"}
+                  <Tooltip
+                    content={
+                      pinned
+                        ? "Unpin from screener"
+                        : "Pin to screener — filter & sort priority\nNot the same as watchlist (eye icon)"
+                    }
+                    side="top"
+                    maxWidth={200}
                   >
-                    {pinned ? "★" : "☆"}
-                  </button>
+                    <button
+                      onClick={() => onTogglePin(r.symbol)}
+                      aria-label={pinned ? "Unpin from screener" : "Pin to screener"}
+                      className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
+                        pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
+                      }`}
+                    >
+                      {pinned ? "★" : "☆"}
+                    </button>
+                  </Tooltip>
                 </td>
 
                 {/* Symbol + name — sticky col 2 */}

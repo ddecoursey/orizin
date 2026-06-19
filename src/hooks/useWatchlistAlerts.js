@@ -1,24 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+const SEEN_IDS_CAP = 200;
+
+function rememberAlertId(seen, id) {
+  seen.add(id);
+  if (seen.size > SEEN_IDS_CAP) {
+    const keep = [...seen].slice(-Math.floor(SEEN_IDS_CAP / 2));
+    seen.clear();
+    keep.forEach((x) => seen.add(x));
+  }
+}
+
 export function useWatchlistAlerts({ enabled = true, pollMs = 60_000 } = {}) {
   const [alerts, setAlerts] = useState([]);
   const [snapshots, setSnapshots] = useState({});
   const [unread, setUnread] = useState(0);
   const sinceRef = useRef(0);
   const seenIds = useRef(new Set());
+  const snapshotsJson = useRef("");
 
   const poll = useCallback(async () => {
-    if (!enabled || typeof document !== "undefined" && document.visibilityState === "hidden") return;
+    if (!enabled) return;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
     try {
       const res = await fetch(`/api/watchlist/alerts?since=${sinceRef.current}`);
       if (!res.ok) return;
       const data = await res.json();
-      if (data.snapshots) setSnapshots(data.snapshots);
-      setUnread(data.unread ?? 0);
+      const nextUnread = data.unread ?? 0;
+      setUnread((u) => (u === nextUnread ? u : nextUnread));
+      if (data.snapshots) {
+        const nextJson = JSON.stringify(data.snapshots);
+        if (nextJson !== snapshotsJson.current) {
+          snapshotsJson.current = nextJson;
+          setSnapshots(data.snapshots);
+        }
+      }
       const incoming = Array.isArray(data.alerts) ? data.alerts : [];
       const fresh = incoming.filter((a) => a?.id && !seenIds.current.has(a.id));
       if (fresh.length) {
-        fresh.forEach((a) => seenIds.current.add(a.id));
+        fresh.forEach((a) => rememberAlertId(seenIds.current, a.id));
         setAlerts((prev) => [...fresh, ...prev].slice(0, 30));
         const maxTs = Math.max(...incoming.map((a) => a.ts || 0), sinceRef.current);
         sinceRef.current = maxTs;
@@ -66,15 +86,23 @@ export function useWatchlistAlerts({ enabled = true, pollMs = 60_000 } = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(opts),
       });
-      if (!res.ok) return { error: res.status === 404 ? "Dev only" : "Failed" };
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 404) {
+          const msg = body?.error === "Not found"
+            ? "Dev only"
+            : "Alert API not found — restart the dev server";
+          return { error: msg };
+        }
+        return { error: body?.error || "Failed" };
+      }
       const data = await res.json();
       if (data.alert?.id) {
-        seenIds.current.add(data.alert.id);
+        rememberAlertId(seenIds.current, data.alert.id);
         setAlerts((prev) => [data.alert, ...prev].slice(0, 30));
         setUnread((n) => n + 1);
         sinceRef.current = Math.max(sinceRef.current, data.alert.ts || 0);
       }
-      await poll();
       return { ok: true, alert: data.alert };
     } catch {
       return { error: "Network error" };

@@ -231,3 +231,13 @@ export function IconChevronDown({ className = "" }) {
     </Svg>
   );
 }
+
+/** Watchlist — eye mark (distinct from screener ★ pins). */
+export function IconWatchlist({ className = "", active = false }) {
+  return (
+    <Svg className={className} strokeWidth="1.7">
+      <path d="M2.2 12s3.6-6.8 9.8-6.8 9.8 6.8 9.8 6.8-3.6 6.8-9.8 6.8S2.2 12 2.2 12z" />
+      <circle cx="12" cy="12" r="2.4" fill={active ? "currentColor" : "none"} />
+    </Svg>
+  );
+}

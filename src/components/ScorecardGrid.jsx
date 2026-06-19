@@ -68,15 +68,25 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
         </div>
         <div className="flex items-center gap-2">
           {onTogglePin && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
-              title={pinned ? 'Unpin' : 'Pin'}
-              className={`text-lg leading-none ${
-                pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
-              }`}
+            <Tooltip
+              content={
+                pinned
+                  ? "Unpin from screener"
+                  : "Pin to screener — filter & sort priority\nNot the same as watchlist (eye icon)"
+              }
+              side="top"
+              maxWidth={200}
             >
-              {pinned ? '★' : '☆'}
-            </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
+                aria-label={pinned ? "Unpin from screener" : "Pin to screener"}
+                className={`text-lg leading-none ${
+                  pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
+                }`}
+              >
+                {pinned ? '★' : '☆'}
+              </button>
+            </Tooltip>
           )}
           <span className="inline-flex items-center">
             <Tooltip

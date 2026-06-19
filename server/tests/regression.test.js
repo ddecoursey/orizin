@@ -450,6 +450,31 @@ test('settings sanitize watchlists: single list, dedupe, uppercase, symbol cap',
   assert.equal(afterCap.data.watchlists[0].symbols[0], 'SYM0');
 });
 
+test('watchlist alerts API lists, marks read, and blocks dev test in test env', async () => {
+  const list = await json(
+    await fetch(api('/api/watchlist/alerts?since=0'), { headers: { cookie: userCookie } }),
+  );
+  assert.ok(Array.isArray(list.alerts));
+  assert.equal(typeof list.unread, 'number');
+  assert.ok(list.snapshots && typeof list.snapshots === 'object');
+
+  const read = await json(
+    await fetch(api('/api/watchlist/alerts/read'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: userCookie },
+      body: JSON.stringify({ readThrough: Date.now() }),
+    }),
+  );
+  assert.equal(read.ok, true);
+
+  const testRoute = await fetch(api('/api/watchlist/alerts/test'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ type: 'price' }),
+  });
+  assert.equal(testRoute.status, 404);
+});
+
 test('refresh and enrich are admin-only', async () => {
   for (const p of ['/api/stocks/refresh', '/api/stocks/enrich']) {
     const res = await fetch(api(p), {

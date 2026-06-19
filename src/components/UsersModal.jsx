@@ -17,6 +17,8 @@ export default function UsersModal({
   appEnv = 'production',
   onTestWatchlistAlert,
   testWatchlistAlertBusy = false,
+  testWatchlistAlertMsg = '',
+  testWatchlistAlertOk = null,
 }) {
   const showUsers = mode === 'users' && isAdmin;
   const showAccount = mode === 'account';
@@ -407,14 +409,24 @@ export default function UsersModal({
                 </label>
               ))}
               {appEnv === 'development' && onTestWatchlistAlert && (
-                <button
-                  type="button"
-                  disabled={testWatchlistAlertBusy}
-                  onClick={onTestWatchlistAlert}
-                  className="w-full mt-2 text-[11px] font-semibold px-2 py-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 text-amber-200 hover:bg-amber-900/40 transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  {testWatchlistAlertBusy ? 'Sending…' : 'Send test notification (dev)'}
-                </button>
+                <div className="mt-2 space-y-1.5">
+                  <p className="text-[10px] text-gray-600 leading-snug">
+                    Dev only: previews the in-app toast (bottom-right). Does not send email — real emails come from the scanner and daily digest.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={testWatchlistAlertBusy}
+                    onClick={onTestWatchlistAlert}
+                    className="w-full text-[11px] font-semibold px-2 py-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 text-amber-200 hover:bg-amber-900/40 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    {testWatchlistAlertBusy ? 'Sending…' : 'Send test in-app notification'}
+                  </button>
+                  {testWatchlistAlertMsg && (
+                    <p className={`text-[10px] leading-snug ${testWatchlistAlertOk === false ? 'text-red-400' : 'text-emerald-400'}`}>
+                      {testWatchlistAlertMsg}
+                    </p>
+                  )}
+                </div>
               )}
             </div>
           </div>

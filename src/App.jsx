@@ -424,29 +424,46 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const watchlists = useWatchlists(currentUser);
   const wlAlerts = useWatchlistAlerts({ enabled: currentUser && currentUser !== "default" });
   const [wlTestBusy, setWlTestBusy] = useState(false);
+  const [wlTestMsg, setWlTestMsg] = useState("");
+  const [wlTestOk, setWlTestOk] = useState(null);
   const handleWlTestAlert = async () => {
     setWlTestBusy(true);
-    await wlAlerts.triggerTestAlert({
+    setWlTestMsg("");
+    setWlTestOk(null);
+    const result = await wlAlerts.triggerTestAlert({
       symbol: watchlists.watchlist?.symbols?.[0],
       type: "price",
     });
     setWlTestBusy(false);
+    if (result?.ok) {
+      const sym = result.alert?.symbol || watchlists.watchlist?.symbols?.[0] || "AAPL";
+      setWlTestOk(true);
+      setWlTestMsg(`In-app toast sent for ${sym} (bottom-right). Email is not sent by this button.`);
+    } else {
+      setWlTestOk(false);
+      setWlTestMsg(result?.error || "Test notification failed");
+    }
   };
   const watchlistSymbols = watchlists.watchlist?.symbols || [];
+  const stockBySymbol = useMemo(
+    () => new Map(stocks.map((s) => [s.symbol, s])),
+    [stocks],
+  );
   const pendingWlSymbols = useMemo(() => {
     const wl = watchlists.watchlist;
     if (!wl?.symbols?.length) return new Set();
     const listRecent = wl.updatedAt && Date.now() - wl.updatedAt < 10 * 60 * 1000;
     if (!listRecent) return new Set();
     const stale = new Set();
+    const now = Date.now();
     for (const sym of wl.symbols) {
       const snap = wlAlerts.snapshots[sym];
-      const row = stocks.find((s) => s.symbol === sym);
+      const row = stockBySymbol.get(sym);
       const pu = snap?.priceUpdatedAt ?? row?.price_updated_at;
-      if (!pu || Date.now() - pu > 5 * 60 * 1000) stale.add(sym);
+      if (!pu || now - pu > 5 * 60 * 1000) stale.add(sym);
     }
     return stale;
-  }, [watchlists.watchlist, wlAlerts.snapshots, stocks]);
+  }, [watchlists.watchlist, wlAlerts.snapshots, stockBySymbol]);
 
   useEffect(() => {
     if (!watchlistSymbols.length || !mergeStocks) return;
@@ -1292,6 +1309,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           appEnv={appEnv}
           onTestWatchlistAlert={handleWlTestAlert}
           testWatchlistAlertBusy={wlTestBusy}
+          testWatchlistAlertMsg={wlTestMsg}
+          testWatchlistAlertOk={wlTestOk}
         />
       )}
 
@@ -1330,6 +1349,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         showDevTest={appEnv === "development"}
         onTestAlert={handleWlTestAlert}
         testAlertBusy={wlTestBusy}
+        testAlertMsg={wlTestMsg}
+        testAlertOk={wlTestOk}
       />
 
       <NotificationHost

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
-import { IconResearch, IconRefresh } from "./icons.jsx";
+import { IconResearch, IconRefresh, IconWatchlist } from "./icons.jsx";
+import OriEmblem from "./OriEmblem.jsx";
+import Tooltip from "./Tooltip.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
 import { PriceChart, StockNewsList, GradesList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
@@ -69,6 +71,26 @@ const FORM_COLORS = {
 // clearly-labeled "coming soon" placeholder so the structure is visible while we
 // wire the remaining FMP endpoints over time.
 // ─────────────────────────────────────────────────────────────────────────────
+
+function ToolbarIcon({ onClick, disabled, hint, active, children }) {
+  return (
+    <Tooltip content={hint} side="bottom" maxWidth={220}>
+      <button
+        type="button"
+        onClick={disabled ? undefined : onClick}
+        aria-disabled={disabled || undefined}
+        aria-label={hint}
+        className={`p-2 transition-colors cursor-pointer ${
+          disabled ? "opacity-50 cursor-not-allowed" : ""
+        } ${
+          active ? "text-violet-300 bg-violet-950/30" : "text-gray-400 hover:text-gray-200 hover:bg-gray-800/50"
+        }`}
+      >
+        {children}
+      </button>
+    </Tooltip>
+  );
+}
 
 function Panel({ title, tier, children, span = 1, soon = false }) {
   return (
@@ -351,92 +373,108 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
 
   return (
     <div className="flex-1 overflow-y-auto overscroll-contain bg-gray-950">
-      {/* Sticky page header */}
-      <div className="sticky top-0 z-10 bg-gray-950 border-b border-gray-800 px-4 sm:px-6 py-3">
-        <div className="flex items-center gap-3 flex-wrap gap-y-2">
-          <button
-            onClick={onBack}
-            className="shrink-0 text-xs text-gray-400 hover:text-gray-100 px-2.5 py-1.5 lg:px-2 lg:py-1 rounded-md hover:bg-gray-800 transition-colors cursor-pointer"
-            title="Back to screener"
-          >
-            ← Back
-          </button>
+      {/* Sticky page header — identity + compact action toolbar */}
+      <div className="sticky top-0 z-10 bg-gray-950 border-b border-gray-800 px-4 sm:px-6 py-2.5 sm:py-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <Tooltip content="Back to screener" side="bottom">
+            <button
+              onClick={onBack}
+              className="shrink-0 text-gray-500 hover:text-gray-200 p-1.5 rounded-md hover:bg-gray-800 transition-colors cursor-pointer"
+              aria-label="Back to screener"
+            >
+              <span className="text-sm leading-none">←</span>
+            </button>
+          </Tooltip>
 
           {profile?.image && (
             <img
               src={profile.image}
               alt=""
-              className="w-10 h-10 rounded-lg bg-white/5 object-contain shrink-0"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-lg bg-white/5 object-contain shrink-0 hidden sm:block"
               onError={(e) => (e.currentTarget.style.display = "none")}
             />
           )}
 
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-xl font-black text-gray-100">{symbol}</span>
-              <span
-                className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0"
-                style={{ background: sec.bg, color: sec.fg }}
-              >
-                {row?.sector || "—"}
-              </span>
-              <span className="text-[10px] uppercase tracking-wider text-violet-300/80 font-semibold hidden sm:inline">
-                · Deep Research
-              </span>
+          <div className="min-w-0 flex-1 flex items-center gap-2 sm:gap-3">
+            <div className="min-w-0 shrink">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-lg sm:text-xl font-black text-gray-100 shrink-0">{symbol}</span>
+                <span
+                  className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0 hidden md:inline"
+                  style={{ background: sec.bg, color: sec.fg }}
+                >
+                  {row?.sector || "—"}
+                </span>
+              </div>
+              <div className="text-[11px] sm:text-xs text-gray-400 truncate max-w-[8rem] sm:max-w-[12rem] md:max-w-none">
+                {row?.name || profile?.companyName || ""}
+              </div>
             </div>
-            <div className="text-xs text-gray-400 truncate">{row?.name || profile?.companyName || ""}</div>
+
+            <Tooltip content="Switch symbol without leaving Deep Research" side="bottom" maxWidth={200} className="w-28 sm:w-36 md:w-44 lg:w-48 shrink min-w-0">
+              <GlobalSearch
+                stocks={stocks}
+                onSelect={handleSearch}
+                placeholder="Switch symbol…"
+                className="max-w-none flex-none w-full"
+              />
+            </Tooltip>
           </div>
 
-          <div className="ml-auto flex items-center gap-2.5 sm:gap-4 shrink-0">
-            {/* Switch to another stock without leaving Deep Research */}
-            <div className="w-full sm:w-48 md:w-56 order-last sm:order-none basis-full sm:basis-auto">
-              <GlobalSearch stocks={stocks} onSelect={handleSearch} />
+          <div className="shrink-0 text-right">
+            <div className="text-sm sm:text-lg font-bold font-mono text-gray-100 leading-tight">
+              {fmt(row?.price, "price") ?? "—"}
             </div>
-            {onToggleWatchlist && (
-              <button
-                type="button"
-                onClick={() => onToggleWatchlist(symbol)}
-                className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-md border shrink-0 cursor-pointer whitespace-nowrap ${
-                  isInWatchlist
-                    ? "bg-violet-950/50 text-violet-200 border-violet-700/60 hover:border-violet-600"
-                    : "bg-gray-900 text-gray-400 border-gray-700 hover:border-violet-700/50 hover:text-violet-300"
-                }`}
-                title={isInWatchlist ? "Remove from watchlist" : "Add to watchlist — priority refresh & alerts"}
-              >
-                {isInWatchlist ? "On watchlist" : "Add to watchlist"}
-              </button>
+            {sc != null && (
+              <div className="text-[10px] sm:text-xs font-semibold" style={{ color: scoreColor }}>
+                {canUseOri ? `Conviction ${sc}` : `Orizin ${sc}`}
+              </div>
             )}
-            <div className="text-right">
-              <div className="text-lg font-bold font-mono text-gray-100">{fmt(row?.price, "price") ?? "—"}</div>
-              {sc != null && (
-                <div className="text-xs font-semibold" style={{ color: scoreColor }}>
-                  {canUseOri ? `Conviction ${sc}` : `Orizin ${sc}`}
-                </div>
-              )}
-            </div>
+          </div>
+
+          <div className="flex items-center rounded-lg border border-gray-800/90 bg-gray-900/40 divide-x divide-gray-800/80 shrink-0">
+            {onToggleWatchlist && (
+              <ToolbarIcon
+                onClick={() => onToggleWatchlist(symbol)}
+                active={isInWatchlist}
+                hint={
+                  isInWatchlist
+                    ? "Remove from watchlist"
+                    : "Add to watchlist — priority refresh & alerts\nNot the same as screener ★ pins"
+                }
+              >
+                <IconWatchlist className="w-4 h-4" active={isInWatchlist} />
+              </ToolbarIcon>
+            )}
             {onRegather && (
-              <button
+              <ToolbarIcon
                 onClick={() => onRegather(symbol)}
                 disabled={regathering}
-                className="text-xs font-semibold px-3 py-2 lg:py-1.5 rounded-md bg-gray-800 text-gray-200 border border-gray-700 hover:bg-gray-700 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1.5 cursor-pointer"
-                title="Re-fetch all data for this stock from FMP"
+                hint={regathering ? "Gathering data…" : "Re-gather — re-fetch all data for this stock from FMP"}
               >
-                <IconRefresh className={`w-3.5 h-3.5 ${regathering ? "animate-spin" : ""}`} />
-                {regathering ? "Gathering…" : "Re-gather"}
-              </button>
+                <IconRefresh className={`w-4 h-4 ${regathering ? "animate-spin" : ""}`} />
+              </ToolbarIcon>
             )}
             {onAskOri && (
-              <button
-                onClick={() => onAskOri(symbol)}
-                className={`text-xs font-semibold px-3 py-2 lg:py-1.5 rounded-md border transition-all active:scale-95 cursor-pointer ${
-                  canUseOri
-                    ? "bg-gradient-to-br from-blue-600/30 to-violet-600/30 text-violet-200 border-violet-800/50 hover:brightness-125"
-                    : "bg-gray-800/80 text-gray-400 border-gray-700 hover:border-violet-800/50 hover:text-violet-300"
-                }`}
-                title={canUseOri ? "Open Ori chat about this stock" : "Pro feature — upgrade to chat with Ori"}
+              <Tooltip
+                content={canUseOri ? "Chat with Ori about this stock" : "Pro feature — upgrade to chat with Ori"}
+                side="bottom"
+                maxWidth={200}
               >
-                {canUseOri ? "Ask Ori" : "Ask Ori · Pro"}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onAskOri(symbol)}
+                  aria-label={canUseOri ? "Chat with Ori about this stock" : "Ask Ori — Pro feature"}
+                  className={`flex items-center gap-1.5 px-2.5 py-2 text-xs font-semibold transition-all active:scale-95 cursor-pointer ${
+                    canUseOri
+                      ? "text-violet-200 hover:bg-violet-950/35"
+                      : "text-gray-400 hover:text-violet-300 hover:bg-gray-800/50"
+                  }`}
+                >
+                  <OriEmblem className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Ori</span>
+                </button>
+              </Tooltip>
             )}
           </div>
         </div>

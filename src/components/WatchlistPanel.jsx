@@ -1,6 +1,7 @@
 import { fmt } from "../lib/format.js";
 import Sparkline from "./Sparkline.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
+import Tooltip from "./Tooltip.jsx";
 
 function ScoreMini({ row, canUseOri }) {
   const v = canUseOri
@@ -44,6 +45,8 @@ export default function WatchlistPanel({
   showDevTest = false,
   onTestAlert,
   testAlertBusy = false,
+  testAlertMsg = "",
+  testAlertOk = null,
 }) {
   if (!open) return null;
 
@@ -126,14 +129,16 @@ export default function WatchlistPanel({
                         </span>
                       )}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => removeSymbol(sym)}
-                      className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 text-sm px-1 cursor-pointer"
-                      title="Remove from watchlist"
-                    >
-                      ×
-                    </button>
+                    <Tooltip content="Remove from watchlist" side="left">
+                      <button
+                        type="button"
+                        onClick={() => removeSymbol(sym)}
+                        aria-label="Remove from watchlist"
+                        className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-red-400 text-sm px-1 cursor-pointer"
+                      >
+                        ×
+                      </button>
+                    </Tooltip>
                   </li>
                 );
               })}
@@ -146,14 +151,21 @@ export default function WatchlistPanel({
             {symbols.length} {symbols.length === 1 ? "symbol" : "symbols"} · tap a row for Deep Research
           </div>
           {showDevTest && onTestAlert && (
-            <button
-              type="button"
-              disabled={testAlertBusy}
-              onClick={() => onTestAlert()}
-              className="w-full text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 text-amber-200 hover:bg-amber-900/40 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              {testAlertBusy ? "Sending…" : "Test notification (dev)"}
-            </button>
+            <div className="space-y-1">
+              <button
+                type="button"
+                disabled={testAlertBusy}
+                onClick={() => onTestAlert()}
+                className="w-full text-[10px] font-semibold px-2 py-1.5 rounded-md border border-amber-800/50 bg-amber-950/30 text-amber-200 hover:bg-amber-900/40 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {testAlertBusy ? "Sending…" : "Test in-app notification (dev)"}
+              </button>
+              {testAlertMsg && (
+                <p className={`text-[9px] leading-snug ${testAlertOk === false ? "text-red-400" : "text-emerald-400"}`}>
+                  {testAlertMsg}
+                </p>
+              )}
+            </div>
           )}
         </footer>
       </aside>

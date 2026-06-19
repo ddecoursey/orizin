@@ -212,16 +212,18 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
             </button>
           )}
           {isAdmin && oriReady && oriState?.refresh && !locked && (
-            <button
-              type="button"
-              onClick={oriState.refresh}
-              disabled={loading}
-              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer"
-              title="Re-run Ori's take with frontier model (bypasses 24h cache)"
-            >
-              <IconRefresh className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
-              {loading ? "Refreshing…" : "Refresh Ori"}
-            </button>
+            <Tooltip content="Re-run Ori's take with frontier model (bypasses 24h cache)" side="top" maxWidth={220}>
+              <button
+                type="button"
+                onClick={oriState.refresh}
+                disabled={loading}
+                aria-label="Refresh Ori's take"
+                className="text-[10px] font-semibold px-2 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer"
+              >
+                <IconRefresh className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+                {loading ? "Refreshing…" : "Refresh Ori"}
+              </button>
+            </Tooltip>
           )}
           {ori?.riskLevel && (
             <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold uppercase tracking-wide ${riskCls.bg} ${riskCls.text}`}>
