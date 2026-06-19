@@ -24,7 +24,7 @@ function SimBadge() {
   return (
     <span
       className="text-[9px] px-1.5 py-0.5 rounded font-bold bg-amber-900/50 text-amber-300 border border-amber-800/50"
-      title="Sandbox: play money only. Real account linking (Plaid) and order routing (Alpaca) plug in here later."
+      title="Sandbox — play money only"
     >
       SIMULATION
     </span>

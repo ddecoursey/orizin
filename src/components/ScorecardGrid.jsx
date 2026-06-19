@@ -2,6 +2,8 @@ import React, { useMemo } from 'react';
 import { fmt } from '../lib/format.js';
 import { SECTOR_COLORS } from '../lib/scoring.js';
 import { IconChart } from './icons.jsx';
+import Tooltip from "./Tooltip.jsx";
+import OriTip from "./OriTip.jsx";
 
 // Cards aren't virtualized (unlike the table), so cap how many DOM nodes we
 // render. The card view is a "browse the best" surface — showing the top N by
@@ -27,28 +29,19 @@ function SubChip({ label, value, colors, title, lowCov }) {
   const style = lowCov
     ? { background: colors.bg, color: colors.fg, border: '1px solid #f59e0b' }
     : { background: colors.bg, color: colors.fg };
-  return (
+  const chip = (
     <span
-      className="group relative inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9.5px] font-semibold tracking-[-0.2px] cursor-default"
+      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[9.5px] font-semibold tracking-[-0.2px] cursor-default"
       style={style}
     >
       {label} {pct ?? '—'}
-
-      {title && (
-        <span className="absolute top-full left-1/2 -translate-x-1/2 mt-2.5 hidden group-hover:block z-[90] pointer-events-none">
-          <div className="relative flex flex-col items-center transition-all duration-75 ease-out group-hover:opacity-100 group-hover:translate-y-0 opacity-0 -translate-y-1">
-            {/* Arrow pointing up */}
-            <div className="relative -mb-px h-2.5 w-4 overflow-hidden">
-              <div className="absolute left-1/2 bottom-0 -translate-x-1/2 h-3 w-3 rotate-45 bg-zinc-900 border-r border-b border-white/15" />
-            </div>
-            {/* Tooltip body */}
-            <div className="bg-zinc-900 border border-white/15 text-gray-200 text-[10.5px] leading-relaxed px-3.5 py-2 rounded-xl shadow-2xl shadow-black/70 max-w-[260px] whitespace-normal text-left">
-              {title}
-            </div>
-          </div>
-        </span>
-      )}
     </span>
+  );
+  if (!title) return chip;
+  return (
+    <Tooltip content={title} side="bottom" maxWidth={200}>
+      {chip}
+    </Tooltip>
   );
 }
 
@@ -77,7 +70,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
           {onTogglePin && (
             <button
               onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
-              title={pinned ? 'Unpin' : 'Pin to favorites'}
+              title={pinned ? 'Unpin' : 'Pin'}
               className={`text-lg leading-none ${
                 pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
               }`}
@@ -85,16 +78,27 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
               {pinned ? '★' : '☆'}
             </button>
           )}
-          <span
-            className="text-2xl font-black"
-            style={{ color: scoreColor }}
-            title={r.dataCoveragePenalty > 0
-              ? `Conviction ${sc} (base ${r.baseConviction}, -${r.dataCoveragePenalty} data-coverage penalty for missing heavily-weighted pillar data)`
-              : undefined}
-          >
-            {sc ?? '—'}
+          <span className="inline-flex items-center">
+            <Tooltip
+              content={
+                r.dataCoveragePenalty > 0
+                  ? `${sc} (base ${r.baseConviction}, −${r.dataCoveragePenalty} sparse-data penalty)`
+                  : undefined
+              }
+            >
+              <span className="text-2xl font-black" style={{ color: scoreColor }}>
+                {sc ?? '—'}
+              </span>
+            </Tooltip>
             {r.dataCoveragePenalty > 0 && (
-              <span className="text-[10px] align-super ml-0.5 text-amber-400" title={`Data penalty -${r.dataCoveragePenalty}`}>↓</span>
+              <Tooltip content={`−${r.dataCoveragePenalty} penalty`}>
+                <span className="text-[10px] align-super ml-0.5 text-amber-400">↓</span>
+              </Tooltip>
+            )}
+            {r.ori && (
+              <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
+                <span className="text-[10px] text-purple-400 align-super ml-0.5 cursor-help">✧</span>
+              </Tooltip>
             )}
           </span>
         </div>
@@ -129,21 +133,21 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
           value={r.qScore}
           colors={{ bg: '#14532d', fg: '#86efac' }}
           lowCov={r.pillarCoverage && r.pillarCoverage.q < 0.5}
-          title={`Quality — Profitable, capital-efficient businesses with strong balance sheets (ROIC, margins, low debt, liquidity). Pillar coverage: ${r.pillarCoverage ? Math.round(r.pillarCoverage.q * 100) : '—'}% real data.`}
+          title={`Quality: ROIC, margins, balance sheet. ${r.pillarCoverage ? Math.round(r.pillarCoverage.q * 100) : '—'}% data.`}
         />
         <SubChip
           label="V"
           value={r.vScore}
           colors={{ bg: '#713f12', fg: '#fde68a' }}
           lowCov={r.pillarCoverage && r.pillarCoverage.v < 0.5}
-          title={`Value — Cheap on multiples + margin of safety (EV/GP, EV/EBITDA, P/E, FCF yield, DCF). Pillar coverage: ${r.pillarCoverage ? Math.round(r.pillarCoverage.v * 100) : '—'}% real data.`}
+          title={`Value: multiples + margin of safety. ${r.pillarCoverage ? Math.round(r.pillarCoverage.v * 100) : '—'}% data.`}
         />
         <SubChip
           label="G"
           value={r.gScore}
           colors={{ bg: '#134e4b', fg: '#5eead4' }}
           lowCov={r.pillarCoverage && r.pillarCoverage.g < 0.5}
-          title={`Growth — Revenue, EPS, and FCF growth (TTM). Higher = favor faster-growing companies. Pillar coverage: ${r.pillarCoverage ? Math.round(r.pillarCoverage.g * 100) : '—'}% real data.`}
+          title={`Growth: rev/EPS/FCF (TTM). ${r.pillarCoverage ? Math.round(r.pillarCoverage.g * 100) : '—'}% data.`}
         />
         {r.dataCoverage != null && r.score != null && (
           <SubChip
@@ -156,8 +160,8 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
             }
             title={
               (r.dataCoveragePenalty && r.dataCoveragePenalty > 0)
-                ? `Data coverage ${Math.round(r.dataCoverage*100)}%. Conviction penalized by ${r.dataCoveragePenalty} because user-weighted pillar(s) have heavy missing data (see Q/V/G %). Low-evidence names are pushed down the ranking when you weight a missing pillar heavily.`
-                : "How much of the 16-metric scorecard has real data. Missing inputs count as a slightly-below-median rank instead of being ignored, so sparse data can't inflate the score — but low coverage still means lower confidence."
+                ? `Coverage ${Math.round(r.dataCoverage * 100)}%. −${r.dataCoveragePenalty} for sparse weighted pillars.`
+                : "Share of scorecard with real data. Low = less confidence."
             }
           />
         )}
@@ -169,7 +173,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
               r.durabilityProxy >= 70 ? { bg: '#14532d', fg: '#86efac' } :
               r.durabilityProxy >= 50 ? { bg: '#713f12', fg: '#fde68a' } : { bg: '#78350f', fg: '#fcd34d' }
             }
-            title={`Business durability proxy (${r.durabilityProxy}/100). Combines real profitability sustainability, capital efficiency/safety, data richness, and scale/stability. High = harder for "perfect on paper" quantitative names to rank at the top without underlying business quality. Cheap equivalent to Ori intangibles review (full version on Deep Research for any symbol).`}
+            title={`Durability ${r.durabilityProxy}/100. Quality + efficiency proxy. Full Ori on Deep Research.`}
           />
         )}
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold bg-gray-800 text-gray-400">

@@ -180,7 +180,7 @@ export default function Header({
       {env !== 'production' && (
         <span
           className="shrink-0 rounded-md bg-amber-500/20 border border-amber-500/50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"
-          title={`${env} environment — PayPal sandbox / test data, not production`}
+          title={`${env} — test data, not production`}
         >
           {env === 'development' ? 'DEV' : env}
         </span>

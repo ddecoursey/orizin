@@ -4,6 +4,8 @@ import { fmt } from "../lib/format.js";
 import { SECTOR_COLORS } from "../lib/scoring.js";
 import Sparkline from "./Sparkline";
 import { IconSearch } from "./icons.jsx";
+import Tooltip from "./Tooltip.jsx";
+import OriTip from "./OriTip.jsx";
 
 const GOOD_H = new Set([
   "gross_margin",
@@ -159,9 +161,19 @@ const COL_WIDTHS = {
   div_yield: "58px",
 };
 
-export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, onAskAI, onSelectStock, enrichLoading = false, sparklineForceVersion = 0 }) {
-  const [sortKey, setSortKey] = useState("mcap");
-  const [sortDir, setSortDir] = useState(-1);
+export default function StockTable({
+  rows,
+  heatRows = rows,
+  pins,
+  onTogglePin,
+  onAskAI,
+  onSelectStock,
+  enrichLoading = false,
+  sparklineForceVersion = 0,
+  sortKey = "mcap",
+  sortDir = -1,
+  onSortChange,
+}) {
   // symbol -> number[]. localStorage hydration happens lazily per symbol inside
   // fetchSparklineInternal (getSparklineFromLocal) — the old eager loop parsed
   // every persisted sparkline JSON blob synchronously at mount, which scaled
@@ -391,12 +403,9 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
 
   function handleSort(key) {
     const col = COLS.find((c) => c.key === key);
-    if (col?.nosort) return;
-    if (sortKey === key) setSortDir((d) => -d);
-    else {
-      setSortKey(key);
-      setSortDir(key === "symbol" || key === "sector" ? 1 : -1);
-    }
+    if (col?.nosort || !onSortChange) return;
+    if (sortKey === key) onSortChange(key, -sortDir);
+    else onSortChange(key, key === "symbol" || key === "sector" ? 1 : -1);
   }
 
   const paddingTop = virtualItems.length > 0 ? virtualItems[0].start : 0;
@@ -467,7 +476,6 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                 <th
                   key={c.key}
                   onClick={() => handleSort(c.key)}
-                  title={c.key === "conviction" ? "Conviction (0–100): the unified verdict — fundamentals (Orizin engine) + valuation. Refines with technicals, smart money, analysts & Ori's intangibles on the Deep Research page. When a pillar you weighted heavily (via Q/V/G sliders) has mostly missing data, a data-coverage penalty is subtracted from Conviction so low-evidence names don't dominate the ranking." : undefined}
                   style={w ? { width: w } : undefined}
                   className={`px-3 py-2 whitespace-nowrap text-[9px] uppercase tracking-wider
                     font-bold border-b border-gray-800
@@ -477,7 +485,16 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
                     ${c.key === "pin" ? "sticky left-0 z-40 border-r border-gray-950 bg-gray-950" : ""}
                     ${c.key === "symbol" ? "sticky left-[32px] z-40 bg-gray-950" : ""}`}
                 >
-                  {c.label}
+                  {c.key === "conviction" ? (
+                    <Tooltip
+                      content="0–100 verdict: fundamentals + valuation. Refines on Deep Research. −penalty when weighted Q/V/G pillars lack data."
+                      maxWidth={220}
+                    >
+                      {c.label}
+                    </Tooltip>
+                  ) : (
+                    c.label
+                  )}
                   {sortKey === c.key ? (sortDir > 0 ? " ▲" : " ▼") : ""}
                 </th>
               );
@@ -566,26 +583,34 @@ export default function StockTable({ rows, heatRows = rows, pins, onTogglePin, o
 
                 {/* Conviction */}
                 <td className="px-3 py-2 min-w-[80px]">
-                  <span
-                    title={
-                      r.conviction != null && r.dataCoveragePenalty > 0
-                        ? `Conviction ${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty} penalty). Penalty applies when user weights are high on a pillar with low real-data coverage (Q:${r.pillarCoverage ? Math.round(r.pillarCoverage.q*100) : '—'}% V:${r.pillarCoverage ? Math.round(r.pillarCoverage.v*100) : '—'}% G:${r.pillarCoverage ? Math.round(r.pillarCoverage.g*100) : '—'}%).`
-                        : (r.conviction != null ? 'Conviction (0–100) from fundamentals + valuation (see column header for details).' : undefined)
-                    }
-                  >
-                    <ScoreBar score={r.conviction != null ? r.conviction / 100 : null} />
+                  <span className="inline-flex items-center">
+                    <Tooltip
+                      content={
+                        r.conviction != null && r.dataCoveragePenalty > 0
+                          ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
+                          : (r.conviction != null ? "Fundamentals + valuation (0–100)." : undefined)
+                      }
+                    >
+                      <span><ScoreBar score={r.conviction != null ? r.conviction / 100 : null} /></span>
+                    </Tooltip>
                     {r.dataCoveragePenalty > 0 && (
-                      <span className="ml-1 text-[9px] text-amber-400 align-super" title={`−${r.dataCoveragePenalty} data penalty`}>↓</span>
+                      <Tooltip content={`−${r.dataCoveragePenalty} penalty`}>
+                        <span className="ml-1 text-[9px] text-amber-400 align-super">↓</span>
+                      </Tooltip>
                     )}
                     {r.ori && (
-                      <span className="ml-1 text-[8px] text-purple-400 align-super" title={`Ori-reviewed intangibles (score ${r.ori.intangiblesScore ?? '—'}): ${r.ori.intangiblesRationale || r.ori.bottomLine || ''}. Conviction delta ${r.ori.convictionDelta ?? 0}. Cached — no extra API cost after first review.`}>✧</span>
+                      <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
+                        <span className="ml-1 text-[8px] text-purple-400 align-super cursor-help">✧</span>
+                      </Tooltip>
                     )}
                   </span>
                 </td>
 
                 {/* Durability / intangibles proxy (cheap Ori equivalent) */}
-                <td className="px-1 py-2 text-center font-mono text-[9px] text-gray-400" title="Durability proxy (0-100): real profitability + capital efficiency + balance sheet safety + data richness + scale. High values make it much harder for 'perfect on paper' junk (unprofitable story stocks, etc.) to rank at the top. Complements data penalty. Full Ori intangibles review (with convictionDelta) on Deep Research for any name — server-cached after first view, no extra cost for the list.">
-                  {r.durabilityProxy ?? <span className="text-gray-600">—</span>}
+                <td className="px-1 py-2 text-center font-mono text-[9px] text-gray-400">
+                  <Tooltip content="0–100 quality proxy. Penalizes paper-perfect junk. Full Ori review on ✧ or Deep Research.">
+                    <span>{r.durabilityProxy ?? <span className="text-gray-600">—</span>}</span>
+                  </Tooltip>
                 </td>
 
                 {/* Trend Sparkline (real historical prices) */}

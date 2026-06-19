@@ -474,26 +474,6 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
               </>
             )}
 
-            {/* Golden / death cross label (on marker hover) — drawn last so it sits on top */}
-            {hoverCross != null && crossMarkers[hoverCross] && (() => {
-              const m = crossMarkers[hoverCross];
-              const cx = xAt(m.i);
-              const cy = yPrice(m.level);
-              const gold = m.dir === "golden";
-              const color = gold ? "#f59e0b" : "#ef4444";
-              const label = `${gold ? "Golden" : "Death"} cross · ${shortDate(m.date)}`;
-              const bw = 16 + label.length * 5.4;
-              const bx = Math.max(2, Math.min(w - bw - 2, cx - bw / 2));
-              const by = Math.max(2, cy - 30);
-              return (
-                <g pointerEvents="none">
-                  <rect x={bx} y={by} width={bw} height="19" rx="4" fill="#0a0f1d" stroke={color} strokeWidth="1" />
-                  <text x={bx + bw / 2} y={by + 13} textAnchor="middle" fontSize="10" fontWeight="bold" fill={gold ? "#fbbf24" : "#fca5a5"}>
-                    {label}
-                  </text>
-                </g>
-              );
-            })()}
           </svg>
         )}
 
@@ -517,6 +497,24 @@ export function PriceChart({ points: allPoints, rsi, symbol, height = 294, timef
             )}
           </div>
         )}
+
+        {/* Golden / death cross label — rendered as an HTML overlay (z-20) ABOVE
+            the crosshair tooltip (z-10) so it never gets clipped behind it. */}
+        {hoverCross != null && crossMarkers[hoverCross] && (() => {
+          const m = crossMarkers[hoverCross];
+          const gold = m.dir === "golden";
+          const color = gold ? "#f59e0b" : "#ef4444";
+          const left = Math.max(48, Math.min(w - 48, xAt(m.i)));
+          const top = Math.max(2, yPrice(m.level) - 30);
+          return (
+            <div
+              className="absolute z-20 -translate-x-1/2 pointer-events-none rounded-md border px-1.5 py-0.5 text-[10px] font-bold whitespace-nowrap shadow-xl"
+              style={{ left, top, background: "#0a0f1d", borderColor: color, color: gold ? "#fbbf24" : "#fca5a5" }}
+            >
+              {gold ? "Golden" : "Death"} cross · {shortDate(m.date)}
+            </div>
+          );
+        })()}
       </div>
 
       {ready && (

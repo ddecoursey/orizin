@@ -464,11 +464,13 @@ export function getAllStocks() {
     .prepare(
       `SELECT s.*, ae.target_consensus, ae.target_high, ae.target_low,
               rc.data AS ratings_json,
-              gp.data AS gameplan_json, gp.updated_at AS gameplan_at
+              gp.data AS gameplan_json, gp.updated_at AS gameplan_at,
+              gpl.data AS gameplan_lite_json, gpl.updated_at AS gameplan_lite_at
          FROM stocks s
          LEFT JOIN ai_enrichment ae ON ae.symbol = s.symbol
          LEFT JOIN kv_cache rc ON rc.key = ('ratings:' || s.symbol)
          LEFT JOIN kv_cache gp ON gp.key = ('gameplan:' || s.symbol)
+         LEFT JOIN kv_cache gpl ON gpl.key = ('gameplan-lite:' || s.symbol)
         ORDER BY s.mcap DESC NULLS LAST`,
     )
     .all();
@@ -484,24 +486,52 @@ export function getAllStocks() {
         /* ignore corrupt cache entry */
       }
     }
-    // Fold a STILL-FRESH cached Ori Game Plan onto the row so the screener
-    // Conviction can reuse it — free (no new LLM call), just the 24h cache any
-    // Deep Research visit already populated.
-    let ori = null;
-    if (row.gameplan_json && row.gameplan_at && now - row.gameplan_at < GAMEPLAN_TTL_MS) {
+    // Fold a STILL-FRESH cached Ori review onto the row so the screener
+    // Conviction can reuse it — free (no new LLM call). Prefer the premium
+    // frontier review from a Deep Research visit (`gameplan:`); fall back to the
+    // cheap lite review the screener/background trickle generates (`gameplan-lite:`).
+    // modelTier on the object tells them apart (frontier vs lite).
+    const parseFresh = (jsonStr, at) => {
+      if (!jsonStr || !at || now - at >= GAMEPLAN_TTL_MS) return null;
       try {
-        const parsed = JSON.parse(row.gameplan_json);
-        if (parsed && typeof parsed === "object") ori = parsed;
+        const parsed = JSON.parse(jsonStr);
+        return parsed && typeof parsed === "object" ? parsed : null;
       } catch {
-        /* ignore corrupt cache entry */
+        return null;
       }
-    }
+    };
+    const ori =
+      parseFresh(row.gameplan_json, row.gameplan_at) ||
+      parseFresh(row.gameplan_lite_json, row.gameplan_lite_at);
     const clean = { ...row };
     delete clean.ratings_json;
     delete clean.gameplan_json;
     delete clean.gameplan_at;
+    delete clean.gameplan_lite_json;
+    delete clean.gameplan_lite_at;
     return { ...clean, rating, rating_overall_score: ratingOverallScore, ori };
   });
+}
+
+// Background "shared baseline" trickle for screener intangibles: return the next
+// few top-by-market-cap leaders (within `leaderCap`) that DON'T yet have a fresh
+// frontier (gameplan:) OR lite (gameplan-lite:) review. Bounding to a leader cap
+// keeps the lite spend finite (≈leaderCap generations / 24h, shared across users).
+const nextIntangiblesStmt = db.prepare(`
+  SELECT t.symbol FROM (
+    SELECT symbol, mcap FROM stocks
+     WHERE (is_etf IS NULL OR is_etf = 0) AND mcap IS NOT NULL AND has_km = 1
+     ORDER BY mcap DESC LIMIT ?
+  ) t
+  LEFT JOIN kv_cache gp  ON gp.key  = ('gameplan:' || t.symbol)
+  LEFT JOIN kv_cache gpl ON gpl.key = ('gameplan-lite:' || t.symbol)
+  WHERE (gp.updated_at  IS NULL OR gp.updated_at  < ?)
+    AND (gpl.updated_at IS NULL OR gpl.updated_at < ?)
+  ORDER BY t.mcap DESC
+  LIMIT ?
+`);
+export function nextIntangiblesBacklog(cutoffMs, leaderCap = 250, limit = 1) {
+  return nextIntangiblesStmt.all(leaderCap, cutoffMs, cutoffMs, limit).map((r) => r.symbol);
 }
 
 // Persist the ~45-day price return used by the screener Technicals signal.

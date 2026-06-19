@@ -739,7 +739,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, stocks
                       <span className="text-red-400 font-semibold">{smart.congress.sellers} sold</span>
                       <span className="text-gray-600"> · {smart.congress.total} disclosures · 180d</span>
                     </span>
-                    <InfoHint text="Trades in this stock disclosed by U.S. Senators and Representatives (periodic transaction reports). Disclosures lag the actual trade by up to ~45 days. An alt-data conviction signal standard screeners don't surface." />
+                    <InfoHint text="Senate/House stock trades. ~45-day disclosure lag. Alt-data signal." />
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-0.5">
                     {smart.congress.recent.map((t, i) => (

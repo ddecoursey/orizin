@@ -5,9 +5,9 @@ import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
 import { fileURLToPath } from 'url';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
-import stocksRouter, { getDetailCacheStats } from './routes/stocks.js';
+import stocksRouter, { getDetailCacheStats, generateLiteIntangibles } from './routes/stocks.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
@@ -195,6 +195,11 @@ const AUTH_SECRET = process.env.AUTH_SECRET
   || crypto.createHash('sha256')
        .update(`orizin-session-v1:stable-dev-secret`)   // stable default for local dev
        .digest('hex');
+
+if ((process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') && !process.env.AUTH_SECRET) {
+  console.error('[FATAL] AUTH_SECRET must be set in production deployments.');
+  process.exit(1);
+}
 
 // Logical deployment environment, surfaced to the UI so QA (sandbox) and
 // production (live) are never confused when both run at once. Set APP_ENV
@@ -448,14 +453,10 @@ app.get('/api/auth/me', (req, res) => {
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ authenticated: false, authEnabled: true });
 
-  // Prefer the isAdmin flag that was embedded in the token at login time.
-  // Fall back to a DB lookup only if it's missing (old tokens).
-  let isAdmin = typeof payload.isAdmin === 'boolean'
-    ? payload.isAdmin
-    : false;
-
-  // Plan is always read fresh — it changes when the admin activates a paid
-  // account, and the user shouldn't have to log out/in to get Ori.
+  // Admin flag is always reconciled from the DB so demotions take effect
+  // immediately. Legacy env-password mode (no DB users) is the only case where
+  // we fall back to the token-embedded flag.
+  let isAdmin = false;
   let plan = 'free';
   let email = null;
   try {
@@ -465,8 +466,9 @@ app.get('/api/auth/me', (req, res) => {
     if (dbUser) {
       plan = dbUser.plan === 'pro' ? 'pro' : 'free';
       email = dbUser.email || null;
-      if (typeof payload.isAdmin !== 'boolean') isAdmin = !!dbUser.is_admin;
-    } else if (typeof payload.isAdmin === 'boolean' && payload.isAdmin) {
+      isAdmin = !!dbUser.is_admin;
+    } else if (db.userCount() === 0 && typeof payload.isAdmin === 'boolean' && payload.isAdmin) {
+      isAdmin = true;
       plan = 'pro'; // legacy env-auth admin
     }
   } catch (e) {
@@ -606,7 +608,16 @@ app.use('/api', (err, req, res, _next) => {
 // frontend can report real client-side errors (it used to be admin-only, which
 // turned every non-admin browser report into 403 noise); reading/clearing the
 // log stays admin-only. Accepts a single entry or a batch { entries: [...] }.
-app.post('/api/debug/errors', (req, res) => {
+const debugErrorLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  validate: { trustProxy: false },
+});
+
+app.post('/api/debug/errors', debugErrorLimiter, (req, res) => {
   const body = req.body || {};
   const entries = Array.isArray(body.entries) ? body.entries.slice(0, 25) : [body];
   for (const entry of entries) {
@@ -786,6 +797,27 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   setInterval(() => {
     try { db.expireLapsedPro(); } catch (e) { console.error('[billing] expire sweep failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
+
+  // Shared "leaders" baseline for screener intangibles: a slow trickle that gives
+  // the top market-cap names a lite intangibles + X-Factors review so the screener
+  // shows them without anyone opening Deep Research. Bounded to the top
+  // SCREENER_INTANGIBLES_LEADERS names (≈that many lite calls / 24h, shared across
+  // users) and serialized by the lite lane so it never starves chat or DR.
+  if (process.env.SCREENER_INTANGIBLES_ENABLED !== 'false') {
+    const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60_000;
+    const LEADERS = Number(process.env.SCREENER_INTANGIBLES_LEADERS) || 250;
+    const geminiSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
+    if (geminiSet) {
+      setInterval(async () => {
+        try {
+          const [sym] = db.nextIntangiblesBacklog(Date.now() - 24 * 60 * 60 * 1000, LEADERS, 1);
+          if (sym) await generateLiteIntangibles(sym, {});
+        } catch (e) {
+          console.error('[intangibles] baseline trickle failed:', e.message);
+        }
+      }, TICK_MS).unref?.();
+    }
+  }
 });
 
 // Graceful shutdown (important for clean Ctrl+C and stopping long-running enrich)
