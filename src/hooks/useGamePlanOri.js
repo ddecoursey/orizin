@@ -26,10 +26,15 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
     let cancelled = false;
     setState({ sym: symbol, ori: null, error: null, locked: false, done: false });
     const force = tokenChanged && !symbolChanged;
+    // A manual retry (after a failed first load) leads with the least-busy tier
+    // and skips the scarce frontier model — see the game-plan route. Re-gather
+    // (force) still does a full frontier-led refresh.
+    const isRetry = nonceChanged && !symbolChanged && !tokenChanged && !justEnabled;
+    const qs = force ? "?refresh=1" : isRetry ? "?retry=1" : "";
 
     // Small defer so the deterministic Game Plan renders first.
     const timer = setTimeout(() => {
-      fetch(`/api/stocks/game-plan/${symbol}${force ? "?refresh=1" : ""}`, {
+      fetch(`/api/stocks/game-plan/${symbol}${qs}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payloadRef?.current || {}),

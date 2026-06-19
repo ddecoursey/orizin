@@ -252,6 +252,17 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
                   }
                   return next;
                 });
+              } else if (evt.type === 'model') {
+                // Which Gemini model answered (value/lite, possibly via the
+                // backup key) — surfaced as a small label under the reply.
+                setMessages(prev => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last?.role === 'assistant') {
+                    next[next.length - 1] = { ...last, model: evt.model, modelTier: evt.tier };
+                  }
+                  return next;
+                });
               } else if (evt.type === 'done') {
                 setSessionId(evt.sessionId);
                 setIsStreaming(false);
