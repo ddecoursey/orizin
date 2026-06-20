@@ -5,11 +5,11 @@ const ORI_TIMEOUT_MS = 30_000;
 
 // Fetches Ori's intelligence layer for the Game Plan — DEFERRED, so the
 // deterministic Game Plan paints instantly and Ori's take fades in after.
-// Result is cached 24h server-side (Pro-gated). State is tagged with its symbol
-// so switching stocks never shows a stale take; `reloadToken` busts the cache
-// after a Re-gather. The caller keeps `payloadRef.current = { stats, verdict }`
-// updated; we read it at fire time so changing object identity doesn't refire.
-export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken = 0 } = {}) {
+// Frontier (Pro) is cached 24h server-side per symbol; FMP re-gather does NOT
+// bust that cache. Admin "Refresh Ori" re-runs on flash/lite only. The caller
+// keeps `payloadRef.current = { stats, verdict }` updated; we read it at fire
+// time so changing object identity doesn't refire.
+export function useGamePlanOri(symbol, { enabled = true, payloadRef } = {}) {
   const [state, setState] = useState({
     sym: null,
     ori: null,
@@ -21,9 +21,9 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
   // Bumped by retry() to re-fire the request after a transient failure (e.g.
   // "Ori is busy" / 503 overloaded), without changing symbol or reloadToken.
   const [retryNonce, setRetryNonce] = useState(0);
-  // Bumped by refresh() for an admin-only frontier-led cache bust (no re-gather).
+  // Bumped by refresh() for an admin-only flash/lite re-run (no frontier bust).
   const [refreshNonce, setRefreshNonce] = useState(0);
-  const prev = useRef({ symbol: null, token: reloadToken, enabled: false, nonce: 0, refreshNonce: 0 });
+  const prev = useRef({ symbol: null, enabled: false, nonce: 0, refreshNonce: 0 });
   const deferTimerRef = useRef(null);
   const abortRef = useRef(null);
   const abortReasonRef = useRef(null);
@@ -50,12 +50,11 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
     if (!symbol || !enabled) return;
 
     const symbolChanged = prev.current.symbol !== symbol;
-    const tokenChanged = prev.current.token !== reloadToken;
     const nonceChanged = prev.current.nonce !== retryNonce;
     const refreshChanged = prev.current.refreshNonce !== refreshNonce;
     const justEnabled = !prev.current.enabled;
-    prev.current = { symbol, token: reloadToken, enabled, nonce: retryNonce, refreshNonce };
-    if (!symbolChanged && !tokenChanged && !justEnabled && !nonceChanged && !refreshChanged) return;
+    prev.current = { symbol, enabled, nonce: retryNonce, refreshNonce };
+    if (!symbolChanged && !justEnabled && !nonceChanged && !refreshChanged) return;
 
     clearTimeout(deferTimerRef.current);
     deferTimerRef.current = null;
@@ -73,18 +72,11 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
       done: false,
       cancelled: false,
     });
-    // Same-symbol re-gather bumps the token; opening DR after a re-gather enables
-    // Ori with reloadToken > 0 even when the symbol also changed while disabled.
-    const force =
-      (tokenChanged && !symbolChanged) ||
-      (justEnabled && reloadToken > 0) ||
-      (refreshChanged && !symbolChanged);
-    // A manual retry (after a failed first load) leads with the least-busy tier
-    // and skips the scarce frontier model — see the game-plan route. Re-gather
-    // (force) and admin refresh still do a full frontier-led refresh.
+    const liteRefresh = refreshChanged && !symbolChanged;
+    // Manual retry leads with flash/lite — see the game-plan route.
     const isRetry =
-      nonceChanged && !symbolChanged && !tokenChanged && !justEnabled && !refreshChanged;
-    const qs = force ? "?refresh=1" : isRetry ? "?retry=1" : "";
+      nonceChanged && !symbolChanged && !justEnabled && !refreshChanged;
+    const qs = liteRefresh ? "?refresh=lite" : isRetry ? "?retry=1" : "";
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -172,7 +164,7 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
       controller.abort();
       if (abortRef.current === controller) abortRef.current = null;
     };
-  }, [symbol, enabled, reloadToken, payloadRef, retryNonce, refreshNonce]);
+  }, [symbol, enabled, payloadRef, retryNonce, refreshNonce]);
 
   const forSym = state.sym === symbol;
   const inFlight = !!symbol && enabled && !(forSym && state.done);
@@ -188,7 +180,7 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, reloadToken
       if (inFlight) return;
       setRetryNonce((n) => n + 1);
     },
-    // Admin-only: frontier-led cache bust without re-gathering FMP data.
+    // Admin-only: flash/lite re-run without busting the 24h frontier cache.
     refresh: () => {
       if (inFlight) return;
       setRefreshNonce((n) => n + 1);

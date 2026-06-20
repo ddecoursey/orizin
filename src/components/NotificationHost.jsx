@@ -1,4 +1,30 @@
+import { useEffect, useRef } from "react";
+
+const AUTO_DISMISS_MS = 15_000;
+
 export default function NotificationHost({ alerts = [], onDismiss, onOpenSymbol }) {
+  const scheduledRef = useRef(new Set());
+
+  useEffect(() => {
+    const timers = [];
+    for (const a of alerts.slice(0, 3)) {
+      if (!a?.id || scheduledRef.current.has(a.id)) continue;
+      scheduledRef.current.add(a.id);
+      timers.push(
+        setTimeout(() => {
+          scheduledRef.current.delete(a.id);
+          onDismiss?.(a.id);
+        }, AUTO_DISMISS_MS),
+      );
+    }
+    return () => timers.forEach(clearTimeout);
+  }, [alerts, onDismiss]);
+
+  const handleDismiss = (id) => {
+    scheduledRef.current.delete(id);
+    onDismiss?.(id);
+  };
+
   if (!alerts.length) return null;
 
   return (
@@ -21,7 +47,7 @@ export default function NotificationHost({ alerts = [], onDismiss, onOpenSymbol 
             </button>
             <button
               type="button"
-              onClick={() => onDismiss?.(a.id)}
+              onClick={() => handleDismiss(a.id)}
               className="text-gray-600 hover:text-gray-300 text-sm shrink-0 cursor-pointer"
               aria-label="Dismiss"
             >

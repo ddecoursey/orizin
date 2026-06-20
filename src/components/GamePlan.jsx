@@ -212,7 +212,7 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
             </button>
           )}
           {isAdmin && oriReady && oriState?.refresh && !locked && (
-            <Tooltip content="Re-run Ori's take with frontier model (bypasses 24h cache)" side="top" maxWidth={220}>
+            <Tooltip content="Re-run Ori's take with flash/lite (keeps the 24h Pro cache)" side="top" maxWidth={220}>
               <button
                 type="button"
                 onClick={oriState.refresh}

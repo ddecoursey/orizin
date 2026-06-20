@@ -1278,11 +1278,10 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     return res.status(402).json({ error: "Ori's Game Plan is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
   }
   try {
-    const force = req.query.refresh === "1" || req.query.refresh === "true";
+    const refreshLite = req.query.refresh === "lite";
+    const forceFrontier = !refreshLite && (req.query.refresh === "1" || req.query.refresh === "true");
     // A manual retry (the "Try again" button, after a failed first load) skips
-    // the scarce frontier model and leads with the least-busy tier (lite → value)
-    // — retry is "just get me an answer", so go to the most available path, not
-    // the busiest. The first/auto load and Re-gather still lead with frontier.
+    // the scarce frontier model and leads with the least-busy tier (lite → value).
     const retry = req.query.retry === "1" || req.query.retry === "true";
     const ladder = retry
       ? { models: [liteModel(), valueModel()] }
@@ -1290,9 +1289,15 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
 
+    // Admin refresh + any explicit refresh=lite — flash/lite only, never frontier.
+    if (refreshLite) {
+      const ori = await generateLiteIntangibles(symbol, { stats, verdict, force: true });
+      return res.json({ symbol, ori, tier: "lite" });
+    }
+
     // Serve a fresh lite review instantly when frontier hasn't run yet — saves a
     // frontier Gemini call on first Deep Research open for popular names.
-    if (!force && !retry) {
+    if (!forceFrontier && !retry) {
       const frontierHit = detailCache.get(`gameplan:${symbol}`);
       const frontierFresh = frontierHit && Date.now() - frontierHit.at < 24 * 60 * 60 * 1000;
       if (!frontierFresh) {
@@ -1324,7 +1329,7 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;
-    }, force);
+    }, forceFrontier);
     res.json({ symbol, ori: data });
   } catch (e) {
     if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
@@ -1357,7 +1362,7 @@ function releaseLiteLane() {
   else liteActive--;
 }
 
-export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {} } = {}) {
+export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}, force = false } = {}) {
   return cachedDetail(`gameplan-lite:${symbol}`, 24 * 60 * 60 * 1000, async () => {
     await acquireLiteLane();
     try {
@@ -1377,7 +1382,7 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
     } finally {
       releaseLiteLane();
     }
-  });
+  }, force);
 }
 
 // ── POST /api/stocks/intangibles/:symbol ───────────────────────────────────

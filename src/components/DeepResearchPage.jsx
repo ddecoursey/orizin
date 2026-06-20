@@ -278,13 +278,12 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
   useEffect(() => {
     oriPayloadRef.current = oriPayload;
   }, [oriPayload]);
-  // Deferred Ori layer (Pro) — runs after auto/manual re-gather so the take
-  // always reflects the latest FMP pull (server cache busted via refresh=1).
-  const oriReady = !!symbol && !regathering && detailReloadToken > 0;
+  // Deferred Ori layer (Pro) — frontier take is cached 24h per symbol; FMP
+  // re-gather refreshes panels but does not re-bill Gemini Pro on every open.
+  const oriReady = !!symbol && !deterministic.insufficient;
   const oriState = useGamePlanOri(symbol, {
-    enabled: canUseOri && oriReady && !deterministic.insufficient,
+    enabled: canUseOri && oriReady,
     payloadRef: oriPayloadRef,
-    reloadToken: detailReloadToken,
   });
   // Fold Ori in "within reason" once it arrives; otherwise show the data verdict.
   const verdict = useMemo(
