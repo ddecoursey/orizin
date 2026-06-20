@@ -204,6 +204,25 @@ try {
     data        TEXT NOT NULL,     -- JSON payload
     updated_at  INTEGER NOT NULL
   );
+
+  -- Per-user Ori (Gemini) usage ledger, one row per user per ET calendar day.
+  -- Drives the fair-use limiter and the "Ori usage" panel. requests = billable
+  -- generations (a chat turn or a cache-MISS Game Plan); cached serves cost
+  -- nothing and are never counted. Token columns mirror Gemini's usageMetadata
+  -- so we can show real input/output volume and how much input the context cache
+  -- served (cached_tokens / prompt_tokens).
+  CREATE TABLE IF NOT EXISTS ori_usage (
+    user_id        TEXT NOT NULL,
+    day            TEXT NOT NULL,            -- 'YYYY-MM-DD' in America/New_York
+    requests       INTEGER NOT NULL DEFAULT 0,
+    chat_requests  INTEGER NOT NULL DEFAULT 0,
+    plan_requests  INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens  INTEGER NOT NULL DEFAULT 0,
+    cached_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens  INTEGER NOT NULL DEFAULT 0,
+    updated_at     INTEGER,
+    PRIMARY KEY (user_id, day)
+  );
 `);
   console.log('[db] Schema initialized successfully');
 } catch (err) {
@@ -317,6 +336,12 @@ try {
 // in CREATE TABLE, and any edge cases after migration).
 try {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);`);
+} catch {}
+
+// Ori usage is read by (user, day) for the daily total and by (user, day-range)
+// for the month, so a composite index on (user_id, day) covers both.
+try {
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ori_usage_user_day ON ori_usage(user_id, day);`);
 } catch {}
 
 // Secondary indexes on the stocks table. The screener serves every row ordered by
@@ -1221,6 +1246,7 @@ export function deleteUserCascade(username) {
     db.prepare('DELETE FROM linked_accounts WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM brokerage_orders WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM user_settings WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM ori_usage WHERE user_id = ?').run(u);
     return db.prepare('DELETE FROM users WHERE username = ?').run(u);
   });
   return tx(username);
@@ -1385,6 +1411,82 @@ export function patchUserSettings(userId = 'default', partial = {}) {
     updated_at: Date.now(),
   });
   return merged;
+}
+
+// ── Ori (Gemini) usage ledger ────────────────────────────────────────────────
+// One row per user per ET calendar day; counters only ever increment. The day
+// key is supplied by the caller (oriUsage.js, using the ET-safe formatter) so
+// the DB layer stays timezone-agnostic.
+
+const incOriUsageStmt = db.prepare(`
+  INSERT INTO ori_usage (
+    user_id, day, requests, chat_requests, plan_requests,
+    prompt_tokens, cached_tokens, output_tokens, updated_at
+  ) VALUES (
+    @user_id, @day, @requests, @chat_requests, @plan_requests,
+    @prompt_tokens, @cached_tokens, @output_tokens, @updated_at
+  )
+  ON CONFLICT(user_id, day) DO UPDATE SET
+    requests       = requests + excluded.requests,
+    chat_requests  = chat_requests + excluded.chat_requests,
+    plan_requests  = plan_requests + excluded.plan_requests,
+    prompt_tokens  = prompt_tokens + excluded.prompt_tokens,
+    cached_tokens  = cached_tokens + excluded.cached_tokens,
+    output_tokens  = output_tokens + excluded.output_tokens,
+    updated_at     = excluded.updated_at
+`);
+
+/** Increment a user's usage for an ET day. Each delta field defaults to 0. */
+export function incrementOriUsage(userId, day, delta = {}) {
+  incOriUsageStmt.run({
+    user_id: userId,
+    day,
+    requests: delta.requests | 0,
+    chat_requests: delta.chatRequests | 0,
+    plan_requests: delta.planRequests | 0,
+    prompt_tokens: delta.promptTokens | 0,
+    cached_tokens: delta.cachedTokens | 0,
+    output_tokens: delta.outputTokens | 0,
+    updated_at: Date.now(),
+  });
+}
+
+const ZERO_USAGE = {
+  requests: 0, chat_requests: 0, plan_requests: 0,
+  prompt_tokens: 0, cached_tokens: 0, output_tokens: 0,
+};
+
+const getOriUsageDayStmt = db.prepare(
+  'SELECT * FROM ori_usage WHERE user_id = ? AND day = ?',
+);
+// Month = every day row whose key shares the 'YYYY-MM' prefix. Lexicographic
+// order on the ISO day string matches chronological order, so a range scan works.
+const sumOriUsageRangeStmt = db.prepare(`
+  SELECT
+    COALESCE(SUM(requests), 0)      AS requests,
+    COALESCE(SUM(chat_requests), 0) AS chat_requests,
+    COALESCE(SUM(plan_requests), 0) AS plan_requests,
+    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+    COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+    COALESCE(SUM(output_tokens), 0) AS output_tokens
+  FROM ori_usage
+  WHERE user_id = ? AND day >= ? AND day <= ?
+`);
+
+/** A single ET day's usage row (zeroed if the user hasn't used Ori that day). */
+export function getOriUsageDay(userId, day) {
+  return getOriUsageDayStmt.get(userId, day) || { ...ZERO_USAGE, user_id: userId, day };
+}
+
+/** Summed usage across an inclusive ET-day range (used for the month total). */
+export function getOriUsageRange(userId, startDay, endDay) {
+  return sumOriUsageRangeStmt.get(userId, startDay, endDay) || { ...ZERO_USAGE };
+}
+
+/** Drop ledger rows older than `beforeDay` (housekeeping; rows are tiny). */
+export function pruneOriUsage(beforeDay) {
+  try { db.prepare('DELETE FROM ori_usage WHERE day < ?').run(beforeDay); }
+  catch (e) { console.warn('[db] pruneOriUsage failed:', e.message); }
 }
 
 // ── Watchlist alert state ───────────────────────────────────────────────────

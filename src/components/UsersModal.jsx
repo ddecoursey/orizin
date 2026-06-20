@@ -11,6 +11,52 @@ function userListLabel(u) {
   return { primary: email, secondary: null };
 }
 
+function usagePct(used, limit) {
+  if (!limit || limit <= 0) return 0;
+  return Math.max(0, Math.min(100, Math.round((used / limit) * 100)));
+}
+// Calm under ~70%, amber as it fills, red near the cap.
+function usageBarColor(p) {
+  if (p >= 90) return "bg-red-500";
+  if (p >= 70) return "bg-amber-500";
+  return "bg-violet-500";
+}
+
+// Compact token count: 940, 12.4k, 3.1M.
+function fmtTokens(n) {
+  const v = Number(n) || 0;
+  if (v < 1000) return String(v);
+  if (v < 1_000_000) return `${(v / 1000).toFixed(v < 10_000 ? 1 : 0)}k`;
+  return `${(v / 1_000_000).toFixed(1)}M`;
+}
+
+// A small labelled stat tile for the usage breakdown grid.
+function StatTile({ label, value }) {
+  return (
+    <div className="bg-gray-950 border border-gray-800 rounded-lg px-3 py-2">
+      <div className="text-sm font-semibold text-gray-100 tabular-nums">{value}</div>
+      <div className="text-[10px] uppercase tracking-wider text-gray-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+
+// One labelled progress bar (e.g. "Today  12 / 50").
+function UsageMeter({ label, used, limit, sub }) {
+  const p = usagePct(used, limit);
+  return (
+    <div>
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-gray-300">{label}</span>
+        <span className="text-gray-400 tabular-nums">{used} / {limit}</span>
+      </div>
+      <div className="h-2 rounded-full bg-gray-800 overflow-hidden">
+        <div className={`h-full ${usageBarColor(p)} transition-all duration-300`} style={{ width: `${p}%` }} />
+      </div>
+      {sub && <div className="text-[10px] text-gray-600 mt-1">{sub}</div>}
+    </div>
+  );
+}
+
 // `mode` controls which surface this modal shows:
 //   'account' → personal Account Settings (plan + change your password)
 //   'users'   → admin User Management (add/remove users, grant admin, set plan)
@@ -30,6 +76,7 @@ export default function UsersModal({
 }) {
   const showUsers = mode === 'users' && isAdmin;
   const showAccount = mode === 'account';
+  const showUsage = mode === 'usage';
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -50,6 +97,7 @@ export default function UsersModal({
   const [notificationEmail, setNotificationEmail] = useState("");
   const [notificationEmailSaving, setNotificationEmailSaving] = useState(false);
   const [loginEmail, setLoginEmail] = useState(null);
+  const [oriUsage, setOriUsage] = useState(null);
 
   async function loadUsers() {
     setLoading(true);
@@ -89,6 +137,17 @@ export default function UsersModal({
       }
     })();
   }, [showAccount]);
+
+  // Ori usage has its own dropdown surface now (mode='usage'); fetch it there.
+  useEffect(() => {
+    if (!showUsage) return;
+    let cancelled = false;
+    (async () => {
+      const usage = await fetch("/api/ori/usage").then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      if (!cancelled && usage) setOriUsage(usage);
+    })();
+    return () => { cancelled = true; };
+  }, [showUsage]);
 
   async function saveNickname(value) {
     const next = value.trim().slice(0, 64);
@@ -295,12 +354,12 @@ export default function UsersModal({
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60" onClick={onClose}>
       <div className="flex min-h-full items-center justify-center p-4 sm:p-6">
         <div
-          className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md max-h-[min(90dvh,calc(100dvh-2rem))] overflow-y-auto overscroll-contain p-6 shadow-xl"
+          className={`bg-gray-900 border border-gray-700 rounded-xl w-full ${showUsers ? "max-w-2xl" : showUsage ? "max-w-md" : "max-w-lg"} max-h-[min(90dvh,calc(100dvh-2rem))] overflow-y-auto overscroll-contain p-6 shadow-xl`}
           onClick={(e) => e.stopPropagation()}
         >
-        <div className="flex justify-between items-center sticky top-0 z-10 -mx-6 px-6 py-3 -mt-6 mb-4 bg-gray-900/95 backdrop-blur-sm border-b border-gray-800/80">
-          <h2 className="text-lg font-semibold">{showUsers ? "User Management" : "Account Settings"}</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-100">✕</button>
+        <div className="flex justify-between items-center gap-3 sticky top-0 z-10 -mx-6 px-6 py-3 -mt-6 mb-4 bg-gray-900/95 backdrop-blur-sm border-b border-gray-800/80 rounded-t-xl">
+          <h2 className="text-lg font-semibold truncate">{showUsers ? "User Management" : showUsage ? "Ori Usage" : "Account Settings"}</h2>
+          <button onClick={onClose} aria-label="Close" className="shrink-0 text-gray-400 hover:text-gray-100 text-lg leading-none">✕</button>
         </div>
 
         {error && (
@@ -313,7 +372,7 @@ export default function UsersModal({
             {/* Add new user */}
             <div className="mb-6">
               <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Add New User</div>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
                 <input
                   type="email"
                   placeholder="Email"
@@ -331,7 +390,7 @@ export default function UsersModal({
                 <button
                   onClick={addUser}
                   disabled={adding || !newUsername || !newPassword}
-                  className="shrink-0 px-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm"
+                  className="shrink-0 px-4 py-1.5 sm:py-0 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm"
                 >
                   Add
                 </button>
@@ -357,7 +416,7 @@ export default function UsersModal({
                   {users.map((u) => {
                     const label = userListLabel(u);
                     return (
-                    <div key={u.username} className="flex items-center justify-between gap-2 bg-gray-950 border border-gray-800 rounded px-3 py-1.5 text-sm">
+                    <div key={u.username} className="flex flex-col sm:flex-row sm:items-center justify-between gap-x-3 gap-y-2 bg-gray-950 border border-gray-800 rounded px-3 py-2 text-sm">
                       <div className="min-w-0">
                         <div className="font-medium truncate">
                           <span className="text-gray-100">{label.primary}</span>
@@ -377,10 +436,10 @@ export default function UsersModal({
                           )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0">
+                      <div className="flex items-center gap-3 shrink-0 flex-wrap sm:justify-end">
                         <button
                           onClick={() => setPlan(u.username, u.plan === 'pro' ? 'free' : 'pro')}
-                          className="text-xs text-gray-400 hover:text-violet-300"
+                          className="text-xs text-gray-400 hover:text-violet-300 whitespace-nowrap"
                           title="Toggle the paid plan after the user's payment arrives"
                         >
                           {u.plan === 'pro' ? 'Downgrade' : 'Set Pro'}
@@ -388,7 +447,7 @@ export default function UsersModal({
                         {u.username !== currentUser && (
                           <button
                             onClick={() => toggleAdmin(u.username, !u.is_admin)}
-                            className="text-xs text-gray-400 hover:text-emerald-300"
+                            className="text-xs text-gray-400 hover:text-emerald-300 whitespace-nowrap"
                           >
                             {u.is_admin ? "Revoke admin" : "Make admin"}
                           </button>
@@ -396,7 +455,7 @@ export default function UsersModal({
                         {users.length > 1 && u.username !== currentUser && (
                           <button
                             onClick={() => deleteUser(u.username)}
-                            className="text-red-400 hover:text-red-300 text-xs"
+                            className="text-red-400 hover:text-red-300 text-xs whitespace-nowrap"
                           >
                             Remove
                           </button>
@@ -501,6 +560,75 @@ export default function UsersModal({
                   : `Free includes the full screener, Deep Research, and portfolio tools. Pro (${PRO_PRICE_LABEL}) unlocks Ori — the portfolio-aware AI analyst.`}
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Dedicated Ori Usage surface (its own profile-menu selection). */}
+        {showUsage && (
+          <div className="space-y-4">
+            <p className="text-xs text-gray-500 leading-snug">
+              Ori is the AI analyst behind chat and the Deep Research Game Plan. Here's how much you've used.
+            </p>
+            {!oriUsage ? (
+              <p className="text-sm text-gray-500">Loading…</p>
+            ) : oriUsage.unlimited ? (
+              <>
+                <div className="bg-gray-950 border border-gray-800 rounded-lg p-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base font-semibold text-emerald-300">Unlimited</span>
+                    <span className="text-[10px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1 leading-snug">
+                    Admin accounts aren't metered — chat and Game Plans are uncapped.
+                  </p>
+                </div>
+                {oriUsage.monthTotals?.requests > 0 && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">This month</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <StatTile label="Chats" value={oriUsage.monthTotals.chatRequests} />
+                      <StatTile label="Game plans" value={oriUsage.monthTotals.planRequests} />
+                      <StatTile label="Input tokens" value={fmtTokens(oriUsage.monthTotals.promptTokens)} />
+                      <StatTile label="Output tokens" value={fmtTokens(oriUsage.monthTotals.outputTokens)} />
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="bg-gray-950 border border-gray-800 rounded-lg p-4 space-y-4">
+                  <UsageMeter
+                    label="Today"
+                    used={oriUsage.day.requests}
+                    limit={oriUsage.limits.daily}
+                    sub={`${oriUsage.day.chatRequests} chats · ${oriUsage.day.planRequests} game plans`}
+                  />
+                  <UsageMeter
+                    label="This month"
+                    used={oriUsage.monthTotals.requests}
+                    limit={oriUsage.limits.monthly}
+                    sub={`${oriUsage.monthTotals.chatRequests} chats · ${oriUsage.monthTotals.planRequests} game plans`}
+                  />
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">This month's volume</div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <StatTile label="Chats" value={oriUsage.monthTotals.chatRequests} />
+                    <StatTile label="Game plans" value={oriUsage.monthTotals.planRequests} />
+                    <StatTile label="Input tokens" value={fmtTokens(oriUsage.monthTotals.promptTokens)} />
+                    <StatTile label="Output tokens" value={fmtTokens(oriUsage.monthTotals.outputTokens)} />
+                  </div>
+                </div>
+                {oriUsage.monthTotals.cachedTokens > 0 && (
+                  <p className="text-[11px] text-emerald-400/80 leading-snug">
+                    Context cache served {Math.round(oriUsage.monthTotals.cacheHitRate * 100)}% of Ori's input this month — keeping Ori fast and affordable.
+                  </p>
+                )}
+                <p className="text-[10px] text-gray-600 leading-snug">
+                  One request = one Ori chat reply or one Deep Research Game Plan. Browsing the screener doesn't count. Daily resets at midnight ET; monthly on the 1st.
+                </p>
+              </>
+            )}
           </div>
         )}
 

@@ -9,6 +9,7 @@ import {
   IconLogout,
   IconRefresh,
   IconChevronDown,
+  IconChart,
 } from "./icons.jsx";
 import DataSyncChip from "./DataSyncChip.jsx";
 
@@ -103,6 +104,7 @@ export default function Header({
   onLogout,
   onManageUsers,
   onAccountSettings,
+  onOriUsage,
   onUpgradeToPro,
   onAddTicker,
   env = 'production',
@@ -381,6 +383,15 @@ export default function Header({
                 <MenuItem onClick={() => { close(); onAccountSettings(); }}>
                   <span className="flex items-center gap-2">
                     <IconGear className="w-3.5 h-3.5 text-gray-500" /> Account settings
+                  </span>
+                </MenuItem>
+              )}
+
+              {/* Ori usage — only meaningful for accounts that can use Ori. */}
+              {(isAdmin || plan === "pro") && onOriUsage && (
+                <MenuItem onClick={() => { close(); onOriUsage(); }}>
+                  <span className="flex items-center gap-2">
+                    <IconChart className="w-3.5 h-3.5 text-gray-500" /> Ori usage
                   </span>
                 </MenuItem>
               )}

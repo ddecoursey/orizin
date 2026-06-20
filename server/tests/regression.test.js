@@ -664,6 +664,21 @@ test('screener lite intangibles endpoint is Pro-gated and validates the symbol',
   assert.equal(bad.status, 400);
 });
 
+test('Ori usage endpoint reports limits and is unlimited for admins', async () => {
+  // Admins are never metered.
+  const admin = await json(await fetch(api('/api/ori/usage'), { headers: { cookie: adminCookie } }));
+  assert.equal(admin.unlimited, true);
+  assert.ok(admin.limits && admin.limits.daily > 0 && admin.limits.monthly > 0);
+
+  // A normal (non-admin) account is metered: limits present, fresh usage at zero.
+  const viewer = await json(await fetch(api('/api/ori/usage'), { headers: { cookie: userCookie } }));
+  assert.equal(viewer.unlimited, false);
+  assert.ok(viewer.limits.daily > 0 && viewer.limits.monthly > 0);
+  assert.equal(viewer.day.requests, 0);
+  assert.equal(viewer.monthTotals.requests, 0);
+  assert.equal(typeof viewer.day.cacheHitRate, 'number');
+});
+
 test('chat sessions list is per user and empty initially', async () => {
   const body = await json(await fetch(api('/api/chat/sessions'), { headers: { cookie: userCookie } }));
   assert.deepEqual(body.sessions, []);

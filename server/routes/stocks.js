@@ -33,6 +33,7 @@ import { enrichmentManager } from "../enrichment.js";
 import { marketSession } from "../marketHours.js";
 import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
 import { resolveCachedGamePlan, GAME_PLAN_TTL_MS } from "../gamePlanCache.js";
+import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
 
 // Rate limiters for expensive operations (per user or IP)
 // Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
@@ -1307,16 +1308,31 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
 
     if (refreshLite) {
-      const ori = await generateLiteIntangibles(symbol, { stats, verdict, force: true });
+      // Explicit "refresh" is a deliberate, always-regenerating action → metered.
+      const quota = checkOriQuota(req.userId);
+      if (!quota.ok) return res.status(429).json({ error: quota.message, code: "ori_limit", scope: quota.scope });
+      const ori = await generateLiteIntangibles(symbol, {
+        stats, verdict, force: true,
+        onUsage: (usage) => recordOriUsage(req.userId, { kind: "plan", usage }),
+      });
       return res.json({ symbol, ori, tier: ori?.modelTier || "lite" });
     }
 
     // Pro take (frontier) is cached in memory + SQLite and always wins over lite.
+    // A cache hit is free — it never touches the user's allotment.
     const cached = resolveCachedGamePlan(symbol, gamePlanCacheDeps(), { retry });
     if (cached) {
       return res.json({ symbol, ori: cached.ori, tier: cached.tier });
     }
 
+    // Cache miss → this request will generate, so meter it up front.
+    const quota = checkOriQuota(req.userId);
+    if (!quota.ok) return res.status(429).json({ error: quota.message, code: "ori_limit", scope: quota.scope });
+
+    // Capture usage from the generator closure. didGenerate guards against a
+    // coalesced waiter (which shares an in-flight promise) double-counting.
+    let genUsage = null;
+    let didGenerate = false;
     const data = await cachedDetail(`gameplan:${symbol}`, GAME_PLAN_TTL_MS, async () => {
       // Profile/news are enrichment for the prompt, not hard requirements — a
       // transient fetch failure shouldn't sink the whole Game Plan, so degrade
@@ -1329,16 +1345,19 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       // per symbol, the frontier model is hit at most once per stock per 24h, and
       // it appears only on the primary key so a single generation never spends the
       // scarce frontier quota twice.
-      const { data: raw, model } = await geminiGenerateJson({
+      const { data: raw, model, usage } = await geminiGenerateJson({
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
         ...ladder,
       });
+      genUsage = usage;
+      didGenerate = true;
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;
     }, false);
+    if (didGenerate) recordOriUsage(req.userId, { kind: "plan", usage: genUsage });
     res.json({ symbol, ori: data, tier: data?.modelTier || "frontier" });
   } catch (e) {
     if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
@@ -1371,7 +1390,11 @@ function releaseLiteLane() {
   else liteActive--;
 }
 
-export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}, force = false } = {}) {
+// `onUsage(usageMetadata)` fires ONLY inside the generator — i.e. on a real
+// Gemini call, never on a cache hit or a coalesced waiter. Callers that should
+// meter the user (the explicit Game Plan refresh) pass it; the automatic screener
+// sweep and the background trickle pass nothing, so they're never charged.
+export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}, force = false, onUsage } = {}) {
   return cachedDetail(`gameplan-lite:${symbol}`, 24 * 60 * 60 * 1000, async () => {
     await acquireLiteLane();
     try {
@@ -1379,12 +1402,13 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
         cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
         cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
       ]);
-      const { data: raw, model } = await geminiGenerateJson({
+      const { data: raw, model, usage } = await geminiGenerateJson({
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
         models: [valueModel(), liteModel()], // flash → flash-lite; never frontier
       });
+      if (typeof onUsage === "function") { try { onUsage(usage); } catch { /* accounting must not break generation */ } }
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;

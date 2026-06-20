@@ -857,6 +857,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         env={appEnv}
         onLogout={onLogout}
         onAccountSettings={() => { setUsersModalMode('account'); setShowUsersModal(true); }}
+        onOriUsage={() => { setUsersModalMode('usage'); setShowUsersModal(true); }}
         onManageUsers={() => { setUsersModalMode('users'); setShowUsersModal(true); }}
         onUpgradeToPro={openUpgradeModal}
         onAddTicker={() => setShowAddTicker(true)}

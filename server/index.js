@@ -21,6 +21,7 @@ import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichm
 import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 import { displayNameFor, emailForNotifications } from './userProfile.js';
+import { pruneOldOriUsage } from './oriUsage.js';
 
 // Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
 import { logError, getErrors, clearErrors } from './logger.js';
@@ -818,9 +819,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
   // Downgrade accounts whose post-cancellation grace period has ended. Runs at
   // startup and hourly; lazy reconcile in /auth/me handles active users sooner.
+  // The same sweep prunes stale Ori-usage ledger rows (kept ~3 months).
   try { db.expireLapsedPro(); } catch (e) { console.error('[billing] startup expire failed:', e.message); }
+  try { pruneOldOriUsage(); } catch (e) { console.error('[oriUsage] startup prune failed:', e.message); }
   setInterval(() => {
     try { db.expireLapsedPro(); } catch (e) { console.error('[billing] expire sweep failed:', e.message); }
+    try { pruneOldOriUsage(); } catch (e) { console.error('[oriUsage] prune sweep failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
 
   // Shared "leaders" baseline for screener intangibles: a slow trickle that gives
