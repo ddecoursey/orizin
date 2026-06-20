@@ -2,7 +2,7 @@ import { getUserSettings } from './db.js';
 
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** Best address for outbound mail (watchlist alerts, billing, account deletion). */
+/** Best address for outbound mail (billing, account notices, optional urgent watchlist alerts). */
 export function emailForNotifications(user) {
   if (!user) return null;
   for (const raw of [user.notification_email, user.email, user.username]) {

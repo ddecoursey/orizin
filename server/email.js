@@ -4,14 +4,47 @@
 //   SENDGRID_API_KEY  (https://sendgrid.com)
 // plus EMAIL_FROM, e.g. 'Orizin <noreply@yourdomain.com>'.
 // If neither key is set, sends are logged and skipped so signup/billing still work.
+//
+// Daily quota: optional sends (watchlist urgent) are capped so EMAIL_CRITICAL_RESERVE
+// slots stay open for welcome, password reset, billing, and account deletion.
+
+import * as db from './db.js';
 
 const FROM = process.env.EMAIL_FROM || 'Orizin <onboarding@resend.dev>';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || '';
 const APP_URL = process.env.APP_URL || '';
+const EMAIL_DAILY_LIMIT = Math.max(1, Number(process.env.EMAIL_DAILY_LIMIT) || 100);
+const EMAIL_CRITICAL_RESERVE = Math.max(0, Number(process.env.EMAIL_CRITICAL_RESERVE) || 25);
 
 export function emailConfigured() {
   return !!(RESEND_API_KEY || SENDGRID_API_KEY);
+}
+
+/** UTC calendar day — aligns with typical provider daily quotas. */
+export function emailQuotaDateKey(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function dailySentMetaKey(date = new Date()) {
+  return `email_sent:${emailQuotaDateKey(date)}`;
+}
+
+export function dailyEmailSentCount(date = new Date()) {
+  return Number(db.getMeta(dailySentMetaKey(date)) || 0);
+}
+
+/** Whether a send is allowed under today's quota rules. */
+export function canSendEmail(priority = 'optional', date = new Date()) {
+  const sent = dailyEmailSentCount(date);
+  if (sent >= EMAIL_DAILY_LIMIT) return false;
+  if (priority === 'critical') return true;
+  return sent < EMAIL_DAILY_LIMIT - EMAIL_CRITICAL_RESERVE;
+}
+
+function recordEmailSent(date = new Date()) {
+  const key = dailySentMetaKey(date);
+  db.setMeta(key, String(dailyEmailSentCount(date) + 1));
 }
 
 async function sendViaResend({ to, subject, html, text }) {
@@ -46,11 +79,28 @@ async function sendViaSendgrid({ to, subject, html, text }) {
 // Resolves (no throw) when unconfigured; throws only on real provider errors.
 // Callers should treat email as fire-and-forget and .catch() so it never blocks
 // or fails the user's request.
-export async function sendEmail({ to, subject, html, text }) {
+// priority: 'critical' (welcome, auth, billing, deletion) | 'optional' (watchlist urgent).
+export async function sendEmail({ to, subject, html, text, priority = 'optional' }) {
   if (!to) return { skipped: true };
+  if (!canSendEmail(priority)) {
+    const sent = dailyEmailSentCount();
+    console.warn(
+      `[email] daily quota reached (${sent}/${EMAIL_DAILY_LIMIT}, reserve ${EMAIL_CRITICAL_RESERVE}); `
+      + `skipped ${priority} "${subject}" to ${to}`,
+    );
+    return { skipped: true, reason: 'quota' };
+  }
   try {
-    if (RESEND_API_KEY) { await sendViaResend({ to, subject, html, text }); return { ok: true }; }
-    if (SENDGRID_API_KEY) { await sendViaSendgrid({ to, subject, html, text }); return { ok: true }; }
+    if (RESEND_API_KEY) {
+      await sendViaResend({ to, subject, html, text });
+      recordEmailSent();
+      return { ok: true };
+    }
+    if (SENDGRID_API_KEY) {
+      await sendViaSendgrid({ to, subject, html, text });
+      recordEmailSent();
+      return { ok: true };
+    }
   } catch (e) {
     console.error('[email] send failed:', e.message);
     return { error: e.message };
@@ -122,25 +172,6 @@ export function cancelEmail(proUntilMs) {
       ? `Your subscription is cancelled and won't renew. You keep Pro access until ${until}, then move to Free.`
       : `Your subscription is cancelled and you've moved to the Free plan.`,
     html: wrap(`<p>${line}</p><p>You can resubscribe anytime from the app. We'd love to have you back.</p>`),
-  };
-}
-
-export function watchlistDigestEmail({ items = [], date }) {
-  const lines = items.map((a) => {
-    const sym = a.symbol || '—';
-    if (a.type === 'price') return `<li><strong>${sym}</strong> — ${a.title}</li>`;
-    if (a.type === 'conviction') return `<li><strong>${sym}</strong> — ${a.title}</li>`;
-    if (a.type === 'news') return `<li><strong>${sym}</strong> — <a href="${a.url}">${a.title}</a></li>`;
-    return `<li><strong>${sym}</strong> — ${a.title || a.message}</li>`;
-  }).join('');
-  const plain = items.map((a) => `${a.symbol}: ${a.title || a.message}`).join('\n');
-  return {
-    subject: `Orizin watchlist — ${date || 'today'}`,
-    text: `Your watchlist digest:\n\n${plain}`,
-    html: wrap(
-      `<p>Here's what moved on your watchlist:</p><ul style="padding-left:18px;line-height:1.6">${lines}</ul>
-       <p style="font-size:12px;color:#666">You're receiving this because watchlist email digests are enabled in Account settings.</p>`,
-    ),
   };
 }
 

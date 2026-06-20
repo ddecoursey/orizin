@@ -640,10 +640,10 @@ export default function UsersModal({
                 />
                 <HelperText className="mt-1.5">
                   {loginEmail
-                    ? "Watchlist digests and billing emails go here when set; otherwise your login email is used."
+                    ? "Billing and account emails go here when set; otherwise your login email is used."
                     : isAdmin
-                      ? "Legacy admin accounts often have no login email — add one here for watchlist digests and billing notices."
-                      : "Add an email here for watchlist digests and billing notices."}
+                      ? "Legacy admin accounts often have no login email — add one here for billing and account notices."
+                      : "Add an email here for billing and account notices."}
                   {notificationEmailSaving && <span className="ml-1 text-gray-500">Saving…</span>}
                 </HelperText>
               </div>
@@ -785,12 +785,11 @@ export default function UsersModal({
           <Section title="Watchlist alerts">
             <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 sm:p-4 space-y-3">
               <HelperText>
-                Watched symbols refresh automatically (~hourly). Get in-app toasts, a daily email digest (8am ET), and optional instant email for large price moves.
+                Watched symbols refresh automatically (~hourly). Get in-app toasts for price moves, conviction shifts, and news. Optional instant email for large price moves (≥8%).
               </HelperText>
               {[
                 ["enabled", "Alerts enabled"],
                 ["inApp", "In-app notifications"],
-                ["emailDigest", "Daily email digest"],
                 ["emailInstant", "Instant email for large moves (≥8%)"],
               ].map(([key, label]) => (
                 <label key={key} className="flex items-start justify-between gap-3 text-xs text-gray-300 cursor-pointer">
@@ -807,7 +806,7 @@ export default function UsersModal({
               {appEnv === 'development' && onTestWatchlistAlert && (
                 <div className="pt-1 space-y-2">
                   <HelperText className="text-gray-600">
-                    Dev only: previews the in-app toast (bottom-right). Does not send email — real emails come from the scanner and daily digest.
+                    Dev only: previews the in-app toast (bottom-right). Does not send email — real alerts come from the scanner; optional instant email for large moves.
                   </HelperText>
                   <button
                     type="button"

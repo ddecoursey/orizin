@@ -2,7 +2,6 @@
 
 export const DEFAULT_WATCHLIST_ALERTS = {
   enabled: true,
-  emailDigest: true,
   emailInstant: true,
   inApp: true,
   priceThresholdPct: 5,
@@ -13,7 +12,6 @@ export function sanitizeWatchlistAlerts(raw) {
   const out = { ...DEFAULT_WATCHLIST_ALERTS };
   if (!raw || typeof raw !== 'object') return out;
   if (typeof raw.enabled === 'boolean') out.enabled = raw.enabled;
-  if (typeof raw.emailDigest === 'boolean') out.emailDigest = raw.emailDigest;
   if (typeof raw.emailInstant === 'boolean') out.emailInstant = raw.emailInstant;
   if (typeof raw.inApp === 'boolean') out.inApp = raw.inApp;
   const price = Number(raw.priceThresholdPct);

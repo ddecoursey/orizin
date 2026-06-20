@@ -41,12 +41,12 @@ test('injectTestAlert queues a sample price alert', () => {
 test('sanitizeWatchlistAlerts clamps thresholds and preserves booleans', () => {
   const s = sanitizeWatchlistAlerts({
     enabled: false,
-    emailDigest: true,
+    emailInstant: false,
     priceThresholdPct: 99,
     instantThresholdPct: 1,
   });
   assert.equal(s.enabled, false);
-  assert.equal(s.emailDigest, true);
+  assert.equal(s.emailInstant, false);
   assert.equal(s.priceThresholdPct, 15);
   assert.equal(s.instantThresholdPct, 5);
 });

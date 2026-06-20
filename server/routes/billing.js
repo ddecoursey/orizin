@@ -74,7 +74,7 @@ router.post('/billing/activate', actionLimiter, async (req, res) => {
 
   const updated = db.getUserByUsername(req.userId);
   const to = emailForNotifications(updated);
-  if (to) sendEmail({ to, ...subscriptionEmail() }).catch(() => {});
+  if (to) sendEmail({ to, ...subscriptionEmail(), priority: 'critical' }).catch(() => {});
 
   res.json({ ok: true, plan: 'pro', status: sub.status, proUntil: updated?.pro_until || null });
 });
@@ -110,7 +110,7 @@ router.post('/billing/cancel', actionLimiter, async (req, res) => {
   const updated = db.getUserByUsername(req.userId);
 
   const to = emailForNotifications(updated);
-  if (to) sendEmail({ to, ...cancelEmail(updated?.pro_until) }).catch(() => {});
+  if (to) sendEmail({ to, ...cancelEmail(updated?.pro_until), priority: 'critical' }).catch(() => {});
 
   res.json({
     ok: true,

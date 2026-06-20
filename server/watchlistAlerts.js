@@ -4,7 +4,7 @@ import { quickConviction } from '../src/lib/verdict.js';
 import { normalizeWatchlists } from '../src/lib/watchlistNormalize.js';
 import { sanitizeWatchlistAlerts } from '../src/lib/watchlistAlertsConfig.js';
 import { marketSession, etSessionDate } from './marketHours.js';
-import { sendEmail, watchlistDigestEmail, watchlistUrgentEmail } from './email.js';
+import { sendEmail, watchlistUrgentEmail } from './email.js';
 import { emailForNotifications } from './userProfile.js';
 
 const COOLDOWN_MS = 4 * 60 * 60 * 1000;
@@ -320,59 +320,7 @@ export function markAlertsRead(userId, beforeTs = Date.now()) {
   }
 }
 
-export async function flushDailyDigests() {
-  const sessionDate = etSessionDate();
-  const rows = db.listAllUserSettingsRows();
-
-  for (const { user_id: userId, data: raw } of rows) {
-    let settings;
-    try {
-      settings = raw ? JSON.parse(raw) : {};
-    } catch {
-      continue;
-    }
-    const prefs = sanitizeWatchlistAlerts(settings.watchlistAlerts);
-    if (!prefs.enabled || !prefs.emailDigest) continue;
-
-    const user = db.getUserByUsername?.(userId);
-    const to = emailForNotifications(user);
-    if (!to) continue;
-
-    const digestKey = `wl_digest:${userId}:${sessionDate}`;
-    if (db.getMeta?.(digestKey)) continue;
-
-    const items = [];
-    for (const st of db.listWatchlistAlertStatesForUser(userId)) {
-      const recent = (st.pending_digest || []).slice(-MAX_DIGEST_ITEMS);
-      for (const a of recent) items.push(a);
-    }
-    if (!items.length) continue;
-
-    // Suppress items already shown in-app in the last 2h
-    const cutoff = Date.now() - 2 * 60 * 60 * 1000;
-    const filtered = items.filter((a) => {
-      const st = db.getWatchlistAlertState(userId, a.symbol);
-      return !(st?.in_app_delivered_at && st.in_app_delivered_at >= cutoff && a.ts <= st.in_app_delivered_at);
-    }).slice(0, MAX_DIGEST_ITEMS);
-
-    if (!filtered.length) {
-      db.setMeta?.(digestKey, '1');
-      continue;
-    }
-
-    const tpl = watchlistDigestEmail({ items: filtered, date: sessionDate });
-    const res = await sendEmail({ to, ...tpl });
-    if (res?.ok || res?.skipped) {
-      db.setMeta?.(digestKey, '1');
-      for (const st of db.listWatchlistAlertStatesForUser(userId)) {
-        db.saveWatchlistAlertState(userId, st.symbol, { pending_digest: [] });
-      }
-    }
-  }
-}
-
 let scanTimer = null;
-let digestTimer = null;
 
 export function startWatchlistAlertJobs() {
   if (scanTimer) return;
@@ -384,23 +332,4 @@ export function startWatchlistAlertJobs() {
   runScan();
   scanTimer = setInterval(runScan, 5 * 60 * 1000);
   scanTimer.unref?.();
-
-  const scheduleDigest = () => {
-    const now = new Date();
-    const et = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/New_York',
-      hour: 'numeric',
-      minute: 'numeric',
-      hour12: false,
-    }).formatToParts(now);
-    const parts = Object.fromEntries(et.map((p) => [p.type, p.value]));
-    const mins = Number(parts.hour) * 60 + Number(parts.minute);
-    const target = 8 * 60;
-    if (mins >= target && mins < target + 5) {
-      flushDailyDigests().catch((e) => console.error('[watchlist-digest] failed:', e.message));
-    }
-  };
-
-  digestTimer = setInterval(scheduleDigest, 60 * 1000);
-  digestTimer.unref?.();
 }

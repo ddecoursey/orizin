@@ -324,7 +324,7 @@ app.post('/api/auth/signup', loginLimiter, (req, res) => {
   }
 
   // Welcome email (fire-and-forget; no-op if no email provider is configured).
-  sendEmail({ to: email, ...welcomeEmail() }).catch(() => {});
+  sendEmail({ to: email, ...welcomeEmail(), priority: 'critical' }).catch(() => {});
 
   establishSession(res, req, { user: email, isAdmin: false, plan: 'free' }, 'signup');
   res.json({ ok: true, user: email, isAdmin: false, plan: 'free' });
@@ -359,7 +359,7 @@ app.post('/api/auth/forgot-password', loginLimiter, (req, res) => {
         const tok = crypto.randomBytes(32).toString('base64url');
         db.setResetToken(user.username, hashToken(tok), Date.now() + 60 * 60 * 1000); // 1 hour
         const url = publicUrl(req, `/reset?token=${tok}&u=${encodeURIComponent(user.username)}`);
-        sendEmail({ to, ...resetPasswordEmail(url) }).catch(() => {});
+        sendEmail({ to, ...resetPasswordEmail(url), priority: 'critical' }).catch(() => {});
       }
     }
   } catch (e) {
@@ -570,7 +570,7 @@ app.delete('/api/users/me', async (req, res) => {
   // email (fire-and-forget; no-op if email isn't configured).
   const to = emailForNotifications(user);
   db.deleteUserCascade(username);
-  if (to) sendEmail({ to, ...deletedAccountEmail() }).catch(() => {});
+  if (to) sendEmail({ to, ...deletedAccountEmail(), priority: 'critical' }).catch(() => {});
   res.set('Set-Cookie', buildCookie(COOKIE_NAME, '', { maxAgeMs: 0, secure: req.secure }));
   res.json({ ok: true });
 });
