@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
 import DebugErrorLog from './pages/DebugErrorLog.jsx'
+import AdminObservability from './pages/AdminObservability.jsx'
 import ResetPasswordPage from './pages/ResetPasswordPage.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 
@@ -88,6 +89,14 @@ if (window.location.pathname === '/debug') {
     <StrictMode>
       <ErrorBoundary>
         <DebugErrorLog />
+      </ErrorBoundary>
+    </StrictMode>
+  );
+} else if (window.location.pathname === '/admin/observability') {
+  root.render(
+    <StrictMode>
+      <ErrorBoundary>
+        <AdminObservability />
       </ErrorBoundary>
     </StrictMode>
   );

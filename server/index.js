@@ -10,6 +10,7 @@ import helmet from 'helmet';
 import stocksRouter, { getDetailCacheStats, generateLiteIntangibles } from './routes/stocks.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
+import adminRouter from './routes/admin.js';
 import settingsRouter from './routes/settings.js';
 import watchlistRouter from './routes/watchlist.js';
 import brokerageRouter from './routes/brokerage.js';
@@ -21,6 +22,19 @@ import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichm
 import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 import { displayNameFor, emailForNotifications } from './userProfile.js';
+import { pruneOldOriUsage } from './oriUsage.js';
+import { ensureChatContextCaches, startChatContextCacheRefresh } from './geminiContextCache.js';
+import {
+  COOKIE_NAME,
+  SESSION_MAX_AGE_MS,
+  buildCookie,
+  verifyToken,
+  validateSessionPayload,
+  establishSession,
+  refreshSessionCookie,
+  touchUserActivity,
+  inactivityMs,
+} from './session.js';
 
 // Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
 import { logError, getErrors, clearErrors } from './logger.js';
@@ -223,36 +237,10 @@ function isAuthEnabled() {
     return legacyAuthEnabled;
   }
 }
-const COOKIE_NAME = 'orizin_auth';
-const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-
 function safeEqual(a, b) {
   const ab = Buffer.from(a);
   const bb = Buffer.from(b);
   return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
-}
-
-function signToken(payload) {
-  const data = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(data).digest('base64url');
-  return `${data}.${sig}`;
-}
-
-function verifyToken(token) {
-  if (!token || typeof token !== 'string') return null;
-  const dot = token.indexOf('.');
-  if (dot < 0) return null;
-  const data = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const expected = crypto.createHmac('sha256', AUTH_SECRET).update(data).digest('base64url');
-  if (!safeEqual(sig, expected)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(data, 'base64url').toString());
-    if (payload.exp && Date.now() > payload.exp) return null;
-    return payload;
-  } catch {
-    return null;
-  }
 }
 
 function parseCookies(header) {
@@ -266,18 +254,6 @@ function parseCookies(header) {
     try { out[k] = decodeURIComponent(v); } catch { out[k] = v; }
   }
   return out;
-}
-
-function buildCookie(name, value, { maxAgeMs, secure }) {
-  const parts = [
-    `${name}=${value}`,
-    'HttpOnly',
-    'SameSite=Lax',
-    'Path=/',
-    `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
-  ];
-  if (secure) parts.push('Secure');
-  return parts.join('; ');
 }
 
 // Auth endpoints — accessible without a session.
@@ -311,18 +287,8 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
 
   if (!match) return res.status(401).json({ error: 'Invalid username or password' });
 
-  const tokenPayload = {
-    user: match.user,
-    isAdmin: !!match.isAdmin,
-    exp: Date.now() + SESSION_MAX_AGE_MS,
-  };
-  const token = signToken(tokenPayload);
-
-  res.set('Set-Cookie', buildCookie(COOKIE_NAME, token, {
-    maxAgeMs: SESSION_MAX_AGE_MS,
-    secure: req.secure,
-  }));
-  res.json({ ok: true, user: match.user, isAdmin: !!match.isAdmin, plan: match.plan });
+  const { plan } = establishSession(res, req, match, 'login');
+  res.json({ ok: true, user: match.user, isAdmin: !!match.isAdmin, plan });
 });
 
 // Self-service account creation (email + password). The very first account on
@@ -360,11 +326,7 @@ app.post('/api/auth/signup', loginLimiter, (req, res) => {
   // Welcome email (fire-and-forget; no-op if no email provider is configured).
   sendEmail({ to: email, ...welcomeEmail() }).catch(() => {});
 
-  const token = signToken({ user: email, isAdmin: false, exp: Date.now() + SESSION_MAX_AGE_MS });
-  res.set('Set-Cookie', buildCookie(COOKIE_NAME, token, {
-    maxAgeMs: SESSION_MAX_AGE_MS,
-    secure: req.secure,
-  }));
+  establishSession(res, req, { user: email, isAdmin: false, plan: 'free' }, 'signup');
   res.json({ ok: true, user: email, isAdmin: false, plan: 'free' });
 });
 
@@ -432,10 +394,13 @@ app.post('/api/auth/reset-password', loginLimiter, (req, res) => {
     return res.status(400).json({ error: 'This reset link is invalid or has expired' });
   }
 
-  db.setUserPassword(username, newPassword); // hashes + clears the reset token
-
-  const fresh = signToken({ user: username, isAdmin: !!user.is_admin, exp: Date.now() + SESSION_MAX_AGE_MS });
-  res.set('Set-Cookie', buildCookie(COOKIE_NAME, fresh, { maxAgeMs: SESSION_MAX_AGE_MS, secure: req.secure }));
+  db.setUserPassword(username, newPassword); // hashes + clears reset token + bumps session epoch
+  const updated = db.getUserByUsername(username);
+  establishSession(res, req, {
+    user: username,
+    isAdmin: !!updated?.is_admin,
+    plan: updated?.plan === 'pro' ? 'pro' : 'free',
+  }, 'reset');
   res.json({ ok: true });
 });
 
@@ -455,6 +420,12 @@ app.get('/api/auth/me', (req, res) => {
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ authenticated: false, authEnabled: true });
+
+  const session = validateSessionPayload(payload);
+  if (!session.ok) {
+    return res.status(session.status).json({ authenticated: false, authEnabled: true, ...session.body });
+  }
+  touchUserActivity(payload.user);
 
   // Admin flag is always reconciled from the DB so demotions take effect
   // immediately. Legacy env-password mode (no DB users) is the only case where
@@ -496,6 +467,7 @@ app.get('/api/auth/me', (req, res) => {
     authenticated: true,
     authEnabled: true,
     env: APP_ENV,
+    inactivityMinutes: Math.round(inactivityMs() / 60000),
   });
 });
 
@@ -546,19 +518,7 @@ app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
     return res.status(400).json({ error: result.error || 'Failed to create user' });
   }
 
-  // Automatically log the new admin in
-  const tokenPayload = {
-    user: email,
-    isAdmin: true,
-    exp: Date.now() + SESSION_MAX_AGE_MS,
-  };
-  const token = signToken(tokenPayload);
-
-  res.set('Set-Cookie', buildCookie(COOKIE_NAME, token, {
-    maxAgeMs: SESSION_MAX_AGE_MS,
-    secure: req.secure,
-  }));
-
+  establishSession(res, req, { user: email, isAdmin: true, plan: 'pro' }, 'setup');
   res.json({ ok: true, user: email, isAdmin: true, message: 'First admin account created successfully' });
 });
 
@@ -574,7 +534,10 @@ app.use('/api', (req, res, next) => {
   }
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const payload = verifyToken(token);
-  if (!payload) return res.status(401).json({ error: 'Unauthorized' });
+  if (!payload) return res.status(401).json({ error: 'Unauthorized', code: 'unauthorized' });
+  const session = validateSessionPayload(payload);
+  if (!session.ok) return res.status(session.status).json(session.body);
+  touchUserActivity(payload.user);
   req.userId = payload.user;
   next();
 });
@@ -615,6 +578,7 @@ app.delete('/api/users/me', async (req, res) => {
 // API routes
 app.use('/api', stocksRouter);
 app.use('/api', chatRouter);
+app.use('/api', adminRouter);
 app.use('/api', usersRouter);
 app.use('/api', settingsRouter);
 app.use('/api', watchlistRouter);
@@ -794,6 +758,13 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     );
   }
 
+  // Bootstrap server-wide Gemini context caches for Ori chat (static system prompt).
+  if (chatSet) {
+    ensureChatContextCaches()
+      .catch((e) => console.warn('[geminiCache] boot failed:', e.message))
+      .finally(() => startChatContextCacheRefresh());
+  }
+
   // Start the always-on low-rate background enrichment job (if not disabled)
   startBackgroundEnrichmentIfEnabled();
   startWatchlistAlertJobs();
@@ -818,9 +789,13 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
   // Downgrade accounts whose post-cancellation grace period has ended. Runs at
   // startup and hourly; lazy reconcile in /auth/me handles active users sooner.
+  // The same sweep prunes stale Ori-usage ledger rows (kept ~3 months).
   try { db.expireLapsedPro(); } catch (e) { console.error('[billing] startup expire failed:', e.message); }
+  try { pruneOldOriUsage(); } catch (e) { console.error('[oriUsage] startup prune failed:', e.message); }
   setInterval(() => {
     try { db.expireLapsedPro(); } catch (e) { console.error('[billing] expire sweep failed:', e.message); }
+    try { pruneOldOriUsage(); } catch (e) { console.error('[oriUsage] prune sweep failed:', e.message); }
+    try { db.pruneLoginEvents(Date.now() - 90 * 24 * 60 * 60 * 1000); } catch (e) { console.error('[auth] login-event prune failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
 
   // Shared "leaders" baseline for screener intangibles: a slow trickle that gives

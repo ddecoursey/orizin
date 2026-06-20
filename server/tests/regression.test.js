@@ -220,6 +220,8 @@ test('change-password verifies the current password', async () => {
     body: JSON.stringify({ currentPassword: 'viewer123', newPassword: 'changed123' }),
   });
   assert.equal((await json(right)).ok, true);
+  // Password change bumps session_epoch — keep the refreshed cookie from the response.
+  userCookie = cookieFrom(right) || userCookie;
 
   const relogin = await fetch(api('/api/auth/login'), {
     method: 'POST',
@@ -227,6 +229,7 @@ test('change-password verifies the current password', async () => {
     body: JSON.stringify({ user: VIEWER_EMAIL, password: 'changed123' }),
   });
   assert.equal(relogin.status, 200);
+  userCookie = cookieFrom(relogin) || userCookie;
 });
 
 test('forgot-password is generic (no account enumeration); reset-password rejects a bad token', async () => {
@@ -662,6 +665,49 @@ test('screener lite intangibles endpoint is Pro-gated and validates the symbol',
     body: '{}',
   });
   assert.equal(bad.status, 400);
+});
+
+test('Ori usage endpoint reports limits and is unlimited for admins', async () => {
+  // Admins are never metered.
+  const admin = await json(await fetch(api('/api/ori/usage'), { headers: { cookie: adminCookie } }));
+  assert.equal(admin.unlimited, true);
+  assert.ok(admin.limits && admin.limits.session > 0 && admin.limits.daily > 0);
+  assert.ok(admin.limits.weekly > 0 && admin.limits.monthly > 0);
+
+  // A normal (non-admin) account is metered: limits present, fresh usage at zero.
+  const viewer = await json(await fetch(api('/api/ori/usage'), { headers: { cookie: userCookie } }));
+  assert.equal(viewer.unlimited, false);
+  assert.ok(viewer.limits.session > 0 && viewer.limits.daily > 0);
+  assert.ok(viewer.limits.weekly > 0 && viewer.limits.monthly > 0);
+  assert.equal(viewer.session.used, 0);
+  assert.equal(viewer.day.requests, 0);
+  assert.equal(viewer.weekTotals.requests, 0);
+  assert.equal(viewer.monthTotals.requests, 0);
+  assert.equal(typeof viewer.day.cacheHitRate, 'number');
+});
+
+test('admin observability reports user activity and login stats', async () => {
+  const denied = await fetch(api('/api/admin/observability'), { headers: { cookie: userCookie } });
+  assert.equal(denied.status, 403);
+
+  const body = await json(await fetch(api('/api/admin/observability'), { headers: { cookie: adminCookie } }));
+  assert.ok(body.summary.totalUsers >= 2);
+  assert.ok(body.inactivityMinutes > 0);
+  assert.ok(Array.isArray(body.users));
+  assert.ok(Array.isArray(body.recentLogins));
+  const adminRow = body.users.find((u) => u.username === ADMIN_EMAIL);
+  assert.ok(adminRow);
+  assert.ok(adminRow.last_login_at > 0);
+  assert.ok(adminRow.login_count >= 1);
+});
+
+test('admin user list includes login and Ori activity fields', async () => {
+  const body = await json(await fetch(api('/api/users'), { headers: { cookie: adminCookie } }));
+  const adminRow = body.users.find((u) => u.username === ADMIN_EMAIL);
+  assert.ok(adminRow);
+  assert.ok('last_login_at' in adminRow);
+  assert.ok('last_active_at' in adminRow);
+  assert.ok('ori_month_requests' in adminRow);
 });
 
 test('chat sessions list is per user and empty initially', async () => {

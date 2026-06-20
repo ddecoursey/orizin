@@ -84,7 +84,7 @@ export function geminiKeys() {
  * @param {string}  [opts.leadModel] a scarce model (e.g. frontier) tried ONCE, on the primary key
  *                                    only, ahead of the per-key ladder — so its quota is never
  *                                    spent twice in one generation.
- * @returns {Promise<{ data: object, model: string }>}
+ * @returns {Promise<{ data: object, model: string, usage: object|null }>}
  * @throws  Error with .code: "no_key" | "overloaded" | "bad_json" | "error"
  */
 export async function geminiGenerateJson({ system, prompt, schema, temperature = 0.45, models, leadModel }) {
@@ -137,7 +137,9 @@ async function runLadder(body, combos) {
         const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
         if (!text) throw err("Ori returned an empty response", "bad_json");
         try {
-          return { data: JSON.parse(text), model };
+          // usage carries Gemini's token accounting (incl. cachedContentTokenCount)
+          // so callers can meter cost and the context-cache hit rate.
+          return { data: JSON.parse(text), model, usage: data.usageMetadata || null };
         } catch {
           throw err("Ori returned malformed JSON", "bad_json");
         }

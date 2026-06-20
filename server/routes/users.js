@@ -1,7 +1,8 @@
 import { Router } from "express";
-import bcrypt from 'bcryptjs';
 import * as db from "../db.js";
 import { EMAIL_RE, displayNameFor } from "../userProfile.js";
+import { refreshSessionCookie } from "../session.js";
+import { getOriUsageSummary } from "../oriUsage.js";
 
 const router = Router();
 
@@ -54,8 +55,12 @@ router.get("/users", (req, res) => {
     }
   }
 
-  const users = db.listUsers().map((u) => {
+  const chatStats = db.chatStatsByUser();
+  const users = db.listUsersWithActivity().map((u) => {
     const loginEmail = u.email || (EMAIL_RE.test(u.username) ? u.username : null);
+    const lastActive = u.last_active_at || null;
+    const ori = getOriUsageSummary(u.username);
+    const chat = chatStats.get(u.username) || { sessions: 0, lastChatAt: null };
     return {
       username: u.username,
       email: loginEmail,
@@ -63,6 +68,15 @@ router.get("/users", (req, res) => {
       plan: u.plan === 'pro' ? 'pro' : 'free',
       created_at: u.created_at,
       is_admin: !!u.is_admin,
+      last_login_at: u.last_login_at || null,
+      last_login_ip: u.last_login_ip || null,
+      login_count: u.login_count || 0,
+      last_active_at: lastActive,
+      online: lastActive && Date.now() - lastActive < 15 * 60 * 1000,
+      chat_sessions: chat.sessions,
+      last_chat_at: chat.lastChatAt,
+      ori_today_requests: ori.day.requests,
+      ori_month_requests: ori.monthTotals.requests,
     };
   });
   res.json({ users });
@@ -206,9 +220,9 @@ router.post("/users/change-password", (req, res) => {
       return res.status(401).json({ error: "Current password is incorrect" });
     }
 
-    // Update password
-    const hash = bcrypt.hashSync(newPassword, 10);
-    db.default.prepare('UPDATE users SET password_hash = ? WHERE username = ?').run(hash, username);
+    db.setUserPassword(username, newPassword);
+    const updated = db.getUserByUsername(username);
+    refreshSessionCookie(res, req, updated);
 
     res.json({ ok: true });
   } catch (err) {
