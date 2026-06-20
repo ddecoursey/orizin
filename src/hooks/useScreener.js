@@ -658,6 +658,10 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
+  function isAbortError(e) {
+    return e?.name === "AbortError" || e?.code === 20;
+  }
+
   function cancelCurrentOperation() {
     if (currentAbortRef.current) {
       currentAbortRef.current.abort();
@@ -686,6 +690,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
         const res = await fetch(url, options);
         return res;
       } catch (e) {
+        if (isAbortError(e)) throw e;
         lastError = e;
         if (attempt < retries - 1) {
           const delay = baseDelay * Math.pow(1.6, attempt) + Math.random() * 80;
@@ -788,12 +793,21 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
               } catch {}
             }
             pump();
+          }).catch((e) => {
+            if (isAbortError(e)) {
+              currentAbortRef.current = null;
+              setLoadProg(null);
+              return;
+            }
+            currentAbortRef.current = null;
+            setLoadProg(null);
+            setStatus({ type: "error", msg: e?.message || "Stream read failed" });
           });
         }
         pump();
       })
       .catch((e) => {
-        if (e.name !== 'AbortError') {
+        if (!isAbortError(e)) {
           setLoadProg(null);
           setStatus({ type: "error", msg: e.message });
         }
@@ -1071,17 +1085,27 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
               } catch {}
             }
             pump();
+          }).catch((e) => {
+            currentAbortRef.current = null;
+            setEnrichLoading(false);
+            setLoadProg(null);
+            loadProgRef.current = null;
+            if (!isAbortError(e)) {
+              console.error("Enrich stream read failed:", e);
+            }
+            finish();
           });
         }
         pump();
       })
       .catch((e) => {
-        if (e?.name !== 'AbortError') {
-          setEnrichLoading(false);
-          setLoadProg(null);
-          loadProgRef.current = null;
-        }
+        setEnrichLoading(false);
+        setLoadProg(null);
+        loadProgRef.current = null;
         currentAbortRef.current = null;
+        if (!isAbortError(e)) {
+          console.error("Enrich request failed:", e);
+        }
         finish();
       });
   }

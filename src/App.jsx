@@ -486,6 +486,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // everyone else reads the shared cache only — background job keeps it fresh.
   const regatherRef = useRef(regatherSymbol);
   regatherRef.current = regatherSymbol;
+  const researchSymbolRef = useRef(researchSymbol);
+  researchSymbolRef.current = researchSymbol;
   const lastDrOpen = useRef({ view: null, symbol: null });
   useEffect(() => {
     if (currentView !== "deep-research") {
@@ -500,8 +502,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       return;
     }
     lastDrOpen.current = { view: currentView, symbol: researchSymbol };
+    const requested = researchSymbol;
     if (isAdmin) {
-      regatherRef.current(researchSymbol, () => setDetailReloadToken((t) => t + 1));
+      regatherRef.current(requested, () => {
+        if (researchSymbolRef.current === requested) {
+          setDetailReloadToken((t) => t + 1);
+        }
+      });
     } else {
       setDetailReloadToken(1);
     }

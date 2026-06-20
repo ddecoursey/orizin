@@ -51,7 +51,13 @@ window.addEventListener('error', (event) => {
 });
 
 window.addEventListener('unhandledrejection', (event) => {
-  reportError('Unhandled promise rejection', event.reason);
+  const reason = event.reason;
+  // Aborted fetches/streams (navigate away, cancel gather, new DR symbol) are expected.
+  if (reason?.name === 'AbortError' || reason?.code === 20) {
+    event.preventDefault();
+    return;
+  }
+  reportError('Unhandled promise rejection', reason);
 });
 
 // Mirror console.warn/error (NOT log/info) to the /debug page.
