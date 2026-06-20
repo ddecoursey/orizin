@@ -34,6 +34,7 @@ import { marketSession } from "../marketHours.js";
 import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
 import { resolveCachedGamePlan, GAME_PLAN_TTL_MS } from "../gamePlanCache.js";
 import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
+import { execCompAllowed } from "../fmpPlanLimits.js";
 
 // Rate limiters for expensive operations (per user or IP)
 // Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
@@ -1606,11 +1607,13 @@ router.get("/stocks/filings/:symbol", async (req, res) => {
 router.get("/stocks/exec-comp/:symbol", async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const force = req.query.force === '1' || req.query.force === 'true';
+  const allowed = execCompAllowed(symbol);
   try {
-    const compensation = await cachedDetail(`execcomp:${symbol}`, 7 * 24 * 60 * 60 * 1000, () =>
-      fetchExecutiveCompensation(symbol), force
-    );
-    res.json({ symbol, compensation });
+    const compensation = allowed
+      ? await cachedDetail(`execcomp:${symbol}`, 7 * 24 * 60 * 60 * 1000, () =>
+          fetchExecutiveCompensation(symbol), force)
+      : [];
+    res.json({ symbol, compensation, planLimited: !allowed });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

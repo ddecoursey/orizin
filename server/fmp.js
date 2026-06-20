@@ -2,6 +2,7 @@
 // on its response PassThrough when aborted, which crashes the process if
 // nothing listens — native fetch propagates AbortError cleanly.
 import { logError } from "./logger.js";
+import { execCompAllowed } from "./fmpPlanLimits.js";
 
 const BASE = "https://financialmodelingprep.com/stable";
 const KEY = () => process.env.FMP_API_KEY || "";
@@ -1152,7 +1153,10 @@ export async function fetchSecFilings(symbol, { limit = 20 } = {}) {
 
 // Named-executive compensation (latest reported years).
 export async function fetchExecutiveCompensation(symbol, { limit = 12 } = {}) {
-  const url = `${BASE}/governance-executive-compensation?symbol=${symbol}&apikey=${KEY()}`;
+  const sym = String(symbol || "").toUpperCase();
+  if (!execCompAllowed(sym)) return [];
+
+  const url = `${BASE}/governance-executive-compensation?symbol=${sym}&apikey=${KEY()}`;
   try {
     const data = await fetchWithRetry(url, 2, 12000);
     if (!Array.isArray(data)) return [];
@@ -1169,7 +1173,10 @@ export async function fetchExecutiveCompensation(symbol, { limit = 12 } = {}) {
       .sort((a, b) => (b.year || 0) - (a.year || 0))
       .slice(0, limit);
   } catch (e) {
-    console.warn(`[FMP] exec-comp ${symbol}:`, e.message);
+    // 402 = plan doesn't include this symbol/endpoint — expected on gated plans.
+    if (!String(e.message || "").includes("402")) {
+      console.warn(`[FMP] exec-comp ${sym}:`, e.message);
+    }
     return [];
   }
 }
