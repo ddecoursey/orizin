@@ -98,17 +98,28 @@ async function resolveSparklinePrices(symbol, days, force = false) {
   if (!force) {
     const direct = sparklinePricesFromRow(getSparkline(symbol, days));
     if (direct) return direct.slice(-days);
-    if (days <= 365) {
-      const wider = sparklinePricesFromRow(getSparkline(symbol, 365));
-      if (wider && wider.length >= days) return wider.slice(-days);
+    // One enrich pass can populate 45 / 365 / 1825 — reuse wider windows.
+    for (const win of [1825, 365, 45]) {
+      if (win < days) continue;
+      const wider = sparklinePricesFromRow(getSparkline(symbol, win));
+      if (wider?.length) return wider.slice(-days);
     }
   }
-  const prices = await fetchHistoricalPricesLight(symbol, days);
-  if (prices?.length) {
-    saveSparkline(symbol, days, prices);
-    if (days >= 45 && prices.length > days) saveSparkline(symbol, 365, prices);
-  }
-  return prices || [];
+  const history = await fetchHistoricalPricesLight(symbol, 1825);
+  if (history?.length) saveSparklineWindows(symbol, history);
+  return history?.slice(-days) || [];
+}
+
+/** Persist 45/365/1825 spark windows from one historical download. */
+function saveSparklineWindows(symbol, history) {
+  if (!history?.length) return;
+  saveSparkline(symbol, 1825, history);
+  saveSparkline(symbol, 365, history.slice(-365));
+  const spark45 = history.slice(-45);
+  saveSparkline(symbol, 45, spark45);
+  saveMomentum(symbol, momentumFromSparkline(spark45));
+  const t = trendFromSparkline(history.slice(-365));
+  if (t) saveTrend(symbol, t.sma50, t.sma200);
 }
 
 import {
@@ -667,16 +678,12 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
 
             if (cancelled) return;
 
-            // Sparkline data is gathered as part of the same enrichment pass
-            // so it behaves exactly like the main metrics (populated by Gather/Force,
-            // served from DB on refresh, only re-fetched on explicit force).
-            const needSpark = force || !getSparkline(symbol, 45);
-            if (needSpark) {
+            // Sparkline 45d for screener momentum (force regather uses warmSymbolDetailForForce).
+            if (!force && !getSparkline(symbol, 45)) {
               try {
                 const spark = await fetchHistoricalPricesLight(symbol, 45);
-                if (spark && spark.length > 0) {
+                if (spark?.length) {
                   saveSparkline(symbol, 45, spark);
-                  // Recompute the ~45-day momentum the screener Conviction uses.
                   saveMomentum(symbol, momentumFromSparkline(spark));
                 }
               } catch (e) {
@@ -684,130 +691,9 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
               }
             }
 
-            // === FORCE: also refresh rich per-symbol data for the company overview panel ===
-            // This makes "Force Re-gather All" actually pull the latest from FMP for
-            // profile, DCF + analyst targets, insider, news, RSI, ratings, grades, and 365d history.
+            // Force: one parallel pass warms overview + DR detail caches (no duplicate wave).
             if (force) {
-              try {
-                // AI valuation (DCF, targets, owner earnings) — bypass 24h SQLite cache
-                const growthRows = await cachedDetail(`growthhist:${symbol}`, 24 * 60 * 60 * 1000, () =>
-                  fetchGrowthHistory(symbol),
-                );
-                const growthLatest = growthRows?.[0] || null;
-                const settled = await Promise.allSettled([
-                  fetchDCF(symbol),
-                  fetchPriceTarget(symbol),
-                  Promise.resolve(growthLatest ? {
-                    revenue_growth: growthLatest.revenue_growth,
-                    net_income_growth: growthLatest.net_income_growth,
-                    eps_growth: growthLatest.eps_growth,
-                    fcf_growth: growthLatest.fcf_growth,
-                    op_income_growth: growthLatest.op_income_growth,
-                    gross_profit_growth: growthLatest.gross_profit_growth,
-                  } : fetchFinancialGrowth(symbol)),
-                  fetchOwnerEarnings(symbol),
-                ]);
-                const val = (s) => (s.status === "fulfilled" ? s.value : null);
-                const [d, t, g, o] = settled.map(val);
-
-                const aiRow = {
-                  dcf: d?.dcf ?? null,
-                  stock_price: d?.stock_price ?? null,
-                  dcf_date: d?.dcf_date ?? null,
-                  target_high: t?.target_high ?? null,
-                  target_low: t?.target_low ?? null,
-                  target_consensus: t?.target_consensus ?? null,
-                  target_median: t?.target_median ?? null,
-                  revenue_growth: g?.revenue_growth ?? null,
-                  net_income_growth: g?.net_income_growth ?? null,
-                  eps_growth: g?.eps_growth ?? null,
-                  fcf_growth: g?.fcf_growth ?? null,
-                  op_income_growth: g?.op_income_growth ?? null,
-                  owner_earnings: o?.owner_earnings ?? null,
-                  owner_eps: o?.owner_eps ?? null,
-                  growth_capex: o?.growth_capex ?? null,
-                  estimates_json: null,
-                };
-                saveAiEnrichment(symbol, aiRow);
-              } catch (e) {
-                console.warn(`[Enrich][force] AI data failed for ${symbol}:`, e.message);
-              }
-
-              // Profile — skip if the needsBasic backfill above already fetched it.
-              if (!profileBackfilled) {
-                try {
-                  const prof = await fetchProfile(symbol);
-                  if (prof) {
-                    setDetailCache(`profile:${symbol}`, prof);
-                    saveScreenerBatch([profileToRow(prof)]);
-                  }
-                } catch (e) {
-                  console.warn(`[Enrich][force] Profile failed for ${symbol}:`, e.message);
-                }
-              }
-
-              // Insider trades (shared cache key with GET /insider and smart-money)
-              try {
-                const trades = await cachedDetail(`insider:${symbol}`, 6 * 60 * 60 * 1000, () =>
-                  fetchInsiderTrades(symbol, { limit: 80 }),
-                true);
-                if (Array.isArray(trades)) setDetailCache(`insider:${symbol}`, trades);
-              } catch (e) {
-                console.warn(`[Enrich][force] Insider failed for ${symbol}:`, e.message);
-              }
-
-              // Company news
-              try {
-                const nws = await fetchStockNews(symbol, { limit: 20 });
-                if (Array.isArray(nws)) {
-                  setDetailCache(`stocknews:${symbol}`, nws);
-                }
-              } catch (e) {
-                console.warn(`[Enrich][force] News failed for ${symbol}:`, e.message);
-              }
-
-              // RSI (10)
-              try {
-                const rsiData = await fetchRSI(symbol, { periodLength: 10 });
-                if (Array.isArray(rsiData)) {
-                  setDetailCache(`rsi:${symbol}:10`, rsiData);
-                }
-              } catch (e) {
-                console.warn(`[Enrich][force] RSI failed for ${symbol}:`, e.message);
-              }
-
-              // Ratings
-              try {
-                const ratSnap = await fetchRatingsSnapshot(symbol);
-                if (ratSnap) {
-                  setDetailCache(`ratings:${symbol}`, ratSnap);
-                }
-              } catch (e) {
-                console.warn(`[Enrich][force] Ratings failed for ${symbol}:`, e.message);
-              }
-
-              // Analyst grades
-              try {
-                const gr = await fetchGrades(symbol);
-                if (Array.isArray(gr)) {
-                  setDetailCache(`grades:${symbol}`, gr);
-                }
-              } catch (e) {
-                console.warn(`[Enrich][force] Grades failed for ${symbol}:`, e.message);
-              }
-
-              // 365-day sparkline (full history for the detail chart) + the
-              // SMA50/200 trend the screener Conviction technicals pillar uses.
-              try {
-                const fullSpark = await fetchHistoricalPricesLight(symbol, 365);
-                if (fullSpark && fullSpark.length > 0) {
-                  saveSparkline(symbol, 365, fullSpark);
-                  const t = trendFromSparkline(fullSpark);
-                  if (t) saveTrend(symbol, t.sma50, t.sma200);
-                }
-              } catch (e) {
-                console.warn(`[Enrich][force] 365d sparkline failed for ${symbol}:`, e.message);
-              }
+              await warmSymbolDetailForForce(symbol, { profileBackfilled, enrichOpts: ENRICH_OPTS });
             }
 
             // Growth phase removed from main hot path (Option D - separate lighter phase)
@@ -1063,6 +949,136 @@ function aggregateSmartMoney(symbol, senate, house, insider) {
     congress: { buyers: cBuyers.size, sellers: cSellers.size, total: congress.length, recent: congressRecent },
     insider: { buyers: iBuyers.size, sellers: iSellers.size, total: openMarket.length, buyValue: Math.round(buyValue), recent: insiderRecent },
   };
+}
+
+/** Parallel force regather — warms overview + Deep Research detail caches in one pass. */
+async function warmSymbolDetailForForce(symbol, { profileBackfilled = false, enrichOpts = {} } = {}) {
+  const stmtTtl = 24 * 60 * 60 * 1000;
+  const period = "annual";
+
+  const tasks = [
+    (async () => {
+      const growthRows = await cachedDetail(`growthhist:${symbol}`, stmtTtl, () => fetchGrowthHistory(symbol), true);
+      const growthLatest = growthRows?.[0] || null;
+      const [d, t, g, o] = await Promise.all([
+        fetchDCF(symbol, enrichOpts),
+        fetchPriceTarget(symbol, enrichOpts),
+        growthLatest
+          ? Promise.resolve({
+              revenue_growth: growthLatest.revenue_growth,
+              net_income_growth: growthLatest.net_income_growth,
+              eps_growth: growthLatest.eps_growth,
+              fcf_growth: growthLatest.fcf_growth,
+              op_income_growth: growthLatest.op_income_growth,
+              gross_profit_growth: growthLatest.gross_profit_growth,
+            })
+          : fetchFinancialGrowth(symbol, enrichOpts),
+        fetchOwnerEarnings(symbol, enrichOpts),
+      ]);
+      saveAiEnrichment(symbol, {
+        dcf: d?.dcf ?? null,
+        stock_price: d?.stock_price ?? null,
+        dcf_date: d?.dcf_date ?? null,
+        target_high: t?.target_high ?? null,
+        target_low: t?.target_low ?? null,
+        target_consensus: t?.target_consensus ?? null,
+        target_median: t?.target_median ?? null,
+        revenue_growth: g?.revenue_growth ?? null,
+        net_income_growth: g?.net_income_growth ?? null,
+        eps_growth: g?.eps_growth ?? null,
+        fcf_growth: g?.fcf_growth ?? null,
+        op_income_growth: g?.op_income_growth ?? null,
+        owner_earnings: o?.owner_earnings ?? null,
+        owner_eps: o?.owner_eps ?? null,
+        growth_capex: o?.growth_capex ?? null,
+        estimates_json: null,
+      });
+    })(),
+    (async () => {
+      if (profileBackfilled) return;
+      const prof = await fetchProfile(symbol, enrichOpts);
+      if (prof) {
+        setDetailCache(`profile:${symbol}`, prof);
+        saveScreenerBatch([profileToRow(prof)]);
+      }
+    })(),
+    (async () => {
+      const trades = await fetchInsiderTrades(symbol, { limit: 80 });
+      if (Array.isArray(trades)) setDetailCache(`insider:${symbol}`, trades);
+      const [senate, house] = await Promise.all([
+        fetchCongressTrades("senate", symbol),
+        fetchCongressTrades("house", symbol),
+      ]);
+      const insider = (trades || []).map((t) => ({
+        transactionDate: typeof t.transactionDate === "string" ? t.transactionDate.split(" ")[0] : t.transactionDate,
+        name: t.reportingName || "—",
+        role: t.typeOfOwner || null,
+        transactionType: t.transactionType || null,
+        shares: t.securitiesTransacted,
+        price: t.price,
+      }));
+      setDetailCache(`smartmoney:${symbol}`, aggregateSmartMoney(symbol, senate, house, insider));
+    })(),
+    fetchStockNews(symbol, { limit: 20 }).then((nws) => {
+      if (Array.isArray(nws)) setDetailCache(`stocknews:${symbol}`, nws);
+    }),
+    fetchRSI(symbol, { periodLength: 10, ...enrichOpts }).then((rsiData) => {
+      if (Array.isArray(rsiData)) setDetailCache(`rsi:${symbol}:10`, rsiData);
+    }),
+    fetchRatingsSnapshot(symbol, enrichOpts).then((ratSnap) => {
+      if (ratSnap) setDetailCache(`ratings:${symbol}`, ratSnap);
+    }),
+    fetchGrades(symbol).then((gr) => {
+      if (Array.isArray(gr)) setDetailCache(`grades:${symbol}`, gr);
+    }),
+    cachedDetail(`earnings:${symbol}`, 12 * 60 * 60 * 1000, () => fetchEarnings(symbol, { limit: 10 }), true),
+    cachedDetail(`filings:${symbol}`, 12 * 60 * 60 * 1000, () => fetchSecFilings(symbol, { limit: 20 }), true),
+    cachedDetail(`execcomp:${symbol}`, 7 * 24 * 60 * 60 * 1000, () => fetchExecutiveCompensation(symbol), true),
+    cachedDetail(`peers:${symbol}`, 7 * 24 * 60 * 60 * 1000, () => fetchStockPeers(symbol), true),
+    Promise.all([
+      cachedDetail(`stmt-inc:${symbol}:${period}`, stmtTtl, () => fetchIncomeStatements(symbol, { period }), true),
+      cachedDetail(`stmt-bal:${symbol}:${period}`, stmtTtl, () => fetchBalanceSheets(symbol, { period }), true),
+      cachedDetail(`stmt-cf:${symbol}:${period}`, stmtTtl, () => fetchCashFlows(symbol, { period }), true),
+    ]),
+    cachedDetail(`tech:${symbol}`, 6 * 60 * 60 * 1000, async () => {
+      const [sma50, sma200, ema20, rsi14, adx, williams, stddev] = await Promise.all([
+        fetchIndicatorLatest(symbol, "sma", 50),
+        fetchIndicatorLatest(symbol, "sma", 200),
+        fetchIndicatorLatest(symbol, "ema", 20),
+        fetchIndicatorLatest(symbol, "rsi", 14),
+        fetchIndicatorLatest(symbol, "adx", 14),
+        fetchIndicatorLatest(symbol, "williams", 14),
+        fetchIndicatorLatest(symbol, "standarddeviation", 20),
+      ]);
+      const anyData = [sma50, sma200, ema20, rsi14, adx, williams, stddev].some((x) => x && x.value != null);
+      if (!anyData) return null;
+      const close = sma50?.close ?? ema20?.close ?? adx?.close ?? null;
+      const asOf = sma50?.date ?? ema20?.date ?? adx?.date ?? null;
+      return {
+        symbol,
+        asOf,
+        price: close,
+        sma50: sma50?.value ?? null,
+        sma200: sma200?.value ?? null,
+        ema20: ema20?.value ?? null,
+        rsi: rsi14?.value ?? null,
+        adx: adx?.value ?? null,
+        williams: williams?.value ?? null,
+        stdDev: stddev?.value ?? null,
+      };
+    }, true),
+    (async () => {
+      const history = await fetchHistoricalPricesLight(symbol, 1825);
+      if (history?.length) saveSparklineWindows(symbol, history);
+    })(),
+  ];
+
+  const settled = await Promise.allSettled(tasks);
+  for (const s of settled) {
+    if (s.status === "rejected") {
+      console.warn(`[Enrich][force] ${symbol}:`, s.reason?.message || s.reason);
+    }
+  }
 }
 
 // ── GET /api/stocks/smart-money/:symbol ────────────────────────────────────
