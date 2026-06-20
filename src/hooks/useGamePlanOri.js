@@ -5,11 +5,15 @@ const ORI_TIMEOUT_MS = 30_000;
 
 // Fetches Ori's intelligence layer for the Game Plan — DEFERRED, so the
 // deterministic Game Plan paints instantly and Ori's take fades in after.
-// Frontier (Pro) is cached 24h server-side per symbol; FMP re-gather does NOT
-// bust that cache. Admin "Refresh Ori" re-runs on flash/lite only. The caller
-// keeps `payloadRef.current = { stats, verdict }` updated; we read it at fire
-// time so changing object identity doesn't refire.
-export function useGamePlanOri(symbol, { enabled = true, payloadRef } = {}) {
+// Frontier (Pro) is cached 24h server-side per symbol (memory + SQLite) and is
+// always served when present. FMP re-gather does not bust it. Explicit "Refresh
+// Ori" re-runs flash/lite only. `initialOri` can show a cached Pro take instantly
+// from the screener row while the server revalidates.
+function cachedFrontierOri(ori) {
+  return ori?.modelTier === "frontier" ? ori : null;
+}
+
+export function useGamePlanOri(symbol, { enabled = true, payloadRef, initialOri = null } = {}) {
   const [state, setState] = useState({
     sym: null,
     ori: null,
@@ -64,15 +68,16 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef } = {}) {
 
     let cancelled = false;
     const requestSym = symbol;
+    const liteRefresh = refreshChanged && !symbolChanged;
+    const seedOri = !liteRefresh && !nonceChanged ? cachedFrontierOri(initialOri) : null;
     setState({
       sym: requestSym,
-      ori: null,
+      ori: seedOri,
       error: null,
       locked: false,
       done: false,
       cancelled: false,
     });
-    const liteRefresh = refreshChanged && !symbolChanged;
     // Manual retry leads with flash/lite — see the game-plan route.
     const isRetry =
       nonceChanged && !symbolChanged && !justEnabled && !refreshChanged;
@@ -164,7 +169,7 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef } = {}) {
       controller.abort();
       if (abortRef.current === controller) abortRef.current = null;
     };
-  }, [symbol, enabled, payloadRef, retryNonce, refreshNonce]);
+  }, [symbol, enabled, payloadRef, initialOri, retryNonce, refreshNonce]);
 
   const forSym = state.sym === symbol;
   const inFlight = !!symbol && enabled && !(forSym && state.done);

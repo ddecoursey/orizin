@@ -176,7 +176,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
       <p className="mt-3 text-[12.5px] text-gray-200 leading-relaxed">{verdict.headline}</p>
 
       {/* Ori's Take */}
-      <OriTake ori={ori} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} />
+      <OriTake ori={ori} oriState={oriState} canUseOri={canUseOri} oriReady={oriReady} />
 
       {/* Footer */}
       <div className="mt-4 pt-3 border-t border-gray-800/70 flex items-center justify-between gap-3 flex-wrap">
@@ -191,7 +191,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
   );
 }
 
-function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
+function OriTake({ ori, oriState, canUseOri = false, oriReady = false }) {
   const { loading, locked, error } = oriState || {};
   const riskCls = ori?.riskLevel ? RISK[ori.riskLevel] || RISK.high : null;
 
@@ -211,8 +211,8 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
               Cancel
             </button>
           )}
-          {isAdmin && oriReady && oriState?.refresh && !locked && (
-            <Tooltip content="Re-run Ori's take with flash/lite (keeps the 24h Pro cache)" side="top" maxWidth={220}>
+          {canUseOri && oriReady && oriState?.refresh && !locked && (
+            <Tooltip content="Refresh with flash/lite — your 24h Pro analysis stays cached" side="top" maxWidth={240}>
               <button
                 type="button"
                 onClick={oriState.refresh}

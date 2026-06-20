@@ -32,6 +32,7 @@ import { hasOriAccess } from "../access.js";
 import { enrichmentManager } from "../enrichment.js";
 import { marketSession } from "../marketHours.js";
 import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
+import { resolveCachedGamePlan, GAME_PLAN_TTL_MS } from "../gamePlanCache.js";
 
 // Rate limiters for expensive operations (per user or IP)
 // Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
@@ -197,6 +198,21 @@ function setDetailCache(key, data) {
   detailCache.set(key, { at: Date.now(), data });
   kvSet(key, data); // write-through so it survives restarts
 }
+
+function promoteDetailCache(key, data, at) {
+  if (detailCache.has(key)) detailCache.delete(key);
+  else if (detailCache.size >= DETAIL_CACHE_MAX) {
+    const oldest = detailCache.keys().next().value;
+    if (oldest !== undefined) detailCache.delete(oldest);
+  }
+  detailCache.set(key, { at: at || Date.now(), data });
+}
+
+const gamePlanCacheDeps = () => ({
+  detailCache,
+  kvGet,
+  promote: promoteDetailCache,
+});
 async function cachedDetail(key, ttlMs, fn, force = false) {
   if (!force) {
     const hit = detailCache.get(key);
@@ -1278,10 +1294,11 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     return res.status(402).json({ error: "Ori's Game Plan is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
   }
   try {
-    const refreshLite = req.query.refresh === "lite";
-    const forceFrontier = !refreshLite && (req.query.refresh === "1" || req.query.refresh === "true");
-    // A manual retry (the "Try again" button, after a failed first load) skips
-    // the scarce frontier model and leads with the least-busy tier (lite → value).
+    // Explicit refresh always re-runs flash/lite — never busts the 24h Pro cache.
+    const refreshLite =
+      req.query.refresh === "lite" ||
+      req.query.refresh === "1" ||
+      req.query.refresh === "true";
     const retry = req.query.retry === "1" || req.query.retry === "true";
     const ladder = retry
       ? { models: [liteModel(), valueModel()] }
@@ -1289,26 +1306,18 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
 
-    // Admin refresh + any explicit refresh=lite — flash/lite only, never frontier.
     if (refreshLite) {
       const ori = await generateLiteIntangibles(symbol, { stats, verdict, force: true });
-      return res.json({ symbol, ori, tier: "lite" });
+      return res.json({ symbol, ori, tier: ori?.modelTier || "lite" });
     }
 
-    // Serve a fresh lite review instantly when frontier hasn't run yet — saves a
-    // frontier Gemini call on first Deep Research open for popular names.
-    if (!forceFrontier && !retry) {
-      const frontierHit = detailCache.get(`gameplan:${symbol}`);
-      const frontierFresh = frontierHit && Date.now() - frontierHit.at < 24 * 60 * 60 * 1000;
-      if (!frontierFresh) {
-        const lite = kvGet(`gameplan-lite:${symbol}`);
-        if (lite?.data && Date.now() - lite.updatedAt < 24 * 60 * 60 * 1000) {
-          return res.json({ symbol, ori: lite.data, tier: "lite" });
-        }
-      }
+    // Pro take (frontier) is cached in memory + SQLite and always wins over lite.
+    const cached = resolveCachedGamePlan(symbol, gamePlanCacheDeps(), { retry });
+    if (cached) {
+      return res.json({ symbol, ori: cached.ori, tier: cached.tier });
     }
 
-    const data = await cachedDetail(`gameplan:${symbol}`, 24 * 60 * 60 * 1000, async () => {
+    const data = await cachedDetail(`gameplan:${symbol}`, GAME_PLAN_TTL_MS, async () => {
       // Profile/news are enrichment for the prompt, not hard requirements — a
       // transient fetch failure shouldn't sink the whole Game Plan, so degrade
       // to null and let Ori reason from the stats it already has.
@@ -1329,8 +1338,8 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;
-    }, forceFrontier);
-    res.json({ symbol, ori: data });
+    }, false);
+    res.json({ symbol, ori: data, tier: data?.modelTier || "frontier" });
   } catch (e) {
     if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
     if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });
@@ -1374,7 +1383,7 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
-        models: [liteModel()], // lite ONLY — never value/frontier
+        models: [valueModel(), liteModel()], // flash → flash-lite; never frontier
       });
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
