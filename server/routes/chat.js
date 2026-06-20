@@ -7,7 +7,9 @@ import {
   deleteChatSession,
   getUserSettings,
   patchUserSettings,
+  getUserByUsername,
 } from "../db.js";
+import { displayNameFor } from "../userProfile.js";
 import { hasOriAccess } from "../access.js";
 import { geminiKeys, valueModel, liteModel, modelTier } from "../geminiJson.js";
 import { fmt } from "./prompt-helpers.js";
@@ -698,8 +700,9 @@ router.post("/chat", chatLimiter, async (req, res) => {
     // Hard cap so a runaway client can't ship a megabyte into the prompt.
     const userMessage = rawMessage.slice(0, 8000);
 
+    const user = getUserByUsername(req.userId);
     const systemPrompt = buildSystemPrompt(context, {
-      username: req.userId,
+      username: displayNameFor(user) || req.userId,
       memory: getOriMemory(req.userId),
     });
 

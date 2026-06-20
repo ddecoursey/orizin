@@ -10,8 +10,9 @@ const router = Router();
 const ALLOWED_KEYS = new Set([
   "tabs", "activeTab", "weights", "risk", "sort", "theme", "sidebarCollapsed",
   "portfolios", "goals", "theses", "oriMemory", "watchlists", "activeWatchlistId",
-  "watchlistAlerts",
+  "watchlistAlerts", "nickname",
 ]);
+const MAX_NICKNAME_LEN = 64;
 const MAX_WATCHLIST_PAYLOAD_LISTS = 20;
 const MAX_BODY_BYTES = 256 * 1024;
 const MAX_TABS = 30;
@@ -102,6 +103,11 @@ function sanitizeSettings(partial) {
     }
     if (k === "watchlistAlerts" && v && typeof v === "object") {
       out.watchlistAlerts = sanitizeWatchlistAlerts(v);
+      continue;
+    }
+    if (k === "nickname" && typeof v === "string") {
+      const nick = v.trim().slice(0, MAX_NICKNAME_LEN);
+      out.nickname = nick;
       continue;
     }
   }

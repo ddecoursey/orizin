@@ -20,6 +20,7 @@ import * as paypal from './paypal.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
+import { displayNameFor, emailForNotifications } from './userProfile.js';
 
 // Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
 import { logError, getErrors, clearErrors } from './logger.js';
@@ -461,6 +462,9 @@ app.get('/api/auth/me', (req, res) => {
   let isAdmin = false;
   let plan = 'free';
   let email = null;
+  let notificationEmail = null;
+  let nickname = null;
+  let displayName = payload.user;
   try {
     // reconcileUserPlan lazily drops Pro once a cancelled subscription's grace
     // period has ended, so access reflects reality without waiting for the sweep.
@@ -468,7 +472,11 @@ app.get('/api/auth/me', (req, res) => {
     if (dbUser) {
       plan = dbUser.plan === 'pro' ? 'pro' : 'free';
       email = dbUser.email || null;
+      notificationEmail = dbUser.notification_email || null;
       isAdmin = !!dbUser.is_admin;
+      const settings = db.getUserSettings(payload.user);
+      nickname = settings.nickname || null;
+      displayName = displayNameFor(dbUser, settings) || payload.user;
     } else if (db.userCount() === 0 && typeof payload.isAdmin === 'boolean' && payload.isAdmin) {
       isAdmin = true;
       plan = 'pro'; // legacy env-auth admin
@@ -477,7 +485,18 @@ app.get('/api/auth/me', (req, res) => {
     console.error('[auth] Error looking up user in /me:', e.message);
   }
 
-  res.json({ user: payload.user, isAdmin, plan, email, authenticated: true, authEnabled: true, env: APP_ENV });
+  res.json({
+    user: payload.user,
+    isAdmin,
+    plan,
+    email,
+    notificationEmail,
+    nickname,
+    displayName,
+    authenticated: true,
+    authEnabled: true,
+    env: APP_ENV,
+  });
 });
 
 // Public status endpoint — used by the login page to decide whether to show
@@ -583,8 +602,7 @@ app.delete('/api/users/me', async (req, res) => {
   }
   // Capture the address BEFORE the row is gone, then confirm the deletion by
   // email (fire-and-forget; no-op if email isn't configured).
-  const to = user.email && EMAIL_RE.test(user.email) ? user.email
-    : EMAIL_RE.test(user.username) ? user.username : null;
+  const to = emailForNotifications(user);
   db.deleteUserCascade(username);
   if (to) sendEmail({ to, ...deletedAccountEmail() }).catch(() => {});
   res.set('Set-Cookie', buildCookie(COOKIE_NAME, '', { maxAgeMs: 0, secure: req.secure }));
