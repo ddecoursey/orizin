@@ -914,6 +914,8 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
                     </div>
                   ))}
                 </div>
+              ) : deep.execCompPlanLimited ? (
+                <Placeholder note="Executive compensation isn't available for this symbol on the current FMP plan." />
               ) : (
                 <Placeholder note="No executive compensation data for this symbol." />
               )}

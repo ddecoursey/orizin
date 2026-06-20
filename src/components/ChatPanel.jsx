@@ -318,8 +318,8 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false, el
           <OriEmblem className="w-5 h-5 text-violet-400" />
         </m.div>
         <span className="text-sm font-bold text-gray-100">Ori</span>
-        <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
-          {chat.stockCount} stocks in view
+        <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full truncate max-w-[11rem]">
+          {chat.contextBadge}
         </span>
         <div className="ml-auto flex gap-1">
           <button

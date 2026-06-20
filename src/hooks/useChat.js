@@ -155,13 +155,13 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     const focusStocksContext = (session.focusStocks || []).map(toContextStock).filter(Boolean);
 
     return {
-      filters,
+      filters: isDeepResearch ? {} : filters,
       weights,
-      view: session.view || 'screener',
+      view: currentView,
       today: new Date().toISOString().slice(0, 10),
-      totalFiltered: (filteredStocks || []).length,
-      activeScreener: session.activeScreener || null,
-      pinnedStocks: (session.pinnedStocks || []).map(compact),
+      totalFiltered: isDeepResearch ? 0 : (filteredStocks || []).length,
+      activeScreener: isDeepResearch ? null : (session.activeScreener || null),
+      pinnedStocks: isDeepResearch ? [] : (session.pinnedStocks || []).map(compact),
       news: (session.news || []).slice(0, 10).map((a) => ({
         title: a.title,
         source: a.site || a.publisher,
@@ -173,8 +173,8 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       // User's portfolios + goals (framing context for all Ori advice)
       portfolioGoals: session.portfolioGoals || null,
       stocks: top.map(compact),
-      availableSectors: allSectors,
-      availableIndustries: allIndustries,
+      availableSectors: isDeepResearch ? [] : allSectors,
+      availableIndustries: isDeepResearch ? [] : allIndustries,
       focusSymbols,
     };
   }
@@ -505,8 +505,19 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     enterDeepResearch: (sym) => session.onEnterDeepResearch?.(sym),
     listSessions, loadSession, deleteSession,
     listMemory, deleteMemory, clearMemory,
-    stockCount: filteredStocks?.length || 0,
-    // Surfaced so the chat UI can tailor itself to the current page.
+    stockCount:
+      (session.view || 'screener') === 'deep-research'
+        ? (activeStock ? 1 : 0)
+        : (filteredStocks?.length || 0),
+    contextBadge: (() => {
+      const view = session.view || 'screener';
+      if (view === 'deep-research') {
+        return activeStock?.symbol ? `${activeStock.symbol} · Deep Research` : 'Deep Research';
+      }
+      if (view === 'portfolio-goals') return 'Portfolio';
+      const n = filteredStocks?.length || 0;
+      return `${n} stock${n === 1 ? '' : 's'} in view`;
+    })(),
     view: session.view || 'screener',
     activeSymbol: activeStock?.symbol || null,
   };
