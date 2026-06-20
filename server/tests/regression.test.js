@@ -450,6 +450,24 @@ test('settings sanitize watchlists: single list, dedupe, uppercase, symbol cap',
   assert.equal(afterCap.data.watchlists[0].symbols[0], 'SYM0');
 });
 
+test('watchlist quotes API returns minimal payload', async () => {
+  const bad = await fetch(api('/api/watchlist/quotes'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ symbols: [] }),
+  });
+  assert.equal(bad.status, 400);
+
+  const res = await fetch(api('/api/watchlist/quotes'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ symbols: ['ZZNOPE'] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await json(res);
+  assert.deepEqual(body.quotes, []);
+});
+
 test('watchlist alerts API lists, marks read, and blocks dev test in test env', async () => {
   const list = await json(
     await fetch(api('/api/watchlist/alerts?since=0'), { headers: { cookie: userCookie } }),

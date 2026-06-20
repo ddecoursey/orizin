@@ -841,7 +841,19 @@ export function getWatchlistEnrichDue(symbols, staleMs, limit = 4) {
     .map((r) => r.symbol);
 }
 
-/** Force watchlist symbols to the front of the priority rotation. */
+/** Prioritize live quote refresh for watchlist symbols (price only). */
+export function markWatchlistQuoteDue(symbols) {
+  if (!symbols?.length) return;
+  const stmt = db.prepare(
+    `UPDATE stocks SET price_updated_at = NULL WHERE symbol = ? AND is_etf = 0`,
+  );
+  const tx = db.transaction((syms) => {
+    for (const s of syms) stmt.run(s);
+  });
+  tx(symbols);
+}
+
+/** Force watchlist symbols to the front of the priority rotation (quotes + fundamentals). */
 export function markWatchlistGatherDue(symbols) {
   if (!symbols?.length) return;
   const stmt = db.prepare(

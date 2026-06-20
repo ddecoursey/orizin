@@ -53,6 +53,12 @@ test('normalizeWatchlists returns default when input is empty or invalid', () =>
   assert.deepEqual(normalizeWatchlists(null)[0].id, 'default');
 });
 
+test('normalizeWatchlists preserves stored updatedAt without bumping to now', () => {
+  const past = 1_700_000_000_000;
+  const out = normalizeWatchlists([{ id: 'default', name: 'W', symbols: ['AAPL'], updatedAt: past }]);
+  assert.equal(out[0].updatedAt, past);
+});
+
 test('pinsFromTabs collects legacy tab pins', () => {
   const tabs = [
     { state: { pins: ['aapl', 'msft'] } },

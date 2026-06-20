@@ -971,6 +971,38 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     }
   }
 
+  // Watchlist sync — one lightweight quote payload, not a full stock row per symbol.
+  async function refreshWatchlistQuotes(symbolList) {
+    if (!symbolList?.length) return;
+    try {
+      const res = await fetch("/api/watchlist/quotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: symbolList }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const quotes = data?.quotes;
+      if (!Array.isArray(quotes) || !quotes.length) return;
+      const fresh = new Map(quotes.filter((q) => q?.symbol).map((q) => [q.symbol, q]));
+      const patch = (row) => {
+        const q = fresh.get(row.symbol);
+        if (!q) return row;
+        return {
+          ...row,
+          price: q.price ?? row.price,
+          volume: q.volume ?? row.volume,
+          mcap: q.mcap ?? row.mcap,
+          price_updated_at: q.price_updated_at ?? row.price_updated_at,
+        };
+      };
+      stocksRef.current = stocksRef.current.map(patch);
+      setStocks((prev) => prev.map(patch));
+    } catch {
+      // ignore transient network errors
+    }
+  }
+
   // ── Combined enrichment SSE loader ───────────────────────────────────────
 
   function enrichAll(symbols, force = false, onComplete = null) {
@@ -1269,6 +1301,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     deleteTab,
     loadStocks,
     mergeStocks,
+    refreshWatchlistQuotes,
     // scope='visible' (default): act only on the on-screen (filtered) rows — fetch
     //   the ones still missing data, or force-refresh them all if they're already
     //   enriched.

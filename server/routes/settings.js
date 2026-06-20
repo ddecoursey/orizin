@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { getUserSettings, patchUserSettings, markWatchlistGatherDue, deleteWatchlistAlertState } from "../db.js";
+import { getUserSettings, patchUserSettings, markWatchlistQuoteDue, deleteWatchlistAlertState } from "../db.js";
+import { refreshQuotesForSymbols } from "../watchlistQuotes.js";
 import { normalizeWatchlists } from "../../src/lib/watchlistNormalize.js";
 import { sanitizeWatchlistAlerts } from "../../src/lib/watchlistAlertsConfig.js";
 import { invalidateWatchlistUnionCache } from "../watchlistSymbols.js";
@@ -143,7 +144,10 @@ router.put("/settings", (req, res) => {
     invalidateWatchlistUnionCache();
     const added = diffNewWatchlistSymbols(prev?.watchlists, merged.watchlists);
     const removed = diffRemovedWatchlistSymbols(prev?.watchlists, merged.watchlists);
-    if (added.length) markWatchlistGatherDue(added);
+    if (added.length) {
+      markWatchlistQuoteDue(added);
+      refreshQuotesForSymbols(added).catch(() => {});
+    }
     for (const sym of removed) deleteWatchlistAlertState(req.userId, sym);
   }
 

@@ -12,7 +12,9 @@ export function normalizeWatchlists(raw) {
   if (!Array.isArray(raw) || !raw.length) return defaultWatchlists();
   const seen = new Set();
   const symbols = [];
-  let updatedAt = Date.now();
+  // Use only stored timestamps — never seed with Date.now() or every hydrate
+  // looks like a fresh edit and watchlist rows stay on "syncing…" for 10+ minutes.
+  let updatedAt = 0;
   for (const w of raw) {
     if (!w || typeof w !== "object") continue;
     if (typeof w.updatedAt === "number") updatedAt = Math.max(updatedAt, w.updatedAt);

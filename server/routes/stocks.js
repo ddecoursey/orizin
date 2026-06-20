@@ -15,6 +15,7 @@ import {
   getAiEnrichment,
   getSparkline,
   saveSparkline,
+  saveQuote,
   saveMomentum,
   momentumFromSparkline,
   saveTrend,
@@ -124,6 +125,7 @@ function saveSparklineWindows(symbol, history) {
 
 import {
   fetchProfiles,
+  fetchQuote,
   fetchKeyMetrics,
   fetchRatios,
   fetchProfile,
@@ -621,11 +623,15 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             }
 
             // ── Parallelize the two most important calls per symbol ─────────
-            // On force we re-fetch even already-loaded metrics so the core valuation
-            // numbers (PE/ROIC/margins) actually refresh — matching what the
-            // "Force re-gather all" action promises.
-            const needKm = force || !row?.has_km;
-            const needRat = force || !row?.has_rat;
+            // Fundamentals (km/rat) change slowly — on a single-symbol DR regather
+            // only re-pull them when missing or older than ~24h. Full-universe
+            // force still refreshes everything.
+            const FUNDAMENTALS_FORCE_STALE_MS = 24 * 60 * 60 * 1000;
+            const fundamentalsStale =
+              !row?.updated_at || Date.now() - row.updated_at > FUNDAMENTALS_FORCE_STALE_MS;
+            const forceFundamentals = force && fundamentalsStale;
+            const needKm = !row?.has_km || forceFundamentals;
+            const needRat = !row?.has_rat || forceFundamentals;
 
             let km = null;
             let rat = null;
@@ -957,8 +963,15 @@ async function warmSymbolDetailForForce(symbol, { profileBackfilled = false, enr
   const period = "annual";
 
   const tasks = [
+    // Price is the only thing that truly needs a live pull on every DR open.
     (async () => {
-      const growthRows = await cachedDetail(`growthhist:${symbol}`, stmtTtl, () => fetchGrowthHistory(symbol), true);
+      const q = await fetchQuote(symbol, enrichOpts);
+      if (q?.price != null) saveQuote(symbol, q);
+    })(),
+    (async () => {
+      const cached = getAiEnrichment(symbol);
+      if (cached && Date.now() - cached.updated_at < stmtTtl) return;
+      const growthRows = await cachedDetail(`growthhist:${symbol}`, stmtTtl, () => fetchGrowthHistory(symbol), false);
       const growthLatest = growthRows?.[0] || null;
       const [d, t, g, o] = await Promise.all([
         fetchDCF(symbol, enrichOpts),
@@ -996,13 +1009,13 @@ async function warmSymbolDetailForForce(symbol, { profileBackfilled = false, enr
     })(),
     (async () => {
       if (profileBackfilled) return;
-      const prof = await fetchProfile(symbol, enrichOpts);
+      const prof = await cachedDetail(`profile:${symbol}`, stmtTtl, () => fetchProfile(symbol, enrichOpts), false);
       if (prof) {
         setDetailCache(`profile:${symbol}`, prof);
         saveScreenerBatch([profileToRow(prof)]);
       }
     })(),
-    (async () => {
+    cachedDetail(`smartmoney:${symbol}`, 6 * 60 * 60 * 1000, async () => {
       const trades = await fetchInsiderTrades(symbol, { limit: 80 });
       if (Array.isArray(trades)) setDetailCache(`insider:${symbol}`, trades);
       const [senate, house] = await Promise.all([
@@ -1017,28 +1030,20 @@ async function warmSymbolDetailForForce(symbol, { profileBackfilled = false, enr
         shares: t.securitiesTransacted,
         price: t.price,
       }));
-      setDetailCache(`smartmoney:${symbol}`, aggregateSmartMoney(symbol, senate, house, insider));
-    })(),
-    fetchStockNews(symbol, { limit: 20 }).then((nws) => {
-      if (Array.isArray(nws)) setDetailCache(`stocknews:${symbol}`, nws);
-    }),
-    fetchRSI(symbol, { periodLength: 10, ...enrichOpts }).then((rsiData) => {
-      if (Array.isArray(rsiData)) setDetailCache(`rsi:${symbol}:10`, rsiData);
-    }),
-    fetchRatingsSnapshot(symbol, enrichOpts).then((ratSnap) => {
-      if (ratSnap) setDetailCache(`ratings:${symbol}`, ratSnap);
-    }),
-    fetchGrades(symbol).then((gr) => {
-      if (Array.isArray(gr)) setDetailCache(`grades:${symbol}`, gr);
-    }),
-    cachedDetail(`earnings:${symbol}`, 12 * 60 * 60 * 1000, () => fetchEarnings(symbol, { limit: 10 }), true),
-    cachedDetail(`filings:${symbol}`, 12 * 60 * 60 * 1000, () => fetchSecFilings(symbol, { limit: 20 }), true),
-    cachedDetail(`execcomp:${symbol}`, 7 * 24 * 60 * 60 * 1000, () => fetchExecutiveCompensation(symbol), true),
-    cachedDetail(`peers:${symbol}`, 7 * 24 * 60 * 60 * 1000, () => fetchStockPeers(symbol), true),
+      return aggregateSmartMoney(symbol, senate, house, insider);
+    }, false),
+    cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 }), false),
+    cachedDetail(`rsi:${symbol}:10`, 6 * 60 * 60 * 1000, () => fetchRSI(symbol, { periodLength: 10, ...enrichOpts }), false),
+    cachedDetail(`ratings:${symbol}`, 6 * 60 * 60 * 1000, () => fetchRatingsSnapshot(symbol, enrichOpts), false),
+    cachedDetail(`grades:${symbol}`, 6 * 60 * 60 * 1000, () => fetchGrades(symbol), false),
+    cachedDetail(`earnings:${symbol}`, 12 * 60 * 60 * 1000, () => fetchEarnings(symbol, { limit: 10 }), false),
+    cachedDetail(`filings:${symbol}`, 12 * 60 * 60 * 1000, () => fetchSecFilings(symbol, { limit: 20 }), false),
+    cachedDetail(`execcomp:${symbol}`, 7 * 24 * 60 * 60 * 1000, () => fetchExecutiveCompensation(symbol), false),
+    cachedDetail(`peers:${symbol}`, 7 * 24 * 60 * 60 * 1000, () => fetchStockPeers(symbol), false),
     Promise.all([
-      cachedDetail(`stmt-inc:${symbol}:${period}`, stmtTtl, () => fetchIncomeStatements(symbol, { period }), true),
-      cachedDetail(`stmt-bal:${symbol}:${period}`, stmtTtl, () => fetchBalanceSheets(symbol, { period }), true),
-      cachedDetail(`stmt-cf:${symbol}:${period}`, stmtTtl, () => fetchCashFlows(symbol, { period }), true),
+      cachedDetail(`stmt-inc:${symbol}:${period}`, stmtTtl, () => fetchIncomeStatements(symbol, { period }), false),
+      cachedDetail(`stmt-bal:${symbol}:${period}`, stmtTtl, () => fetchBalanceSheets(symbol, { period }), false),
+      cachedDetail(`stmt-cf:${symbol}:${period}`, stmtTtl, () => fetchCashFlows(symbol, { period }), false),
     ]),
     cachedDetail(`tech:${symbol}`, 6 * 60 * 60 * 1000, async () => {
       const [sma50, sma200, ema20, rsi14, adx, williams, stddev] = await Promise.all([
@@ -1066,8 +1071,9 @@ async function warmSymbolDetailForForce(symbol, { profileBackfilled = false, enr
         williams: williams?.value ?? null,
         stdDev: stddev?.value ?? null,
       };
-    }, true),
+    }, false),
     (async () => {
+      if (getSparkline(symbol, 1825)) return;
       const history = await fetchHistoricalPricesLight(symbol, 1825);
       if (history?.length) saveSparklineWindows(symbol, history);
     })(),

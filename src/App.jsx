@@ -410,7 +410,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     createTab,
     deleteTab,
     loadStocks,
-    mergeStocks,
+    refreshWatchlistQuotes,
     enrichAll,
     regatherSymbol,
     enrichLoading,
@@ -466,11 +466,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   }, [watchlists.watchlist, wlAlerts.snapshots, stockBySymbol]);
 
   useEffect(() => {
-    if (!watchlistSymbols.length || !mergeStocks) return;
-    mergeStocks(watchlistSymbols);
-    const id = setInterval(() => mergeStocks(watchlistSymbols), 3 * 60 * 1000);
+    if (!watchlistSymbols.length || !refreshWatchlistQuotes) return;
+    refreshWatchlistQuotes(watchlistSymbols);
+    const id = setInterval(() => refreshWatchlistQuotes(watchlistSymbols), 3 * 60 * 1000);
     return () => clearInterval(id);
-  }, [watchlistSymbols.join(","), mergeStocks]);
+  }, [watchlistSymbols.join(","), refreshWatchlistQuotes]);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
