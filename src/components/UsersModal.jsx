@@ -424,7 +424,9 @@ export default function UsersModal({
                 <p className="text-[10px] text-gray-600 mt-1 leading-snug">
                   {loginEmail
                     ? "Watchlist digests and billing emails go here when set; otherwise your login email is used."
-                    : "Legacy admin accounts often have no login email — add one here for watchlist digests and billing notices."}
+                    : isAdmin
+                      ? "Legacy admin accounts often have no login email — add one here for watchlist digests and billing notices."
+                      : "Add an email here for watchlist digests and billing notices."}
                   {notificationEmailSaving && <span className="ml-1 text-gray-500">Saving…</span>}
                 </p>
               </div>
