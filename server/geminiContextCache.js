@@ -93,6 +93,31 @@ export function startChatContextCacheRefresh() {
 }
 
 /**
+ * When using explicit cachedContent, Gemini forbids system_instruction on the
+ * generate request (static instructions must live in the cache only). Inject
+ * per-request dynamic context as a leading user turn + brief model ack so the
+ * conversation still alternates user/model before real chat history.
+ */
+export function contentsWithDynamicContext(dynamicContext, geminiContents) {
+  const history = Array.isArray(geminiContents) ? geminiContents : [];
+  return [
+    {
+      role: "user",
+      parts: [{
+        text: `=== CURRENT REQUEST CONTEXT ===\n${dynamicContext}`,
+      }],
+    },
+    {
+      role: "model",
+      parts: [{
+        text: "Understood. I have the user's current screen context for this request.",
+      }],
+    },
+    ...history,
+  ];
+}
+
+/**
  * Build the Gemini stream body for one chat model. Uses explicit cachedContent when
  * bootstrapped; otherwise falls back to the two-part system_instruction split.
  */
@@ -102,8 +127,7 @@ export function buildChatGeminiBody(model, dynamicContext, geminiContents) {
   if (cacheName) {
     return {
       cachedContent: cacheName,
-      system_instruction: { parts: [{ text: dynamicContext }] },
-      contents: geminiContents,
+      contents: contentsWithDynamicContext(dynamicContext, geminiContents),
       generationConfig,
     };
   }
