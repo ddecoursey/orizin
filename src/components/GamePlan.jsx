@@ -69,9 +69,9 @@ function Pillar({ p, oriState }) {
           {locked ? "Pro" : loading ? "…" : pct != null ? GAUGE_LABEL[p.tone] : "—"}
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
+      <div className="game-plan-pillar-track h-1.5 rounded-full bg-gray-800 overflow-hidden">
         {loading ? (
-          <div className="h-full w-1/3 bg-violet-700/60 animate-pulse" />
+          <div className="h-full w-1/3 bg-violet-700/60 game-plan-pillar-loading animate-pulse" />
         ) : (
           <div className={`h-full rounded-full ${t.bar} transition-all`} style={{ width: `${pct ?? 5}%` }} />
         )}
@@ -84,7 +84,7 @@ function Pillar({ p, oriState }) {
 /** Shown on Deep Research when the user is on the free tier. */
 export function GamePlanProGate({ onUpgrade }) {
   return (
-    <section className="rounded-xl p-4 sm:p-5 border border-violet-900/45 bg-violet-950/25">
+    <section className="game-plan rounded-xl p-4 sm:p-5 border border-violet-900/45 bg-violet-950/25">
       <header className="flex items-center gap-2 mb-2">
         <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
         <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/60 text-violet-300/90 border border-violet-800/50">Pro</span>
@@ -113,7 +113,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
 
   if (verdict.insufficient) {
     return (
-      <section className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <section className="game-plan bg-gray-900 border border-gray-800 rounded-xl p-4">
         <Header />
         <p className="text-xs text-gray-500 mt-2">{verdict.headline}</p>
       </section>
@@ -129,7 +129,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
   const ori = verdict.ori || null;
 
   return (
-    <section className={`rounded-xl p-4 sm:p-5 border ${ht.border} ${ht.bg}`}>
+    <section className={`game-plan rounded-xl p-4 sm:p-5 border ${ht.border} ${ht.bg}`}>
       <Header confidence={verdict.confidence} canUseOri={canUseOri} />
 
       {/* Conviction · Horizon · Action */}

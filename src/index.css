@@ -126,6 +126,24 @@ body { background-color: var(--color-gray-950); }
 .light .text-violet-300\/70 { color: #6d28d9 !important; }
 .light .text-emerald-400\/90 { color: rgba(21,128,61,0.92) !important; }
 
+/* Game Plan pillar gauges — inverted gray-800 tracks read as white-on-white. */
+.light .game-plan .game-plan-pillar-track {
+  background-color: #d6d3d1 !important;
+  box-shadow: inset 0 0 0 1px rgba(120, 113, 108, 0.35);
+}
+.light .game-plan .game-plan-pillar-track .bg-emerald-500 { background-color: #059669 !important; }
+.light .game-plan .game-plan-pillar-track .bg-amber-500 { background-color: #d97706 !important; }
+.light .game-plan .game-plan-pillar-track .bg-red-500 { background-color: #dc2626 !important; }
+.light .game-plan .game-plan-pillar-track .bg-gray-600 { background-color: #57534e !important; }
+.light .game-plan .game-plan-pillar-loading { background-color: rgba(109, 40, 217, 0.45) !important; }
+
+/* Conviction / horizon / action inset cards on pale tinted panels. */
+.light .game-plan .bg-gray-950\/50,
+.light .game-plan .bg-gray-950\/40 {
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  box-shadow: inset 0 0 0 1px rgba(28, 25, 23, 0.1);
+}
+
 /* Subtle bouncing animation for the floating Ori button */
 @keyframes ori-bounce {
   0%, 100% { transform: translateY(0); }
@@ -161,6 +179,22 @@ body { background-color: var(--color-gray-950); }
   .h-\[100dvh\] {
     overflow: hidden;
   }
+}
+
+/* Landing / start page — always dark, even if .light is briefly present. */
+.landing-page {
+  color-scheme: dark;
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+  --color-gray-950: #030712;
 }
 
 /* Force dark theme for the Upgrade to Pro modal card, even in light mode.

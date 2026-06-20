@@ -226,7 +226,7 @@ export default function HomePage({ onAuthed }) {
 
   return (
     <LazyMotion features={domAnimation} strict>
-    <div className="min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
+    <div className="landing-page min-h-screen bg-gray-950 text-gray-100 overflow-x-hidden">
       {/* ── Nav ───────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-50 border-b border-gray-800/60 bg-gray-950/80 backdrop-blur-xl">
         <nav className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-6">

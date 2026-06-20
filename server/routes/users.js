@@ -43,13 +43,28 @@ router.get("/users", (req, res) => {
     return res.status(403).json({ error: "Admin access required" });
   }
 
-  const users = db.listUsers().map(u => ({
-    username: u.username,
-    email: u.email || null,
-    plan: u.plan === 'pro' ? 'pro' : 'free',
-    created_at: u.created_at,
-    is_admin: !!u.is_admin
-  }));
+  const nicknames = new Map();
+  for (const row of db.listAllUserSettingsRows()) {
+    try {
+      const data = JSON.parse(row.data || "{}");
+      const nick = typeof data.nickname === "string" ? data.nickname.trim() : "";
+      if (nick) nicknames.set(row.user_id, nick.slice(0, 64));
+    } catch {
+      // ignore malformed settings rows
+    }
+  }
+
+  const users = db.listUsers().map((u) => {
+    const loginEmail = u.email || (EMAIL_RE.test(u.username) ? u.username : null);
+    return {
+      username: u.username,
+      email: loginEmail,
+      nickname: nicknames.get(u.username) || null,
+      plan: u.plan === 'pro' ? 'pro' : 'free',
+      created_at: u.created_at,
+      is_admin: !!u.is_admin,
+    };
+  });
   res.json({ users });
 });
 
@@ -62,19 +77,23 @@ router.post("/users", (req, res) => {
     }
 
     const { username, password, isAdmin } = req.body || {};
+    const email = String(username || "").trim().toLowerCase();
 
-    if (!username || !password) {
-      return res.status(400).json({ error: "Username and password are required" });
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: "A valid email address is required" });
     }
 
     if (password.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
-    const result = db.createUser(username, password, !!isAdmin);
+    const result = db.createUser(email, password, !!isAdmin, email);
 
     if (result.success) {
-      res.json({ ok: true, username, isAdmin: !!isAdmin });
+      res.json({ ok: true, username: email, isAdmin: !!isAdmin });
     } else {
       res.status(400).json({ error: result.error || "Failed to create user" });
     }

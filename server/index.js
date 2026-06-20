@@ -527,17 +527,20 @@ app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
     return res.status(400).json({ error: 'Setup is only allowed when there are no users yet' });
   }
 
-  const username = String(req.body?.user || '').trim();
+  const email = String(req.body?.user || req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');
 
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password are required' });
+  }
+  if (!EMAIL_RE.test(email)) {
+    return res.status(400).json({ error: 'A valid email address is required' });
   }
   if (password.length < 6) {
     return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
 
-  const result = db.createUser(username, password, true); // first user is always admin
+  const result = db.createUser(email, password, true, email); // first user is always admin
 
   if (!result.success) {
     return res.status(400).json({ error: result.error || 'Failed to create user' });
@@ -545,7 +548,7 @@ app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
 
   // Automatically log the new admin in
   const tokenPayload = {
-    user: username,
+    user: email,
     isAdmin: true,
     exp: Date.now() + SESSION_MAX_AGE_MS,
   };
@@ -556,7 +559,7 @@ app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
     secure: req.secure,
   }));
 
-  res.json({ ok: true, user: username, isAdmin: true, message: 'First admin account created successfully' });
+  res.json({ ok: true, user: email, isAdmin: true, message: 'First admin account created successfully' });
 });
 
 // Gate the rest of /api/* on a valid session cookie, and attach the

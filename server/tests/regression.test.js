@@ -21,6 +21,8 @@ const SERVER_ENTRY = path.join(__dirname, '..', 'index.js');
 
 const PORT = 4870 + Math.floor(Math.random() * 100);
 const BASE = `http://127.0.0.1:${PORT}`;
+const ADMIN_EMAIL = 'admin@example.com';
+const VIEWER_EMAIL = 'viewer@example.com';
 
 let serverProc;
 let tmpDir;
@@ -97,11 +99,20 @@ test('auth status reports needsSetup on a fresh database', async () => {
   assert.equal(body.hasUsers, false);
 });
 
-test('setup-first-admin creates an admin and logs them in', async () => {
+test('setup-first-admin rejects non-email identifiers', async () => {
   const res = await fetch(api('/api/auth/setup-first-admin'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user: 'admin1', password: 'secret123' }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('setup-first-admin creates an admin and logs them in', async () => {
+  const res = await fetch(api('/api/auth/setup-first-admin'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: ADMIN_EMAIL, password: 'secret123' }),
   });
   const body = await json(res);
   assert.equal(res.status, 200);
@@ -124,14 +135,14 @@ test('login rejects a wrong password and accepts the right one', async () => {
   const bad = await fetch(api('/api/auth/login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user: 'admin1', password: 'wrong' }),
+    body: JSON.stringify({ user: ADMIN_EMAIL, password: 'wrong' }),
   });
   assert.equal(bad.status, 401);
 
   const good = await fetch(api('/api/auth/login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user: 'admin1', password: 'secret123' }),
+    body: JSON.stringify({ user: ADMIN_EMAIL, password: 'secret123' }),
   });
   const body = await json(good);
   assert.equal(good.status, 200);
@@ -142,7 +153,7 @@ test('/api/auth/me reflects the session', async () => {
   const res = await fetch(api('/api/auth/me'), { headers: { cookie: adminCookie } });
   const body = await json(res);
   assert.equal(body.authenticated, true);
-  assert.equal(body.user, 'admin1');
+  assert.equal(body.user, ADMIN_EMAIL);
   assert.equal(body.isAdmin, true);
 });
 
@@ -154,17 +165,24 @@ test('API requests without a session are rejected once auth is enabled', async (
 // ── User management ─────────────────────────────────────────────────────────
 
 test('admin can create a non-admin user; non-admin cannot manage users', async () => {
-  const create = await fetch(api('/api/users'), {
+  const bad = await fetch(api('/api/users'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ username: 'viewer', password: 'viewer123' }),
+  });
+  assert.equal(bad.status, 400);
+
+  const create = await fetch(api('/api/users'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ username: VIEWER_EMAIL, password: 'viewer123' }),
   });
   assert.equal((await json(create)).ok, true);
 
   const login = await fetch(api('/api/auth/login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user: 'viewer', password: 'viewer123' }),
+    body: JSON.stringify({ user: VIEWER_EMAIL, password: 'viewer123' }),
   });
   assert.equal(login.status, 200);
   userCookie = cookieFrom(login);
@@ -174,14 +192,14 @@ test('admin can create a non-admin user; non-admin cannot manage users', async (
 });
 
 test('cannot demote or delete the last admin', async () => {
-  const demote = await fetch(api('/api/users/admin1'), {
+  const demote = await fetch(api(`/api/users/${encodeURIComponent(ADMIN_EMAIL)}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ isAdmin: false }),
   });
   assert.equal(demote.status, 400);
 
-  const del = await fetch(api('/api/users/admin1'), {
+  const del = await fetch(api(`/api/users/${encodeURIComponent(ADMIN_EMAIL)}`), {
     method: 'DELETE',
     headers: { cookie: adminCookie },
   });
@@ -206,7 +224,7 @@ test('change-password verifies the current password', async () => {
   const relogin = await fetch(api('/api/auth/login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user: 'viewer', password: 'changed123' }),
+    body: JSON.stringify({ user: VIEWER_EMAIL, password: 'changed123' }),
   });
   assert.equal(relogin.status, 200);
 });
@@ -225,7 +243,7 @@ test('forgot-password is generic (no account enumeration); reset-password reject
   const known = await fetch(api('/api/auth/forgot-password'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: 'viewer' }),
+    body: JSON.stringify({ email: VIEWER_EMAIL }),
   });
   assert.equal(known.status, 200);
 
@@ -233,7 +251,7 @@ test('forgot-password is generic (no account enumeration); reset-password reject
   const bad = await fetch(api('/api/auth/reset-password'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ u: 'viewer', token: 'not-a-real-token', password: 'whateverA1z' }),
+    body: JSON.stringify({ u: VIEWER_EMAIL, token: 'not-a-real-token', password: 'whateverA1z' }),
   });
   assert.equal(bad.status, 400);
 
@@ -241,7 +259,7 @@ test('forgot-password is generic (no account enumeration); reset-password reject
   const short = await fetch(api('/api/auth/reset-password'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ u: 'viewer', token: 'x', password: 'short' }),
+    body: JSON.stringify({ u: VIEWER_EMAIL, token: 'x', password: 'short' }),
   });
   assert.equal(short.status, 400);
 });
@@ -582,7 +600,7 @@ test('Ori is gated behind the Pro plan (402 for free users, open after upgrade)'
   assert.equal(body.code, 'upgrade_required');
 
   // Admin flips the plan to pro (the manual donate-link activation step)…
-  const patch = await fetch(api('/api/users/viewer'), {
+  const patch = await fetch(api(`/api/users/${encodeURIComponent(VIEWER_EMAIL)}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ plan: 'pro' }),
@@ -599,12 +617,12 @@ test('Ori is gated behind the Pro plan (402 for free users, open after upgrade)'
   assert.equal(opened.status, 503);
 
   // Restore to free for the remaining tests, and reject junk plans.
-  await fetch(api('/api/users/viewer'), {
+  await fetch(api(`/api/users/${encodeURIComponent(VIEWER_EMAIL)}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ plan: 'free' }),
   });
-  const junk = await fetch(api('/api/users/viewer'), {
+  const junk = await fetch(api(`/api/users/${encodeURIComponent(VIEWER_EMAIL)}`), {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json', cookie: adminCookie },
     body: JSON.stringify({ plan: 'enterprise' }),
