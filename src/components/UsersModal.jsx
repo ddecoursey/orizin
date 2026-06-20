@@ -5,6 +5,12 @@ import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+function userListLabel(u) {
+  const email = u.email || (EMAIL_RE.test(u.username) ? u.username : u.username);
+  if (u.nickname) return { primary: u.nickname, secondary: email };
+  return { primary: email, secondary: null };
+}
+
 // `mode` controls which surface this modal shows:
 //   'account' → personal Account Settings (plan + change your password)
 //   'users'   → admin User Management (add/remove users, grant admin, set plan)
@@ -348,15 +354,28 @@ export default function UsersModal({
                 <div className="text-sm text-gray-400">Loading...</div>
               ) : (
                 <div className="space-y-1">
-                  {users.map(u => (
+                  {users.map((u) => {
+                    const label = userListLabel(u);
+                    return (
                     <div key={u.username} className="flex items-center justify-between gap-2 bg-gray-950 border border-gray-800 rounded px-3 py-1.5 text-sm">
                       <div className="min-w-0">
-                        <span className="font-medium truncate">{u.username}</span>
-                        {u.is_admin && <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>}
-                        <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded ${u.plan === 'pro' ? 'bg-violet-900 text-violet-300' : 'bg-gray-800 text-gray-500'}`}>
-                          {u.plan === 'pro' ? 'PRO' : 'free'}
-                        </span>
-                        {u.username === currentUser && <span className="text-xs text-blue-400 ml-2">(you)</span>}
+                        <div className="font-medium truncate">
+                          <span className="text-gray-100">{label.primary}</span>
+                          {label.secondary && (
+                            <span className="text-gray-500 font-normal"> · {label.secondary}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          {u.is_admin && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>
+                          )}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded ${u.plan === 'pro' ? 'bg-violet-900 text-violet-300' : 'bg-gray-800 text-gray-500'}`}>
+                            {u.plan === 'pro' ? 'PRO' : 'free'}
+                          </span>
+                          {u.username === currentUser && (
+                            <span className="text-xs text-blue-400">(you)</span>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
                         <button
@@ -384,7 +403,8 @@ export default function UsersModal({
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

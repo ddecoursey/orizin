@@ -43,13 +43,28 @@ router.get("/users", (req, res) => {
     return res.status(403).json({ error: "Admin access required" });
   }
 
-  const users = db.listUsers().map(u => ({
-    username: u.username,
-    email: u.email || null,
-    plan: u.plan === 'pro' ? 'pro' : 'free',
-    created_at: u.created_at,
-    is_admin: !!u.is_admin
-  }));
+  const nicknames = new Map();
+  for (const row of db.listAllUserSettingsRows()) {
+    try {
+      const data = JSON.parse(row.data || "{}");
+      const nick = typeof data.nickname === "string" ? data.nickname.trim() : "";
+      if (nick) nicknames.set(row.user_id, nick.slice(0, 64));
+    } catch {
+      // ignore malformed settings rows
+    }
+  }
+
+  const users = db.listUsers().map((u) => {
+    const loginEmail = u.email || (EMAIL_RE.test(u.username) ? u.username : null);
+    return {
+      username: u.username,
+      email: loginEmail,
+      nickname: nicknames.get(u.username) || null,
+      plan: u.plan === 'pro' ? 'pro' : 'free',
+      created_at: u.created_at,
+      is_admin: !!u.is_admin,
+    };
+  });
   res.json({ users });
 });
 
