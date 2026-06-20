@@ -336,6 +336,28 @@ try {
   console.warn('[db] Could not create stocks indexes:', e.message);
 }
 
+// Watchlist alert state (per user + symbol baselines, cooldowns, digest queue).
+try {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS watchlist_alert_state (
+      user_id               TEXT NOT NULL,
+      symbol                TEXT NOT NULL,
+      baseline_price        REAL,
+      baseline_session_date TEXT,
+      last_price            REAL,
+      last_conviction       REAL,
+      last_news_urls        TEXT,
+      last_alert_at         TEXT,
+      pending_digest        TEXT,
+      in_app_delivered_at   INTEGER,
+      PRIMARY KEY (user_id, symbol)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_wl_alert_user ON watchlist_alert_state(user_id);`);
+} catch (e) {
+  console.warn('[db] watchlist_alert_state migration failed:', e.message);
+}
+
 // Migration: sparklines table for persisted historical price data (for sparklines)
 try {
   const sparkCols = new Set(
@@ -774,6 +796,75 @@ export function getAnyPriceRefreshDue(staleMs = 6 * 60 * 60 * 1000, limit = 10) 
     .map((r) => r.symbol);
 }
 
+// ── Watchlist priority selectors ───────────────────────────────────────────
+
+function watchlistInClause(symbols) {
+  if (!symbols?.length) return null;
+  return { placeholders: symbols.map(() => '?').join(','), args: symbols };
+}
+
+export function getWatchlistQuoteDue(symbols, staleMs, limit = 6) {
+  const clause = watchlistInClause(symbols);
+  if (!clause) return [];
+  const cutoff = Date.now() - staleMs;
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks
+         WHERE symbol IN (${clause.placeholders})
+           AND is_etf = 0
+           AND price IS NOT NULL
+           AND (price_updated_at IS NULL OR price_updated_at < ?)
+         ORDER BY price_updated_at ASC
+         LIMIT ?`,
+    )
+    .all(...clause.args, cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+export function getWatchlistEnrichDue(symbols, staleMs, limit = 4) {
+  const clause = watchlistInClause(symbols);
+  if (!clause) return [];
+  const cutoff = Date.now() - staleMs;
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks
+         WHERE symbol IN (${clause.placeholders})
+           AND is_etf = 0
+           AND (
+             has_km = 0 OR has_rat = 0
+             OR updated_at IS NULL OR updated_at < ?
+           )
+         ORDER BY updated_at ASC
+         LIMIT ?`,
+    )
+    .all(...clause.args, cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+/** Prioritize live quote refresh for watchlist symbols (price only). */
+export function markWatchlistQuoteDue(symbols) {
+  if (!symbols?.length) return;
+  const stmt = db.prepare(
+    `UPDATE stocks SET price_updated_at = NULL WHERE symbol = ? AND is_etf = 0`,
+  );
+  const tx = db.transaction((syms) => {
+    for (const s of syms) stmt.run(s);
+  });
+  tx(symbols);
+}
+
+/** Force watchlist symbols to the front of the priority rotation (quotes + fundamentals). */
+export function markWatchlistGatherDue(symbols) {
+  if (!symbols?.length) return;
+  const stmt = db.prepare(
+    `UPDATE stocks SET price_updated_at = NULL, updated_at = NULL WHERE symbol = ? AND is_etf = 0`,
+  );
+  const tx = db.transaction((syms) => {
+    for (const s of syms) stmt.run(s);
+  });
+  tx(symbols);
+}
+
 // ── Data freshness summary (debug page) ────────────────────────────────────
 
 export function getFreshnessSummary() {
@@ -1087,9 +1178,18 @@ export function createUser(username, password, isAdmin = false, email = null, pl
   }
 }
 
-// Accepts a username OR an email as the identifier.
+const getUserByUsernameCiStmt = db.prepare(`
+  SELECT * FROM users WHERE username = ? COLLATE NOCASE
+`);
+
+// Accepts a username OR an email as the identifier (trimmed; username is case-insensitive).
 export function verifyUserPassword(identifier, password) {
-  const user = getUserByUsername(identifier) || getUserByEmail(identifier);
+  const id = String(identifier || '').trim();
+  if (!id) return null;
+  const user =
+    getUserByUsername(id) ||
+    getUserByUsernameCiStmt.get(id) ||
+    getUserByEmail(id);
   if (!user) return null;
   const valid = bcrypt.compareSync(password, user.password_hash);
   return valid
@@ -1245,6 +1345,10 @@ export function setUserAdmin(username, isAdmin) {
 // independent clients (the screener and the theme/sidebar layer) can update
 // their own keys without clobbering each other.
 
+export function listAllUserSettingsRows() {
+  return db.prepare('SELECT user_id, data FROM user_settings').all();
+}
+
 const getUserSettingsStmt = db.prepare('SELECT data FROM user_settings WHERE user_id = ?');
 const upsertUserSettingsStmt = db.prepare(`
   INSERT INTO user_settings (user_id, data, updated_at)
@@ -1273,6 +1377,95 @@ export function patchUserSettings(userId = 'default', partial = {}) {
     updated_at: Date.now(),
   });
   return merged;
+}
+
+// ── Watchlist alert state ───────────────────────────────────────────────────
+
+const getWlAlertStmt = db.prepare(
+  'SELECT * FROM watchlist_alert_state WHERE user_id = ? AND symbol = ?',
+);
+const upsertWlAlertStmt = db.prepare(`
+  INSERT INTO watchlist_alert_state (
+    user_id, symbol, baseline_price, baseline_session_date, last_price, last_conviction,
+    last_news_urls, last_alert_at, pending_digest, in_app_delivered_at
+  ) VALUES (
+    @user_id, @symbol, @baseline_price, @baseline_session_date, @last_price, @last_conviction,
+    @last_news_urls, @last_alert_at, @pending_digest, @in_app_delivered_at
+  )
+  ON CONFLICT(user_id, symbol) DO UPDATE SET
+    baseline_price = excluded.baseline_price,
+    baseline_session_date = excluded.baseline_session_date,
+    last_price = excluded.last_price,
+    last_conviction = excluded.last_conviction,
+    last_news_urls = excluded.last_news_urls,
+    last_alert_at = excluded.last_alert_at,
+    pending_digest = excluded.pending_digest,
+    in_app_delivered_at = excluded.in_app_delivered_at
+`);
+
+function parseJson(raw, fallback) {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+export function getWatchlistAlertState(userId, symbol) {
+  const row = getWlAlertStmt.get(userId, symbol);
+  if (!row) return null;
+  return {
+    ...row,
+    last_news_urls: parseJson(row.last_news_urls, []),
+    last_alert_at: parseJson(row.last_alert_at, {}),
+    pending_digest: parseJson(row.pending_digest, []),
+  };
+}
+
+export function saveWatchlistAlertState(userId, symbol, patch = {}) {
+  const cur = getWatchlistAlertState(userId, symbol) || {
+    user_id: userId,
+    symbol,
+    baseline_price: null,
+    baseline_session_date: null,
+    last_price: null,
+    last_conviction: null,
+    last_news_urls: [],
+    last_alert_at: {},
+    pending_digest: [],
+    in_app_delivered_at: null,
+  };
+  const next = { ...cur, ...patch, user_id: userId, symbol };
+  upsertWlAlertStmt.run({
+    user_id: userId,
+    symbol,
+    baseline_price: next.baseline_price,
+    baseline_session_date: next.baseline_session_date,
+    last_price: next.last_price,
+    last_conviction: next.last_conviction,
+    last_news_urls: JSON.stringify(next.last_news_urls || []),
+    last_alert_at: JSON.stringify(next.last_alert_at || {}),
+    pending_digest: JSON.stringify(next.pending_digest || []),
+    in_app_delivered_at: next.in_app_delivered_at ?? null,
+  });
+  return next;
+}
+
+export function listWatchlistAlertStatesForUser(userId) {
+  return db
+    .prepare('SELECT * FROM watchlist_alert_state WHERE user_id = ?')
+    .all(userId)
+    .map((row) => ({
+      ...row,
+      last_news_urls: parseJson(row.last_news_urls, []),
+      last_alert_at: parseJson(row.last_alert_at, {}),
+      pending_digest: parseJson(row.pending_digest, []),
+    }));
+}
+
+export function deleteWatchlistAlertState(userId, symbol) {
+  db.prepare('DELETE FROM watchlist_alert_state WHERE user_id = ? AND symbol = ?').run(userId, symbol);
 }
 
 export default db;

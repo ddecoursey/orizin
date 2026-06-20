@@ -435,6 +435,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     : new Set();
 
   const [pins, setPins] = useState(initialPins);
+  const [enrichNotice, setEnrichNotice] = useState(null);
   // True once we've reconciled local state with the server copy. Until then we
   // don't push writes up, so the initial local/default values can't clobber
   // settings that exist server-side before hydration finishes.
@@ -513,9 +514,15 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     [stocks, filters, pinsForFilter]
   );
 
+  // Free tier: conviction uses fundamentals only — no cached Gemini/Ori reviews.
+  const scoringRows = useMemo(
+    () => (canUseOri ? filteredRows : filteredRows.map((r) => (r.ori ? { ...r, ori: null } : r))),
+    [filteredRows, canUseOri],
+  );
+
   const rankedData = useMemo(
-    () => computeRankedRows(filteredRows),
-    [filteredRows]
+    () => computeRankedRows(scoringRows),
+    [scoringRows]
   );
 
   // Personalized Fit context + per-symbol Fit map. Built from the user's
@@ -532,8 +539,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       }),
     [portfolioGoals.portfolios, portfolioGoals.goals, portfolioGoals.theses, stocks],
   );
-  const hasFitContext =
-    !!(portfolioGoals.portfolios?.length || portfolioGoals.goals?.length || portfolioGoals.theses?.length);
+  const hasFitContext = !!fitCtx?.hasContext;
   const fitMap = useMemo(() => {
     if (!hasFitContext) return null;
     const m = Object.create(null);
@@ -651,6 +657,10 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
+  function isAbortError(e) {
+    return e?.name === "AbortError" || e?.code === 20;
+  }
+
   function cancelCurrentOperation() {
     if (currentAbortRef.current) {
       currentAbortRef.current.abort();
@@ -679,6 +689,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
         const res = await fetch(url, options);
         return res;
       } catch (e) {
+        if (isAbortError(e)) throw e;
         lastError = e;
         if (attempt < retries - 1) {
           const delay = baseDelay * Math.pow(1.6, attempt) + Math.random() * 80;
@@ -781,12 +792,21 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
               } catch {}
             }
             pump();
+          }).catch((e) => {
+            if (isAbortError(e)) {
+              currentAbortRef.current = null;
+              setLoadProg(null);
+              return;
+            }
+            currentAbortRef.current = null;
+            setLoadProg(null);
+            setStatus({ type: "error", msg: e?.message || "Stream read failed" });
           });
         }
         pump();
       })
       .catch((e) => {
-        if (e.name !== 'AbortError') {
+        if (!isAbortError(e)) {
           setLoadProg(null);
           setStatus({ type: "error", msg: e.message });
         }
@@ -950,6 +970,38 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     }
   }
 
+  // Watchlist sync — one lightweight quote payload, not a full stock row per symbol.
+  async function refreshWatchlistQuotes(symbolList) {
+    if (!symbolList?.length) return;
+    try {
+      const res = await fetch("/api/watchlist/quotes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbols: symbolList }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const quotes = data?.quotes;
+      if (!Array.isArray(quotes) || !quotes.length) return;
+      const fresh = new Map(quotes.filter((q) => q?.symbol).map((q) => [q.symbol, q]));
+      const patch = (row) => {
+        const q = fresh.get(row.symbol);
+        if (!q) return row;
+        return {
+          ...row,
+          price: q.price ?? row.price,
+          volume: q.volume ?? row.volume,
+          mcap: q.mcap ?? row.mcap,
+          price_updated_at: q.price_updated_at ?? row.price_updated_at,
+        };
+      };
+      stocksRef.current = stocksRef.current.map(patch);
+      setStocks((prev) => prev.map(patch));
+    } catch {
+      // ignore transient network errors
+    }
+  }
+
   // ── Combined enrichment SSE loader ───────────────────────────────────────
 
   function enrichAll(symbols, force = false, onComplete = null) {
@@ -1049,6 +1101,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
                   // those rows; larger ones → full reload.
                   if (symbols && symbols.length > 0 && symbols.length <= 5) {
                     mergeStocks(symbols);
+                    setEnrichNotice({ symbols: [...symbols], at: Date.now() });
                   } else {
                     loadStocks(false, true);
                   }
@@ -1063,17 +1116,27 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
               } catch {}
             }
             pump();
+          }).catch((e) => {
+            currentAbortRef.current = null;
+            setEnrichLoading(false);
+            setLoadProg(null);
+            loadProgRef.current = null;
+            if (!isAbortError(e)) {
+              console.error("Enrich stream read failed:", e);
+            }
+            finish();
           });
         }
         pump();
       })
       .catch((e) => {
-        if (e?.name !== 'AbortError') {
-          setEnrichLoading(false);
-          setLoadProg(null);
-          loadProgRef.current = null;
-        }
+        setEnrichLoading(false);
+        setLoadProg(null);
+        loadProgRef.current = null;
         currentAbortRef.current = null;
+        if (!isAbortError(e)) {
+          console.error("Enrich request failed:", e);
+        }
         finish();
       });
   }
@@ -1236,6 +1299,8 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     createTab,
     deleteTab,
     loadStocks,
+    mergeStocks,
+    refreshWatchlistQuotes,
     // scope='visible' (default): act only on the on-screen (filtered) rows — fetch
     //   the ones still missing data, or force-refresh them all if they're already
     //   enriched.
@@ -1267,6 +1332,8 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       return enrichAll([symbol], true, onComplete);
     },
     enrichLoading,
+    enrichNotice,
+    clearEnrichNotice: () => setEnrichNotice(null),
     loadProgress,
     hasEnrichedOnce,
     addTicker,

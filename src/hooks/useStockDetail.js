@@ -8,9 +8,8 @@ import { useState, useEffect, useRef } from "react";
 // State is tagged with the symbol it belongs to, so a new symbol immediately
 // reports `loading` and never shows the previous symbol's data — without any
 // synchronous setState in the effect body.
-// `reloadToken` lets a caller force a fresh re-fetch (bypassing the server's detail
-// caches) — bumped by the Deep Research "Re-gather" button after the per-symbol
-// enrichment finishes, so every pane shows the just-gathered data.
+// `reloadToken` bumps after a per-symbol re-gather so panes re-read the server's
+// warm caches (enrich already refreshed them — no ?force=1 duplicate FMP wave).
 export function useStockDetail(symbol, reloadToken = 0) {
   const [profile, setProfile] = useState({ sym: null, value: null });
   const [points, setPoints] = useState({ sym: null, value: null });
@@ -26,56 +25,47 @@ export function useStockDetail(symbol, reloadToken = 0) {
   const prevRef = useRef({ symbol: null, token: reloadToken });
 
   useEffect(() => {
-    const prev = prevRef.current;
-    const symbolChanged = prev.symbol !== symbol;
-    const tokenChanged = prev.token !== reloadToken;
     prevRef.current = { symbol, token: reloadToken };
 
     if (!symbol) return;
     let cancelled = false;
     const getJson = (url) =>
       fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    // Force a fresh re-fetch (bypassing the server's detail cache) ONLY when an
-    // explicit re-gather bumped the token for the SAME symbol. Navigating to a
-    // different symbol must use the cache, or every stock you open after one
-    // re-gather would needlessly re-hit FMP.
-    const force = tokenChanged && !symbolChanged;
-    const u = (url) =>
-      force ? url + (url.includes("?") ? "&" : "?") + "force=1" : url;
 
-    getJson(u(`/api/stocks/profile/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/profile/${symbol}`).then((d) => {
       if (!cancelled) setProfile({ sym: symbol, value: d?.profile || null });
     });
-    getJson(u(`/api/stocks/ai/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/ai/${symbol}`).then((d) => {
       if (!cancelled) setAi({ sym: symbol, value: d?.data || null });
     });
-    getJson(u(`/api/stocks/insider/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/insider/${symbol}`).then((d) => {
       if (!cancelled) setInsider({ sym: symbol, value: d?.trades || [] });
     });
-    getJson(u(`/api/stocks/news/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/news/${symbol}`).then((d) => {
       if (!cancelled) setNews({ sym: symbol, value: d?.news || [] });
     });
-    getJson(u(`/api/stocks/sparkline/${symbol}?days=1825`)).then((d) => {
+    // 5Y chart — served from DB after enrich; no force=1 re-download.
+    getJson(`/api/stocks/sparkline/${symbol}?days=1825`).then((d) => {
       if (!cancelled) setPoints({ sym: symbol, value: d?.prices || [] });
     });
-    getJson(u(`/api/stocks/rsi/${symbol}?periodLength=10`)).then((d) => {
+    getJson(`/api/stocks/rsi/${symbol}?periodLength=10`).then((d) => {
       if (!cancelled) setRsi({ sym: symbol, value: d?.rsi || [] });
     });
-    getJson(u(`/api/stocks/ratings/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/ratings/${symbol}`).then((d) => {
       if (!cancelled) setRatings({ sym: symbol, value: d?.ratings || null });
     });
-    getJson(u(`/api/stocks/grades/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/grades/${symbol}`).then((d) => {
       if (!cancelled) setGrades({ sym: symbol, value: d?.grades || [] });
     });
     // Technicals, earnings, and smart-money power both the Deep Research panels
     // AND Ori's context (so recommendations use them) — fetched here once.
-    getJson(u(`/api/stocks/technicals/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/technicals/${symbol}`).then((d) => {
       if (!cancelled) setTechnicals({ sym: symbol, value: d || null });
     });
-    getJson(u(`/api/stocks/earnings/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/earnings/${symbol}`).then((d) => {
       if (!cancelled) setEarnings({ sym: symbol, value: d?.earnings ?? null });
     });
-    getJson(u(`/api/stocks/smart-money/${symbol}`)).then((d) => {
+    getJson(`/api/stocks/smart-money/${symbol}`).then((d) => {
       if (!cancelled) setSmart({ sym: symbol, value: d || null });
     });
 

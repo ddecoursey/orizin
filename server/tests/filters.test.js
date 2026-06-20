@@ -73,3 +73,10 @@ test('search and pinnedOnly still behave', () => {
   const pinned = applyFilters(ROWS, f({ pinnedOnly: true }), new Set(['BBB']));
   assert.deepEqual(syms(pinned), ['BBB']);
 });
+
+test('pinnedOnly uses screener pins only (not watchlists)', () => {
+  const pinned = applyFilters(ROWS, f({ pinnedOnly: true }), new Set(['BBB']));
+  assert.deepEqual(syms(pinned), ['BBB']);
+  const emptyPins = applyFilters(ROWS, f({ pinnedOnly: true }), NO_PINS);
+  assert.deepEqual(syms(emptyPins), []);
+});

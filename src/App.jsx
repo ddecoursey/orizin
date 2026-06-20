@@ -1,4 +1,8 @@
 import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from "react";
+import { useWatchlists } from "./hooks/useWatchlists.js";
+import { useWatchlistAlerts } from "./hooks/useWatchlistAlerts.js";
+import WatchlistPanel from "./components/WatchlistPanel.jsx";
+import NotificationHost from "./components/NotificationHost.jsx";
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from "./lib/motion.js";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
@@ -26,6 +30,7 @@ import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 import { computeFit } from "./lib/fitScore.js";
 import { computeVerdict } from "./lib/verdict.js";
+
 
 export default function App() {
   // "checking" → calling /api/auth/me to see if we have a session
@@ -61,17 +66,16 @@ export default function App() {
     // matches what the session cookie was issued for.
     try {
       const r = await fetch("/api/auth/me");
+      if (!r.ok) throw new Error("session not established");
       const data = await r.json();
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
       setPlan(data.plan === "pro" ? "pro" : "free");
       setAppEnv(data.env || "production");
+      setAuthState("authed");
     } catch {
-      setCurrentUser("default");
-      setIsAdmin(false);
-      setPlan("free");
+      setAuthState("login");
     }
-    setAuthState("authed");
   }
 
   // Re-read the session after a plan change (subscribe / cancel) so Pro unlocks
@@ -165,6 +169,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const openUpgradeModal = () => setShowUpgradeModal(true);
   const [showAddTicker, setShowAddTicker] = useState(false);
+  const [showWatchlist, setShowWatchlist] = useState(false);
   const [detailStock, setDetailStock] = useState(null);
   const [detailStock2, setDetailStock2] = useState(null);
   const [pickingSecond, setPickingSecond] = useState(false);
@@ -405,13 +410,67 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     createTab,
     deleteTab,
     loadStocks,
+    refreshWatchlistQuotes,
     enrichAll,
     regatherSymbol,
     enrichLoading,
+    enrichNotice,
+    clearEnrichNotice,
     loadProgress,
     addTicker,
     cancelOperation,
   } = useScreener(currentUser, portfolioGoals, canUseOri, currentView);
+
+  const watchlists = useWatchlists(currentUser);
+  const wlAlerts = useWatchlistAlerts({ enabled: currentUser && currentUser !== "default" });
+  const [wlTestBusy, setWlTestBusy] = useState(false);
+  const [wlTestMsg, setWlTestMsg] = useState("");
+  const [wlTestOk, setWlTestOk] = useState(null);
+  const handleWlTestAlert = async () => {
+    setWlTestBusy(true);
+    setWlTestMsg("");
+    setWlTestOk(null);
+    const result = await wlAlerts.triggerTestAlert({
+      symbol: watchlists.watchlist?.symbols?.[0],
+      type: "price",
+    });
+    setWlTestBusy(false);
+    if (result?.ok) {
+      const sym = result.alert?.symbol || watchlists.watchlist?.symbols?.[0] || "AAPL";
+      setWlTestOk(true);
+      setWlTestMsg(`In-app toast sent for ${sym} (bottom-right). Email is not sent by this button.`);
+    } else {
+      setWlTestOk(false);
+      setWlTestMsg(result?.error || "Test notification failed");
+    }
+  };
+  const watchlistSymbols = watchlists.watchlist?.symbols || [];
+  const stockBySymbol = useMemo(
+    () => new Map(stocks.map((s) => [s.symbol, s])),
+    [stocks],
+  );
+  const pendingWlSymbols = useMemo(() => {
+    const wl = watchlists.watchlist;
+    if (!wl?.symbols?.length) return new Set();
+    const listRecent = wl.updatedAt && Date.now() - wl.updatedAt < 10 * 60 * 1000;
+    if (!listRecent) return new Set();
+    const stale = new Set();
+    const now = Date.now();
+    for (const sym of wl.symbols) {
+      const snap = wlAlerts.snapshots[sym];
+      const row = stockBySymbol.get(sym);
+      const pu = snap?.priceUpdatedAt ?? row?.price_updated_at;
+      if (!pu || now - pu > 5 * 60 * 1000) stale.add(sym);
+    }
+    return stale;
+  }, [watchlists.watchlist, wlAlerts.snapshots, stockBySymbol]);
+
+  useEffect(() => {
+    if (!watchlistSymbols.length || !refreshWatchlistQuotes) return;
+    refreshWatchlistQuotes(watchlistSymbols);
+    const id = setInterval(() => refreshWatchlistQuotes(watchlistSymbols), 3 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [watchlistSymbols.join(","), refreshWatchlistQuotes]);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
@@ -423,26 +482,37 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     setDetailReloadToken(0);
   }, [researchSymbol]);
 
-  // Opening a stock on Deep Research auto re-gathers from FMP, then bumps
-  // detailReloadToken so panels + Ori's take use the just-fetched data.
+  // Deep Research data load: admins re-gather from FMP (shared SQLite for all users);
+  // everyone else reads the shared cache only — background job keeps it fresh.
   const regatherRef = useRef(regatherSymbol);
   regatherRef.current = regatherSymbol;
-  const lastDrAutoRegather = useRef({ view: null, symbol: null });
+  const researchSymbolRef = useRef(researchSymbol);
+  researchSymbolRef.current = researchSymbol;
+  const lastDrOpen = useRef({ view: null, symbol: null });
   useEffect(() => {
     if (currentView !== "deep-research") {
-      lastDrAutoRegather.current = { view: null, symbol: null };
+      lastDrOpen.current = { view: null, symbol: null };
       return;
     }
     if (!researchSymbol) return;
     if (
-      lastDrAutoRegather.current.view === currentView &&
-      lastDrAutoRegather.current.symbol === researchSymbol
+      lastDrOpen.current.view === currentView &&
+      lastDrOpen.current.symbol === researchSymbol
     ) {
       return;
     }
-    lastDrAutoRegather.current = { view: currentView, symbol: researchSymbol };
-    regatherRef.current(researchSymbol, () => setDetailReloadToken((t) => t + 1));
-  }, [currentView, researchSymbol]);
+    lastDrOpen.current = { view: currentView, symbol: researchSymbol };
+    const requested = researchSymbol;
+    if (isAdmin) {
+      regatherRef.current(requested, () => {
+        if (researchSymbolRef.current === requested) {
+          setDetailReloadToken((t) => t + 1);
+        }
+      });
+    } else {
+      setDetailReloadToken(1);
+    }
+  }, [currentView, researchSymbol, isAdmin]);
 
   // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
   // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
@@ -598,9 +668,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       }
     : null;
 
-  // What the user is actively working with: their pinned watchlist and the
-  // screener (tab) they're in. Pinned rows pull from the filtered set first
-  // (so they carry live scores), falling back to the full universe.
+  // Pinned screener rows (per-tab) — separate from watchlists used for monitoring.
   const activeScreenerName = tabs.find((t) => t.id === activeTab)?.name || null;
   const pinnedStocks = [...pins]
     .map((sym) => filtered.find((r) => r.symbol === sym) || stocks.find((r) => r.symbol === sym))
@@ -745,9 +813,23 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   return (
     <LazyMotion features={domAnimation} strict>
     <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
+      {isAdmin && enrichNotice && (
+        <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-emerald-950/50 border-b border-emerald-800/50 text-xs text-emerald-200">
+          <span>
+            Refreshed <strong>{enrichNotice.symbols.join(", ")}</strong> — visible to all users
+          </span>
+          <button type="button" onClick={clearEnrichNotice} className="text-emerald-400/80 hover:text-emerald-200 cursor-pointer">Dismiss</button>
+        </div>
+      )}
       <Header
         status={status}
         filtered={filtered}
+        onOpenWatchlist={() => {
+          wlAlerts.markRead();
+          setShowWatchlist(true);
+        }}
+        watchlistUnread={wlAlerts.unread}
+
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
         onGatherData={(scope) => {
@@ -808,6 +890,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               fitCtx={fitCtx}
               risk={risk}
               isAdmin={isAdmin}
+              canUseOri={canUseOri}
+              onToggleWatchlist={watchlists.toggleSymbol}
+              isInWatchlist={researchSymbol ? watchlists.isInActive(researchSymbol) : false}
               onConvictionChange={setConvictionOverride}
               symbol={researchSymbol}
               stocks={stocks}
@@ -819,20 +904,28 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     { symbol: researchSymbol }
                   : null
               }
-              onRegather={(sym) =>
-                regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
+              onRegather={
+                isAdmin
+                  ? (sym) => regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
+                  : undefined
               }
-              regathering={enrichLoading}
+              regathering={isAdmin && enrichLoading}
               detailReloadToken={detailReloadToken}
               detail={researchDetail}
               onBack={() => setCurrentView('screener')}
+              onUpgradeToPro={openUpgradeModal}
               onAskOri={(sym) => {
+                if (!canUseOri) {
+                  openUpgradeModal();
+                  return;
+                }
                 chat.setIsOpen(true);
                 chat.askAboutStock(sym);
               }}
             />
           ) : currentView === 'portfolio-goals' ? (
             <PortfolioGoalsPage
+              portfolioGoals={portfolioGoals}
               stocks={stocks}
               theme={theme}
               onSelectStock={handleSelectStock}
@@ -1005,8 +1098,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     rows={filtered}
                     heatRows={filteredRows}
                     pins={pins}
+                    canUseOri={canUseOri}
+                    onUpgradeToPro={openUpgradeModal}
                     onTogglePin={togglePin}
-                    onAskAI={chat.askAboutStock}
+                    onAskAI={canUseOri ? chat.askAboutStock : undefined}
                     onSelectStock={handleSelectStock}
                     enrichLoading={enrichLoading}
                     sparklineForceVersion={sparklineForceVersion}
@@ -1017,7 +1112,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                 </div>
               ) : (
                 <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
-                  <ScorecardGrid rows={filtered} onSelectStock={handleSelectStock} pins={pins} onTogglePin={togglePin} />
+                  <ScorecardGrid rows={filtered} canUseOri={canUseOri} onSelectStock={handleSelectStock} pins={pins} onTogglePin={togglePin} />
                 </div>
               )}
             </>
@@ -1086,7 +1181,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         )}
 
         {chat.isOpen && (
-          <ChatPanel chat={chat} canUseOri={canUseOri} floating={!!(detailStock && detailStock2)} onUpgradeToPro={openUpgradeModal} />
+          <ChatPanel
+            chat={chat}
+            canUseOri={canUseOri}
+            floating={!!(detailStock && detailStock2)}
+            elevated={showWatchlist}
+            onUpgradeToPro={openUpgradeModal}
+          />
         )}
       </div>
 
@@ -1213,6 +1314,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           mode={usersModalMode}
           onAuthRefresh={onAuthRefresh}
           onUpgradeToPro={() => { setShowUsersModal(false); openUpgradeModal(); }}
+          appEnv={appEnv}
+          onTestWatchlistAlert={handleWlTestAlert}
+          testWatchlistAlertBusy={wlTestBusy}
+          testWatchlistAlertMsg={wlTestMsg}
+          testWatchlistAlertOk={wlTestOk}
         />
       )}
 
@@ -1233,6 +1339,33 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           }}
         />
       )}
+
+      <WatchlistPanel
+        open={showWatchlist}
+        onClose={() => setShowWatchlist(false)}
+        watchlist={watchlists.watchlist}
+        addSymbol={watchlists.addSymbol}
+        removeSymbol={watchlists.removeSymbol}
+        stocks={stocks}
+        snapshots={wlAlerts.snapshots}
+        pendingSymbols={pendingWlSymbols}
+        canUseOri={canUseOri}
+        onSelectSymbol={(sym) => {
+          setShowWatchlist(false);
+          openDeepResearch(sym);
+        }}
+        showDevTest={appEnv === "development"}
+        onTestAlert={handleWlTestAlert}
+        testAlertBusy={wlTestBusy}
+        testAlertMsg={wlTestMsg}
+        testAlertOk={wlTestOk}
+      />
+
+      <NotificationHost
+        alerts={wlAlerts.alerts}
+        onDismiss={wlAlerts.dismiss}
+        onOpenSymbol={(sym) => openDeepResearch(sym)}
+      />
 
       {showUpgradeModal && (
         <UpgradeModal

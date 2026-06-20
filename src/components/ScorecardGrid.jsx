@@ -45,8 +45,8 @@ function SubChip({ label, value, colors, title, lowCov }) {
   );
 }
 
-function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
-  const sc = r.conviction != null ? r.conviction : r.score != null ? Math.round(r.score * 100) : null;
+function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = false }) {
+  const sc = r.conviction != null ? r.conviction : null;
   const scoreColor = sc >= 70 ? '#10b981' : sc >= 45 ? '#f59e0b' : '#ef4444';
   const sec = SECTOR_COLORS[r.sector] || { bg: '#1e293b', fg: '#94a3b8' };
 
@@ -68,15 +68,25 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
         </div>
         <div className="flex items-center gap-2">
           {onTogglePin && (
-            <button
-              onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
-              title={pinned ? 'Unpin' : 'Pin'}
-              className={`text-lg leading-none ${
-                pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
-              }`}
+            <Tooltip
+              content={
+                pinned
+                  ? "Unpin from screener"
+                  : "Pin to screener — filter & sort priority\nNot the same as watchlist (eye icon)"
+              }
+              side="top"
+              maxWidth={200}
             >
-              {pinned ? '★' : '☆'}
-            </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onTogglePin(r.symbol); }}
+                aria-label={pinned ? "Unpin from screener" : "Pin to screener"}
+                className={`text-lg leading-none ${
+                  pinned ? 'text-amber-400' : 'text-gray-700 hover:text-amber-400'
+                }`}
+              >
+                {pinned ? '★' : '☆'}
+              </button>
+            </Tooltip>
           )}
           <span className="inline-flex items-center">
             <Tooltip
@@ -95,7 +105,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
                 <span className="text-[10px] align-super ml-0.5 text-amber-400">↓</span>
               </Tooltip>
             )}
-            {r.ori && (
+            {canUseOri && r.ori && (
               <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
                 <span className="text-[10px] text-purple-400 align-super ml-0.5 cursor-help">✧</span>
               </Tooltip>
@@ -202,7 +212,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin }) {
 
 const MemoizedScorecard = React.memo(Scorecard);
 
-export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }) {
+export default function ScorecardGrid({ rows, canUseOri = false, onSelectStock, pins, onTogglePin }) {
   // Pinned favorites are floated to the top (then ordered by conviction), so
   // they stay visible regardless of the sort — same behavior as the table view.
   const sorted = useMemo(
@@ -236,6 +246,7 @@ export default function ScorecardGrid({ rows, onSelectStock, pins, onTogglePin }
             onSelectStock={onSelectStock}
             pinned={pins?.has(r.symbol)}
             onTogglePin={onTogglePin}
+            canUseOri={canUseOri}
           />
         ))}
       </div>

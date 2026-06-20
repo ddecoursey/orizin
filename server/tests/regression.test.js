@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 
 import { marketSession } from '../marketHours.js';
 
@@ -374,12 +375,122 @@ test('GET /api/stocks/:symbol 404s for unknown symbols', async () => {
 test('GET /api/status reports counts; key flags are admin-only', async () => {
   const body = await json(await fetch(api('/api/status'), { headers: { cookie: userCookie } }));
   assert.equal(body.stockCount, 0);
+  assert.equal(body.enrichedCount, 0);
   assert.equal(body.apiKeySet, undefined);
   assert.equal(body.chatKeySet, undefined);
+  assert.ok(body.dataSync);
+  assert.equal(typeof body.dataSync.backgroundRunning, 'boolean');
+  assert.ok(['open', 'pre', 'after', 'closed'].includes(body.dataSync.marketSession));
+  assert.ok(
+    body.dataSync.lastSymbol === null || typeof body.dataSync.lastSymbol === 'string',
+  );
+  assert.ok(
+    body.dataSync.lastUpdate === null || typeof body.dataSync.lastUpdate === 'number',
+  );
 
   const adminBody = await json(await fetch(api('/api/status'), { headers: { cookie: adminCookie } }));
   assert.equal(adminBody.apiKeySet, false);
   assert.equal(adminBody.chatKeySet, false);
+});
+
+test('settings accept watchlists and activeWatchlistId', async () => {
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({
+      watchlists: [{ id: 'default', name: 'Watchlist', symbols: ['AAPL', 'MSFT'], updatedAt: 1 }],
+      activeWatchlistId: 'default',
+    }),
+  });
+  assert.equal(put.status, 200);
+  const merged = await json(await fetch(api('/api/settings'), { headers: { cookie: userCookie } }));
+  assert.equal(merged.data.activeWatchlistId, 'default');
+  assert.equal(merged.data.watchlists.length, 1);
+  assert.deepEqual(merged.data.watchlists[0].symbols, ['AAPL', 'MSFT']);
+});
+
+test('settings sanitize watchlists: single list, dedupe, uppercase, symbol cap', async () => {
+  const email = `wl_sanitize_${Date.now()}@example.com`;
+  const isoCookie = cookieFrom(await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  }));
+
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: isoCookie },
+    body: JSON.stringify({
+      watchlists: [
+        { id: 'default', name: 'Primary', symbols: ['aapl', 'aapl'], updatedAt: 1 },
+        { id: 'wl_1', name: 'Extra', symbols: [' msft ', 'nvda'], updatedAt: 1 },
+      ],
+      activeWatchlistId: 'wl_1',
+    }),
+  });
+  assert.equal(put.status, 200);
+
+  const merged = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
+  assert.equal(merged.data.watchlists.length, 1);
+  assert.equal(merged.data.watchlists[0].id, 'default');
+  assert.equal(merged.data.activeWatchlistId, 'default');
+  assert.deepEqual(merged.data.watchlists[0].symbols, ['AAPL', 'MSFT', 'NVDA']);
+
+  const manySymbols = Array.from({ length: 210 }, (_, i) => `sym${i}`);
+  const capped = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: isoCookie },
+    body: JSON.stringify({
+      watchlists: [{ id: 'default', name: 'W', symbols: manySymbols, updatedAt: 1 }],
+    }),
+  });
+  assert.equal(capped.status, 200);
+  const afterCap = await json(await fetch(api('/api/settings'), { headers: { cookie: isoCookie } }));
+  assert.equal(afterCap.data.watchlists[0].symbols.length, 200);
+  assert.equal(afterCap.data.watchlists[0].symbols[0], 'SYM0');
+});
+
+test('watchlist quotes API returns minimal payload', async () => {
+  const bad = await fetch(api('/api/watchlist/quotes'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ symbols: [] }),
+  });
+  assert.equal(bad.status, 400);
+
+  const res = await fetch(api('/api/watchlist/quotes'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ symbols: ['ZZNOPE'] }),
+  });
+  assert.equal(res.status, 200);
+  const body = await json(res);
+  assert.deepEqual(body.quotes, []);
+});
+
+test('watchlist alerts API lists, marks read, and blocks dev test in test env', async () => {
+  const list = await json(
+    await fetch(api('/api/watchlist/alerts?since=0'), { headers: { cookie: userCookie } }),
+  );
+  assert.ok(Array.isArray(list.alerts));
+  assert.equal(typeof list.unread, 'number');
+  assert.ok(list.snapshots && typeof list.snapshots === 'object');
+
+  const read = await json(
+    await fetch(api('/api/watchlist/alerts/read'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: userCookie },
+      body: JSON.stringify({ readThrough: Date.now() }),
+    }),
+  );
+  assert.equal(read.ok, true);
+
+  const testRoute = await fetch(api('/api/watchlist/alerts/test'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ type: 'price' }),
+  });
+  assert.equal(testRoute.status, 404);
 });
 
 test('refresh and enrich are admin-only', async () => {
@@ -393,6 +504,41 @@ test('refresh and enrich are admin-only', async () => {
     const body = await json(res);
     assert.ok(body.error);
   }
+});
+
+test('admin enrich reaches SSE handler (not blocked with 403)', async () => {
+  const res = await fetch(api('/api/stocks/enrich'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({}),
+  });
+  assert.notEqual(res.status, 403);
+  const text = await res.text();
+  assert.ok(text.includes('"type":"done"'));
+});
+
+test('GET /api/stocks/estimates/:symbol returns cached forward estimates', async () => {
+  const missing = await json(
+    await fetch(api('/api/stocks/estimates/NOPE'), { headers: { cookie: userCookie } }),
+  );
+  assert.equal(missing.estimates, null);
+  assert.equal(missing.updated_at, null);
+
+  const estimates = [
+    { date: '2026-12-31', estimatedRevenueAvg: 400e9, estimatedEpsAvg: 7.1 },
+  ];
+  const updatedAt = Date.now();
+  const db = new Database(path.join(tmpDir, 'screener.db'));
+  db.prepare(
+    `INSERT INTO ai_enrichment (symbol, estimates_json, updated_at) VALUES (?, ?, ?)`,
+  ).run('AAPL', JSON.stringify(estimates), updatedAt);
+  db.close();
+
+  const cached = await json(
+    await fetch(api('/api/stocks/estimates/aapl'), { headers: { cookie: userCookie } }),
+  );
+  assert.deepEqual(cached.estimates, estimates);
+  assert.equal(cached.updated_at, updatedAt);
 });
 
 test('sparkline endpoint degrades cleanly without an FMP key', async () => {

@@ -329,7 +329,7 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
       </div>
       <div className="p-3 sm:p-4 flex-1">
 
-        {/* Pinned only */}
+        {/* Pinned only — screener pins, separate from watchlists */}
         <label className="group flex items-center gap-2.5 text-[11px] text-gray-400 mb-2 cursor-pointer select-none">
           <input
             type="checkbox"

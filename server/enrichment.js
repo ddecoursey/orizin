@@ -3,12 +3,14 @@ import {
   fetchKeyMetrics,
   fetchRatios,
   fetchHistoricalPricesLight,
+  fetchFinancialGrowth,
   fetchProfile,
   fetchQuote,
   profileToRow,
 } from './fmp.js';
 import { logError } from './logger.js';
 import { marketSession } from './marketHours.js';
+import { getUnionWatchlistSymbols } from './watchlistSymbols.js';
 
 // Background continuous enrichment manager.
 // Runs at low sustained rate (e.g. 150-200 rpm) to keep the universe fresh
@@ -29,6 +31,13 @@ const TOP_TIER_COUNT = 500;                 // biggest names by mcap
 const TOP_TIER_STALE_MS = 30 * 60 * 1000;   // refresh their quotes every ~30 min
 const TAIL_STALE_MS = 6 * 60 * 60 * 1000;   // everything else ~ once per session
 const EXTENDED_STALE_MS = 2 * 60 * 60 * 1000; // pre/after-hours top-tier pace
+
+// Watchlist priority — fresher than the general universe rotation.
+const WATCHLIST_QUOTE_STALE_OPEN_MS = 20 * 60 * 1000;
+const WATCHLIST_QUOTE_STALE_EXT_MS = 45 * 60 * 1000;
+const WATCHLIST_ENRICH_STALE_MS = 60 * 60 * 1000;
+const WATCHLIST_QUOTE_LIMIT = 6;
+const WATCHLIST_ENRICH_LIMIT = 4;
 
 class EnrichmentManager {
   constructor() {
@@ -105,7 +114,7 @@ class EnrichmentManager {
 
   // refresh=true (maintenance pass): re-fetch km/rat even if already present, so
   // stale metrics on enriched rows actually get updated.
-  async _processOne(symbol, refresh = false) {
+  async _processOne(symbol, refresh = false, { growth = false } = {}) {
     const row = db.getStock(symbol);
     if (!row) return;
 
@@ -168,6 +177,21 @@ class EnrichmentManager {
         }
       }
 
+      // Watchlist hourly pass also refreshes TTM growth fields for conviction alerts.
+      if (growth || refresh) {
+        try {
+          const g = await fetchFinancialGrowth(symbol, { maxRetries: 1, timeoutMs: 10000 });
+          if (g) {
+            db.saveGrowth(symbol, g);
+            didWork = true;
+          } else {
+            db.markGrowthChecked?.(symbol);
+          }
+        } catch {
+          // non-fatal
+        }
+      }
+
       // Occasionally refresh a sparkline if very old (background maintenance)
       const spark = db.getSparkline ? db.getSparkline(symbol, 45) : null;
       const sparkAge = spark ? (Date.now() - (spark.updated_at || 0)) : Infinity;
@@ -176,6 +200,9 @@ class EnrichmentManager {
           const data = await fetchHistoricalPricesLight(symbol, 45);
           if (data && data.length) {
             db.saveSparkline(symbol, 45, data);
+            if (db.saveMomentum && db.momentumFromSparkline) {
+              db.saveMomentum(symbol, db.momentumFromSparkline(data));
+            }
           }
         } catch (e) {
           // non-fatal for background
@@ -233,6 +260,8 @@ class EnrichmentManager {
   _buildWork() {
     const session = marketSession();
     const work = [];
+    const watchlist = getUnionWatchlistSymbols();
+    const watchSet = new Set(watchlist);
 
     // 1. Missing core data is always first priority (smaller slice when the
     //    market is open so quotes get budget too).
@@ -240,39 +269,66 @@ class EnrichmentManager {
     const missing = db.getMissingEnrichDue ? db.getMissingEnrichDue(missingBudget) : [];
     for (const s of missing) work.push({ symbol: s, kind: 'enrich', refresh: false });
 
-    // 2. Live quotes while the market is trading (and a slower trickle in
+    const seen = () => new Set(work.map((w) => w.symbol));
+
+    // 2. Watchlist priority — quotes + hourly fundamentals before the broad universe.
+    if (watchlist.length) {
+      let s = seen();
+      if (session === 'open' || session === 'pre' || session === 'after') {
+        const quoteStale = session === 'open' ? WATCHLIST_QUOTE_STALE_OPEN_MS : WATCHLIST_QUOTE_STALE_EXT_MS;
+        const wlQuotes = db.getWatchlistQuoteDue?.(watchlist, quoteStale, WATCHLIST_QUOTE_LIMIT) || [];
+        for (const sym of wlQuotes) {
+          if (s.has(sym)) continue;
+          s.add(sym);
+          work.push({ symbol: sym, kind: 'quote', watchlist: true });
+        }
+      }
+      s = seen();
+      const wlEnrich = db.getWatchlistEnrichDue?.(watchlist, WATCHLIST_ENRICH_STALE_MS, WATCHLIST_ENRICH_LIMIT) || [];
+      for (const sym of wlEnrich) {
+        if (s.has(sym)) continue;
+        s.add(sym);
+        work.push({ symbol: sym, kind: 'enrich', refresh: true, growth: true, watchlist: true });
+      }
+    }
+
+    // 3. Live quotes while the market is trading (and a slower trickle in
     //    pre/after hours to capture the open/close). Nothing overnight/weekends.
     if (session === 'open') {
       const top = db.getTopPriceRefreshDue?.(TOP_TIER_COUNT, TOP_TIER_STALE_MS, 8) || [];
       const tail = db.getAnyPriceRefreshDue?.(TAIL_STALE_MS, 6) || [];
-      const seen = new Set(work.map((w) => w.symbol));
-      for (const s of [...top, ...tail]) {
-        if (seen.has(s)) continue;
-        seen.add(s);
-        work.push({ symbol: s, kind: 'quote' });
+      let s = seen();
+      for (const sym of [...top, ...tail]) {
+        if (s.has(sym)) continue;
+        s.add(sym);
+        work.push({ symbol: sym, kind: 'quote' });
       }
     } else if (session === 'pre' || session === 'after') {
       const top = db.getTopPriceRefreshDue?.(TOP_TIER_COUNT, EXTENDED_STALE_MS, 4) || [];
-      const seen = new Set(work.map((w) => w.symbol));
-      for (const s of top) {
-        if (seen.has(s)) continue;
-        seen.add(s);
-        work.push({ symbol: s, kind: 'quote' });
+      let s = seen();
+      for (const sym of top) {
+        if (s.has(sym)) continue;
+        s.add(sym);
+        work.push({ symbol: sym, kind: 'quote' });
       }
     }
 
-    // 3. Spare budget → refresh the stalest already-enriched fundamentals.
+    // 4. Spare budget → refresh the stalest already-enriched fundamentals.
     if (work.length < 12) {
       const stale = db.getStaleEnriched ? db.getStaleEnriched(12 - work.length) : [];
-      const seen = new Set(work.map((w) => w.symbol));
-      for (const s of stale) {
-        if (seen.has(s)) continue;
-        seen.add(s);
-        work.push({ symbol: s, kind: 'enrich', refresh: true });
+      let s = seen();
+      for (const sym of stale) {
+        if (s.has(sym)) continue;
+        if (watchSet.has(sym)) {
+          const row = db.getStock(sym);
+          if (row?.updated_at && Date.now() - row.updated_at < 24 * 60 * 60 * 1000) continue;
+        }
+        s.add(sym);
+        work.push({ symbol: sym, kind: 'enrich', refresh: true });
       }
     }
 
-    return { session, work };
+    return { session, work, watchlistCount: watchlist.length };
   }
 
   async _runLoop() {
@@ -294,7 +350,7 @@ class EnrichmentManager {
           if (item.kind === 'quote') {
             await this._refreshQuote(item.symbol);
           } else {
-            await this._processOne(item.symbol, item.refresh);
+            await this._processOne(item.symbol, item.refresh, { growth: !!item.growth });
           }
         }
 

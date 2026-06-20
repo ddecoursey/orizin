@@ -7,6 +7,7 @@ function generateId() {
 
 function normalizeHolding(holding, totalInvested) {
   const h = { ...holding };
+  if (!h.ticker && h.symbol) h.ticker = String(h.symbol).trim().toUpperCase();
   const t = Number(totalInvested) || 0;
   if (h.dollars != null && h.percent == null && t > 0) {
     h.percent = (Number(h.dollars) / t) * 100;
@@ -28,7 +29,14 @@ export function usePortfolioGoals() {
     let mounted = true;
     fetchUserSettings().then((settings) => {
       if (!mounted) return;
-      if (Array.isArray(settings.portfolios)) setPortfolios(settings.portfolios);
+      if (Array.isArray(settings.portfolios)) {
+        setPortfolios(
+          settings.portfolios.map((p) => ({
+            ...p,
+            holdings: (p.holdings || []).map((h) => normalizeHolding(h, p.totalInvested)),
+          })),
+        );
+      }
       if (Array.isArray(settings.goals)) setGoals(settings.goals);
       if (Array.isArray(settings.theses)) setTheses(settings.theses);
       setHydrated(true);

@@ -1,8 +1,14 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => {
+  // Keep the Vite /api proxy aligned with server PORT (.env), so login works
+  // when the backend isn't on the hard-coded 3001 default.
+  const env = loadEnv(mode, process.cwd(), '')
+  const apiPort = env.PORT || '3001'
+
+  return {
   plugins: [react(), tailwindcss()],
   build: {
     // The main app chunk is ~540KB minified (158KB gzip) by design — the data
@@ -19,9 +25,10 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: `http://localhost:${apiPort}`,
         changeOrigin: true,
       },
     },
   },
+  }
 })

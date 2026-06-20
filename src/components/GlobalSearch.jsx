@@ -3,7 +3,7 @@ import { IconSearch } from "./icons.jsx";
 
 // Header search across the whole universe. Selecting a result opens that
 // stock's company-overview panel (via onSelect), regardless of current filters.
-export default function GlobalSearch({ stocks = [], onSelect }) {
+export default function GlobalSearch({ stocks = [], onSelect, placeholder = "Search any stock…", className = "" }) {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -60,7 +60,7 @@ export default function GlobalSearch({ stocks = [], onSelect }) {
   }
 
   return (
-    <div ref={ref} className="relative flex-1 max-w-md min-w-0">
+    <div ref={ref} className={`relative flex-1 max-w-md min-w-0 ${className}`.trim()}>
       <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2 lg:py-1.5 focus-within:border-gray-600 transition-colors duration-150">
         <IconSearch className="w-3.5 h-3.5 text-gray-600 shrink-0" />
         <input
@@ -71,7 +71,7 @@ export default function GlobalSearch({ stocks = [], onSelect }) {
           }}
           onFocus={() => q && setOpen(true)}
           onKeyDown={onKeyDown}
-          placeholder="Search any stock…"
+          placeholder={placeholder}
           autoComplete="off"
           autoCorrect="off"
           autoCapitalize="off"

@@ -10,6 +10,7 @@ import {
   IconRefresh,
   IconChevronDown,
 } from "./icons.jsx";
+import DataSyncChip from "./DataSyncChip.jsx";
 
 // Dropdown that opens on hover (fluid) and also on click (so touch works).
 // Closing is handled by mouse-leave (with a small delay so crossing the gap to
@@ -108,6 +109,8 @@ export default function Header({
   currentView = 'screener',
   onNavigate,
   stocks = [],
+  onOpenWatchlist,
+  watchlistUnread = 0,
 }) {
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
@@ -188,11 +191,12 @@ export default function Header({
 
       {/* Compact status — just the dot once loaded (message on hover) */}
       <div
-        className="flex items-center gap-1.5 text-xs text-gray-400 border-l border-gray-800 pl-2 sm:pl-3 shrink-0"
+        className="flex items-center gap-2 text-xs text-gray-400 border-l border-gray-800 pl-2 sm:pl-3 shrink-0 min-w-0"
         title={status.msg}
       >
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
         {status.type !== "ready" && <span className="hidden sm:inline truncate max-w-[220px]">{status.msg}</span>}
+        <DataSyncChip isAdmin={isAdmin} />
       </div>
 
       {/* Top-level page navigation */}
@@ -209,8 +213,23 @@ export default function Header({
         </NavButton>
       </nav>
 
-      {/* Right: Data menu + Profile menu */}
+      {/* Right: watchlist panel + data menu + profile */}
       <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        {onOpenWatchlist && (
+          <button
+            type="button"
+            onClick={onOpenWatchlist}
+            className="relative px-2.5 py-1.5 lg:px-2 lg:py-1 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700/80 hover:border-gray-600 rounded-md transition-colors cursor-pointer whitespace-nowrap"
+            title="Open watchlist panel — track news and price moves"
+          >
+            Watchlist
+            {watchlistUnread > 0 && (
+              <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-violet-600 text-[9px] font-bold text-white flex items-center justify-center">
+                {watchlistUnread > 9 ? "9+" : watchlistUnread}
+              </span>
+            )}
+          </button>
+        )}
         {/* Data menu (Refresh / Gather) — admin only: normal users cannot trigger universe or data refreshes from FMP */}
         {isAdmin && (
           <HeaderMenu

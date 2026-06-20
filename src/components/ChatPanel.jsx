@@ -166,7 +166,8 @@ function ProPaywall({ onUpgradeToPro }) {
 // a flex column. Used when both compare panes are open on the screener: three
 // static 24rem columns don't fit, the chat got pushed off-screen and its close
 // button became unreachable. Floating keeps it on top and dismissable.
-export default function ChatPanel({ chat, canUseOri = true, floating = false, onUpgradeToPro }) {
+export default function ChatPanel({ chat, canUseOri = true, floating = false, elevated = false, onUpgradeToPro }) {
+  const overlayMode = floating || elevated;
   const reduce = useReducedMotion();
   const hints = pageHints(chat.view, chat.activeSymbol);
   const [input, setInput] = useState("");
@@ -277,7 +278,7 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false, on
       {/* Backdrop on tablet/phone where the sheet floats over the content
           (and on all sizes when the panel is in floating overlay mode) */}
       <m.div
-        className={`fixed inset-0 z-40 bg-black/50 touch-none ${floating ? "" : "lg:hidden"}`}
+        className={`fixed inset-0 ${overlayMode ? "z-[60]" : "z-40"} bg-black/50 touch-none ${overlayMode ? "" : "lg:hidden"}`}
         onClick={() => chat.setIsOpen(false)}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -290,8 +291,8 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false, on
         exit={reduce ? { opacity: 0 } : { opacity: 0, y: 12 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
         className={
-          floating
-            ? `fixed inset-x-0 bottom-0 z-50 max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700
+          overlayMode
+            ? `fixed inset-x-0 bottom-0 z-[70] max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700
               lg:inset-x-auto lg:inset-y-0 lg:right-0 lg:max-h-none lg:w-96 lg:rounded-none lg:border-t-0
               bg-gray-900 border-l border-gray-700 flex flex-col overflow-hidden`
             : `fixed inset-x-0 bottom-0 z-50 max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700

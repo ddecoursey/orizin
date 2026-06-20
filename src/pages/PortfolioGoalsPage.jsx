@@ -1,9 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { usePortfolioGoals } from '../hooks/usePortfolioGoals.js';
 import BrokeragePanel from '../components/BrokeragePanel.jsx';
 import InvestingPreferences from '../components/InvestingPreferences.jsx';
 import { IconPie } from '../components/icons.jsx';
+import { buildFitContext } from '../lib/fitScore.js';
+import { computeSectorGaps } from '../lib/portfolioAnalysis.js';
 
 function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
   const [inputValue, setInputValue] = useState(value || '');
@@ -62,8 +63,38 @@ function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
   );
 }
 
-export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSelectStock, detailStock, weights, setWeights, risk, setRisk }) {
-  const { portfolios, goals, theses, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, addThesis, updateThesis, deleteThesis, grandTotal, overallAllocations } = usePortfolioGoals();
+export default function PortfolioGoalsPage({
+  portfolioGoals,
+  stocks = [],
+  theme = 'dark',
+  onSelectStock,
+  detailStock,
+  weights,
+  setWeights,
+  risk,
+  setRisk,
+}) {
+  const {
+    portfolios,
+    goals,
+    theses,
+    hydrated,
+    addPortfolio,
+    updatePortfolio,
+    deletePortfolio,
+    renamePortfolio,
+    addHolding,
+    updateHolding,
+    deleteHolding,
+    addGoal,
+    updateGoal,
+    deleteGoal,
+    addThesis,
+    updateThesis,
+    deleteThesis,
+    grandTotal,
+    overallAllocations,
+  } = portfolioGoals || {};
   const [goalsVisible, setGoalsVisible] = useState(() => { const saved = localStorage.getItem('portfolio_goals_visible'); return saved !== null ? saved === 'true' : true; });
   const [allocationLimit, setAllocationLimit] = useState(10);
   // Collapse the heavy holdings editor by default for a cleaner page — the
@@ -84,8 +115,13 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
   const handleTickerClick = (ticker) => { if (!onSelectStock || ticker === 'MISC') return; const stock = stocks.find(s => s.symbol === ticker.toUpperCase()); if (stock) onSelectStock(stock); };
   const formatMoney = (n) => (n || 0).toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const formatPercent = (n) => (n || 0).toFixed(2) + '%';
+  const fitCtx = useMemo(
+    () => buildFitContext({ portfolios, goals, theses, stocks }),
+    [portfolios, goals, theses, stocks],
+  );
+  const sectorGaps = useMemo(() => computeSectorGaps(fitCtx, stocks), [fitCtx, stocks]);
 
-  if (!hydrated) return <div className="p-8 text-gray-400">Loading...</div>;
+  if (!portfolioGoals || !hydrated) return <div className="p-8 text-gray-400">Loading...</div>;
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">
@@ -120,6 +156,20 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
                 {overallAllocations.length > allocationLimit && allocationLimit < 50 && (
                   <button onClick={() => setAllocationLimit(l => Math.min(50, l + 5))} className="mt-4 text-xs text-blue-400 hover:text-blue-300 font-medium">+ Add 5 more</button>
                 )}
+              </div>
+            )}
+            {sectorGaps.length > 0 && (
+              <div className="rounded-2xl border border-violet-900/40 bg-violet-950/20 p-5 mb-8">
+                <h3 className="text-sm font-semibold text-violet-200 mb-2">Sector gaps</h3>
+                <p className="text-[11px] text-gray-500 mb-3">Sectors in the universe where your portfolio is under 5% allocated — potential diversification opportunities.</p>
+                <ul className="space-y-1.5 text-[11px] text-gray-300">
+                  {sectorGaps.map((g) => (
+                    <li key={g.sector} className="flex justify-between gap-2 border-b border-gray-800/50 py-1">
+                      <span>{g.sector}</span>
+                      <span className="text-gray-500 tabular-nums">{g.portfolioPct}% held · {g.universeCount} names in universe</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             )}
             {/* Brokerage scaffolding: simulated account linking + order tickets,

@@ -1,6 +1,7 @@
 import InfoHint from "./InfoHint.jsx";
 import Tooltip from "./Tooltip.jsx";
 import { IconRefresh } from "./icons.jsx";
+import { PRO_PRICE_LABEL } from "../lib/billing.js";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
 // Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
@@ -80,7 +81,34 @@ function Pillar({ p, oriState }) {
   return reasons ? <Tooltip content={reasons} maxWidth={200}>{inner}</Tooltip> : inner;
 }
 
-export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false }) {
+/** Shown on Deep Research when the user is on the free tier. */
+export function GamePlanProGate({ onUpgrade }) {
+  return (
+    <section className="rounded-xl p-4 sm:p-5 border border-violet-900/45 bg-violet-950/25">
+      <header className="flex items-center gap-2 mb-2">
+        <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
+        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/60 text-violet-300/90 border border-violet-800/50">Pro</span>
+      </header>
+      <p className="text-sm text-gray-200 leading-relaxed">
+        Unified conviction, hold horizon, right-now action, and Ori&apos;s intangibles read — the full verdict for a stock.
+      </p>
+      <p className="text-xs text-gray-500 mt-2">
+        Free accounts still get charts, financials, and the Orizin fundamentals score in the header.
+      </p>
+      {onUpgrade && (
+        <button
+          type="button"
+          onClick={onUpgrade}
+          className="mt-4 text-xs font-semibold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer"
+        >
+          Upgrade to Pro — {PRO_PRICE_LABEL}
+        </button>
+      )}
+    </section>
+  );
+}
+
+export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false, canUseOri = true }) {
   if (!verdict) return null;
 
   if (verdict.insufficient) {
@@ -102,7 +130,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
 
   return (
     <section className={`rounded-xl p-4 sm:p-5 border ${ht.border} ${ht.bg}`}>
-      <Header confidence={verdict.confidence} />
+      <Header confidence={verdict.confidence} canUseOri={canUseOri} />
 
       {/* Conviction · Horizon · Action */}
       <div className="mt-3 grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-4">
@@ -148,7 +176,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
       <p className="mt-3 text-[12.5px] text-gray-200 leading-relaxed">{verdict.headline}</p>
 
       {/* Ori's Take */}
-      <OriTake ori={ori} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} />
+      <OriTake ori={ori} oriState={oriState} canUseOri={canUseOri} oriReady={oriReady} />
 
       {/* Footer */}
       <div className="mt-4 pt-3 border-t border-gray-800/70 flex items-center justify-between gap-3 flex-wrap">
@@ -163,7 +191,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
   );
 }
 
-function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
+function OriTake({ ori, oriState, canUseOri = false, oriReady = false }) {
   const { loading, locked, error } = oriState || {};
   const riskCls = ori?.riskLevel ? RISK[ori.riskLevel] || RISK.high : null;
 
@@ -174,17 +202,28 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
           <span>✦</span> Ori's Take
         </h4>
         <div className="flex items-center gap-2 shrink-0">
-          {isAdmin && oriReady && oriState?.refresh && !locked && (
+          {loading && oriState?.cancel && (
             <button
               type="button"
-              onClick={oriState.refresh}
-              disabled={loading}
-              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer"
-              title="Re-run Ori's take with frontier model (bypasses 24h cache)"
+              onClick={oriState.cancel}
+              className="text-[10px] font-semibold px-2 py-1 rounded-md bg-gray-900/50 text-gray-300 border border-gray-700/60 hover:bg-gray-800/60 transition-colors active:scale-95 cursor-pointer"
             >
-              <IconRefresh className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
-              {loading ? "Refreshing…" : "Refresh Ori"}
+              Cancel
             </button>
+          )}
+          {canUseOri && oriReady && oriState?.refresh && !locked && (
+            <Tooltip content="Refresh with flash/lite — your 24h Pro analysis stays cached" side="top" maxWidth={240}>
+              <button
+                type="button"
+                onClick={oriState.refresh}
+                disabled={loading}
+                aria-label="Refresh Ori's take"
+                className="text-[10px] font-semibold px-2 py-1 rounded-md bg-violet-900/40 text-violet-200 border border-violet-800/50 hover:bg-violet-800/50 transition-colors active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-1 cursor-pointer"
+              >
+                <IconRefresh className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+                {loading ? "Refreshing…" : "Refresh Ori"}
+              </button>
+            </Tooltip>
           )}
           {ori?.riskLevel && (
             <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold uppercase tracking-wide ${riskCls.bg} ${riskCls.text}`}>
@@ -288,7 +327,11 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
         </div>
       ) : (
         <div className="text-[11.5px] text-gray-500">
-          <p>{error || "Ori couldn't weigh in right now. The data-driven Game Plan above still stands."}</p>
+          <p>
+            {oriState?.cancelled
+              ? "Cancelled. The data-driven Game Plan above still stands."
+              : error || "Ori couldn't weigh in right now. The data-driven Game Plan above still stands."}
+          </p>
           {oriState?.retry && (
             <button
               onClick={oriState.retry}
@@ -303,12 +346,14 @@ function OriTake({ ori, oriState, isAdmin = false, oriReady = false }) {
   );
 }
 
-function Header({ confidence }) {
+function Header({ confidence, canUseOri = true }) {
   return (
     <header className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-2">
         <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
-        <InfoHint text="0–100 conviction from fundamentals, value, technicals, insiders, analysts, Fit, and Ori — plus hold horizon and action. Not financial advice." />
+        <InfoHint text={canUseOri
+          ? "0–100 conviction from fundamentals, value, technicals, insiders, analysts, Fit, and Ori — plus hold horizon and action. Not financial advice."
+          : "Fundamentals-only view from shared data. Upgrade to Pro for full conviction and Ori's take."} />
       </div>
       <div className="flex items-center gap-2">
         {confidence && (
@@ -316,7 +361,11 @@ function Header({ confidence }) {
             {confidence} confidence
           </span>
         )}
-        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">✦ Ori · Pro</span>
+        {canUseOri ? (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">✦ Full conviction · Pro</span>
+        ) : (
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-800 text-gray-400 border border-gray-700">Fundamentals view</span>
+        )}
       </div>
     </header>
   );

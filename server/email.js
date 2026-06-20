@@ -125,6 +125,39 @@ export function cancelEmail(proUntilMs) {
   };
 }
 
+export function watchlistDigestEmail({ items = [], date }) {
+  const lines = items.map((a) => {
+    const sym = a.symbol || '—';
+    if (a.type === 'price') return `<li><strong>${sym}</strong> — ${a.title}</li>`;
+    if (a.type === 'conviction') return `<li><strong>${sym}</strong> — ${a.title}</li>`;
+    if (a.type === 'news') return `<li><strong>${sym}</strong> — <a href="${a.url}">${a.title}</a></li>`;
+    return `<li><strong>${sym}</strong> — ${a.title || a.message}</li>`;
+  }).join('');
+  const plain = items.map((a) => `${a.symbol}: ${a.title || a.message}`).join('\n');
+  return {
+    subject: `Orizin watchlist — ${date || 'today'}`,
+    text: `Your watchlist digest:\n\n${plain}`,
+    html: wrap(
+      `<p>Here's what moved on your watchlist:</p><ul style="padding-left:18px;line-height:1.6">${lines}</ul>
+       <p style="font-size:12px;color:#666">You're receiving this because watchlist email digests are enabled in Account settings.</p>`,
+    ),
+  };
+}
+
+export function watchlistUrgentEmail({ symbol, movePct, price }) {
+  const dir = movePct >= 0 ? 'up' : 'down';
+  const px = price != null ? `$${Number(price).toFixed(2)}` : '—';
+  return {
+    subject: `Urgent: ${symbol} ${dir} ${Math.abs(movePct).toFixed(1)}%`,
+    text: `${symbol} is ${dir} ${Math.abs(movePct).toFixed(1)}% vs today's session baseline. Last price: ${px}.`,
+    html: wrap(
+      `<p><strong>${symbol}</strong> moved <strong>${dir} ${Math.abs(movePct).toFixed(1)}%</strong> vs today's session open.</p>
+       <p>Last price: <strong>${px}</strong></p>
+       <p style="font-size:12px;color:#666">Large-move instant alerts can be turned off in Account settings.</p>`,
+    ),
+  };
+}
+
 export function deletedAccountEmail() {
   return {
     subject: 'Your Orizin account was deleted',

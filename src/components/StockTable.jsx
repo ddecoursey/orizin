@@ -6,6 +6,7 @@ import Sparkline from "./Sparkline";
 import { IconSearch } from "./icons.jsx";
 import Tooltip from "./Tooltip.jsx";
 import OriTip from "./OriTip.jsx";
+import { resolveSortField, tierColumnDefs } from "../lib/screenerDisplay.js";
 
 const GOOD_H = new Set([
   "gross_margin",
@@ -166,6 +167,8 @@ export default function StockTable({
   heatRows = rows,
   pins,
   onTogglePin,
+  canUseOri = true,
+  onUpgradeToPro,
   onAskAI,
   onSelectStock,
   enrichLoading = false,
@@ -174,6 +177,7 @@ export default function StockTable({
   sortDir = -1,
   onSortChange,
 }) {
+  const cols = useMemo(() => tierColumnDefs(COLS), []);
   // symbol -> number[]. localStorage hydration happens lazily per symbol inside
   // fetchSparklineInternal (getSparklineFromLocal) — the old eager loop parsed
   // every persisted sparkline JSON blob synchronously at mount, which scaled
@@ -323,12 +327,13 @@ export default function StockTable({
 
   const sorted = useMemo(() => {
     const pinnedSet = pins;
+    const sortField = resolveSortField(sortKey);
     return [...rows].sort((a, b) => {
       const ap = pinnedSet.has(a.symbol),
         bp = pinnedSet.has(b.symbol);
       if (ap !== bp) return ap ? -1 : 1;
-      const av = a[sortKey];
-      const bv = b[sortKey];
+      const av = a[sortField];
+      const bv = b[sortField];
       if (av == null || av === "" || (typeof av === "number" && !isFinite(av))) return 1;
       if (bv == null || bv === "" || (typeof bv === "number" && !isFinite(bv))) return -1;
       if (typeof av === "string" || typeof bv === "string") {
@@ -402,7 +407,7 @@ export default function StockTable({
   }, [sparklineForceVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSort(key) {
-    const col = COLS.find((c) => c.key === key);
+    const col = cols.find((c) => c.key === key);
     if (col?.nosort || !onSortChange) return;
     if (sortKey === key) onSortChange(key, -sortDir);
     else onSortChange(key, key === "symbol" || key === "sector" ? 1 : -1);
@@ -470,8 +475,8 @@ export default function StockTable({
 
         <thead className="sticky top-0 z-20 bg-gray-950">
           <tr>
-            {COLS.map((c) => {
-              const w = COL_WIDTHS[c.key];
+            {cols.map((c) => {
+              const w = COL_WIDTHS[c.key] || COL_WIDTHS[c.key === "orizin" ? "conviction" : c.key];
               return (
                 <th
                   key={c.key}
@@ -487,10 +492,14 @@ export default function StockTable({
                 >
                   {c.key === "conviction" ? (
                     <Tooltip
-                      content="0–100 verdict: fundamentals + valuation. Refines on Deep Research. −penalty when weighted Q/V/G pillars lack data."
+                      content={
+                        canUseOri
+                          ? "0–100 conviction from fundamentals + Ori when available. Refines on Deep Research."
+                          : "0–100 conviction from fundamentals and market data — no Ori on Free."
+                      }
                       maxWidth={220}
                     >
-                      {c.label}
+                      {c.label}{canUseOri ? <> <span className="text-violet-400/80">+ Ori</span></> : null}
                     </Tooltip>
                   ) : (
                     c.label
@@ -512,7 +521,7 @@ export default function StockTable({
               slice and jumping/dragging through a large universe misbehaved. */}
           {paddingTop > 0 && (
             <tr aria-hidden="true">
-              <td colSpan={COLS.length + (onAskAI ? 1 : 0)} style={{ height: `${paddingTop}px`, padding: 0, border: 0 }} />
+              <td colSpan={cols.length + (onAskAI ? 1 : 0)} style={{ height: `${paddingTop}px`, padding: 0, border: 0 }} />
             </tr>
           )}
           {virtualItems.map((virtualRow) => {
@@ -534,15 +543,25 @@ export default function StockTable({
                   className={`px-3 py-2 text-left sticky left-0 z-10 border-r border-gray-950 ${pinned ? "bg-amber-950" : "bg-gray-950 group-hover:bg-gray-900"}`}
                   style={{ width: '32px', minWidth: '32px' }}
                 >
-                  <button
-                    onClick={() => onTogglePin(r.symbol)}
-                    className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
-                      pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
-                    }`}
-                    title={pinned ? "Unpin" : "Pin"}
+                  <Tooltip
+                    content={
+                      pinned
+                        ? "Unpin from screener"
+                        : "Pin to screener — filter & sort priority\nNot the same as watchlist (eye icon)"
+                    }
+                    side="top"
+                    maxWidth={200}
                   >
-                    {pinned ? "★" : "☆"}
-                  </button>
+                    <button
+                      onClick={() => onTogglePin(r.symbol)}
+                      aria-label={pinned ? "Unpin from screener" : "Pin to screener"}
+                      className={`inline-flex items-center justify-center w-7 h-7 -my-1 text-base leading-none ${
+                        pinned ? "text-amber-400" : "text-gray-700 hover:text-amber-400"
+                      }`}
+                    >
+                      {pinned ? "★" : "☆"}
+                    </button>
+                  </Tooltip>
                 </td>
 
                 {/* Symbol + name — sticky col 2 */}
@@ -581,14 +600,18 @@ export default function StockTable({
                   {fmt(r.price, "price") ?? <span className="text-gray-600">—</span>}
                 </td>
 
-                {/* Conviction */}
+                {/* Conviction (Pro) or Orizin Score (free) */}
                 <td className="px-3 py-2 min-w-[80px]">
                   <span className="inline-flex items-center">
                     <Tooltip
                       content={
                         r.conviction != null && r.dataCoveragePenalty > 0
                           ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
-                          : (r.conviction != null ? "Fundamentals + valuation (0–100)." : undefined)
+                          : r.conviction != null
+                            ? canUseOri
+                              ? "Conviction (0–100) with Ori when available."
+                              : "Conviction (0–100) from fundamentals — no Ori on Free."
+                            : undefined
                       }
                     >
                       <span><ScoreBar score={r.conviction != null ? r.conviction / 100 : null} /></span>
@@ -598,7 +621,7 @@ export default function StockTable({
                         <span className="ml-1 text-[9px] text-amber-400 align-super">↓</span>
                       </Tooltip>
                     )}
-                    {r.ori && (
+                    {canUseOri && r.ori && (
                       <Tooltip content={<OriTip ori={r.ori} />} maxWidth={200}>
                         <span className="ml-1 text-[8px] text-purple-400 align-super cursor-help">✧</span>
                       </Tooltip>

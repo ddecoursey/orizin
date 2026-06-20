@@ -11,12 +11,14 @@ import stocksRouter, { getDetailCacheStats, generateLiteIntangibles } from './ro
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import settingsRouter from './routes/settings.js';
+import watchlistRouter from './routes/watchlist.js';
 import brokerageRouter from './routes/brokerage.js';
 import billingRouter from './routes/billing.js';
 import { sendEmail, welcomeEmail, resetPasswordEmail, deletedAccountEmail } from './email.js';
 import * as db from './db.js';
 import * as paypal from './paypal.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
+import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 
 // Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
@@ -282,7 +284,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   const currentlyAuthEnabled = isAuthEnabled();
   if (!currentlyAuthEnabled) return res.json({ ok: true, user: 'default', authEnabled: false });
 
-  const username = String(req.body?.user || '');
+  const username = String(req.body?.user || '').trim();
   const password = String(req.body?.password || '');
 
   let match = null;
@@ -594,6 +596,7 @@ app.use('/api', stocksRouter);
 app.use('/api', chatRouter);
 app.use('/api', usersRouter);
 app.use('/api', settingsRouter);
+app.use('/api', watchlistRouter);
 app.use('/api', brokerageRouter);
 app.use('/api', billingRouter);
 
@@ -772,6 +775,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 
   // Start the always-on low-rate background enrichment job (if not disabled)
   startBackgroundEnrichmentIfEnabled();
+  startWatchlistAlertJobs();
 
   // One-time: backfill the screener momentum signal from sparklines we already
   // have, so the Conviction technicals factor lights up immediately instead of
