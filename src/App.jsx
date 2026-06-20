@@ -124,6 +124,14 @@ export default function App() {
     setAuthState("login");
   }
 
+  // The marketing/landing page is designed for dark mode only. Strip the global
+  // .light class while signed out so a prior in-app light theme doesn't invert
+  // its gray scale and accents. MainApp re-applies the user's theme on login.
+  useLayoutEffect(() => {
+    if (authState !== "login" && authState !== "checking") return;
+    document.documentElement.classList.remove("light");
+  }, [authState]);
+
   if (authState === "checking") {
     return <div className="h-screen bg-gray-950" />;
   }

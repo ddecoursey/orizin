@@ -163,6 +163,22 @@ body { background-color: var(--color-gray-950); }
   }
 }
 
+/* Landing / start page — always dark, even if .light is briefly present. */
+.landing-page {
+  color-scheme: dark;
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
+  --color-gray-950: #030712;
+}
+
 /* Force dark theme for the Upgrade to Pro modal card, even in light mode.
    Prevents the modal from appearing as a blank or invisible white box due to light mode overrides. */
 .upgrade-modal-card {
