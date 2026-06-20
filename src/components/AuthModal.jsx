@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { m, AnimatePresence, useReducedMotion } from "../lib/motion.js";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // Auth dialog for the landing page: sign in, create account, or (on a fresh
 // database) first-admin setup. Same endpoints the old full-page LoginPage
 // used — /api/auth/login, /api/auth/signup, /api/auth/setup-first-admin.
@@ -80,13 +82,22 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
       if (password !== confirm) return setError("Passwords don't match");
       if (password.length < 8) return setError("Password must be at least 8 characters");
     }
+    if (mode === "signup" || mode === "setup") {
+      const email = user.trim().toLowerCase();
+      if (!EMAIL_RE.test(email)) return setError("A valid email address is required");
+    }
 
     setSubmitting(true);
     const endpoint =
       mode === "setup" ? "/api/auth/setup-first-admin"
       : mode === "signup" ? "/api/auth/signup"
       : "/api/auth/login";
-    const body = mode === "signup" ? { email: user, password } : { user, password };
+    const email = user.trim().toLowerCase();
+    const body = mode === "signup"
+      ? { email, password }
+      : mode === "setup"
+        ? { user: email, password }
+        : { user, password };
 
     try {
       const res = await fetch(endpoint, {
@@ -176,16 +187,16 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
-                  {mode === "signup" || mode === "forgot" ? "Email" : mode === "setup" ? "Username" : "Username or email"}
+                  {mode === "signup" || mode === "forgot" || mode === "setup" ? "Email" : "Username or email"}
                 </label>
                 <input
-                  type={mode === "signup" || mode === "forgot" ? "email" : "text"}
+                  type={mode === "signup" || mode === "forgot" || mode === "setup" ? "email" : "text"}
                   value={user}
                   onChange={(e) => setUser(e.target.value)}
                   autoFocus
-                  autoComplete={mode === "signup" || mode === "forgot" ? "email" : "username"}
+                  autoComplete={mode === "signup" || mode === "forgot" || mode === "setup" ? "email" : "username"}
                   className={inputCls}
-                  placeholder={mode === "setup" ? "admin" : "you@example.com"}
+                  placeholder="you@example.com"
                 />
               </div>
 

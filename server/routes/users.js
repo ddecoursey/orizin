@@ -62,19 +62,23 @@ router.post("/users", (req, res) => {
     }
 
     const { username, password, isAdmin } = req.body || {};
+    const email = String(username || "").trim().toLowerCase();
 
-    if (!username || !password) {
-      return res.status(400).json({ error: "Username and password are required" });
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+    if (!EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: "A valid email address is required" });
     }
 
     if (password.length < 6) {
       return res.status(400).json({ error: "Password must be at least 6 characters" });
     }
 
-    const result = db.createUser(username, password, !!isAdmin);
+    const result = db.createUser(email, password, !!isAdmin, email);
 
     if (result.success) {
-      res.json({ ok: true, username, isAdmin: !!isAdmin });
+      res.json({ ok: true, username: email, isAdmin: !!isAdmin });
     } else {
       res.status(400).json({ error: result.error || "Failed to create user" });
     }

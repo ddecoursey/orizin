@@ -3,6 +3,8 @@ import { PRO_PRICE_LABEL } from "../lib/billing.js";
 import { DEFAULT_WATCHLIST_ALERTS } from "../lib/watchlistAlertsConfig.js";
 import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 // `mode` controls which surface this modal shows:
 //   'account' → personal Account Settings (plan + change your password)
 //   'users'   → admin User Management (add/remove users, grant admin, set plan)
@@ -168,14 +170,19 @@ export default function UsersModal({
 
 
   async function addUser() {
-    if (!newUsername || !newPassword) return;
+    const email = newUsername.trim().toLowerCase();
+    if (!email || !newPassword) return;
+    if (!EMAIL_RE.test(email)) {
+      setError("A valid email address is required");
+      return;
+    }
     setAdding(true);
     setError("");
     try {
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: newUsername, password: newPassword, isAdmin: newIsAdmin }),
+        body: JSON.stringify({ username: email, password: newPassword, isAdmin: newIsAdmin }),
       });
 
       const text = await res.text();
@@ -279,12 +286,13 @@ export default function UsersModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
-      <div 
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md p-6"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex justify-between items-center mb-4">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60" onClick={onClose}>
+      <div className="flex min-h-full items-center justify-center p-4 sm:p-6">
+        <div
+          className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-md max-h-[min(90dvh,calc(100dvh-2rem))] overflow-y-auto overscroll-contain p-6 shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+        <div className="flex justify-between items-center sticky top-0 z-10 -mx-6 px-6 py-3 -mt-6 mb-4 bg-gray-900/95 backdrop-blur-sm border-b border-gray-800/80">
           <h2 className="text-lg font-semibold">{showUsers ? "User Management" : "Account Settings"}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-100">✕</button>
         </div>
@@ -301,8 +309,8 @@ export default function UsersModal({
               <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Add New User</div>
               <div className="flex gap-2">
                 <input
-                  type="text"
-                  placeholder="Username"
+                  type="email"
+                  placeholder="Email"
                   value={newUsername}
                   onChange={e => setNewUsername(e.target.value)}
                   className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"
@@ -571,6 +579,7 @@ export default function UsersModal({
           </div>
         </div>
         )}
+        </div>
       </div>
     </div>
   );
