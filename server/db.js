@@ -158,7 +158,21 @@ try {
     subscription_updated_at INTEGER,
     pro_until INTEGER,                   -- grace: Pro access stays until this time after cancellation
     reset_token_hash TEXT,               -- sha256 of the active password-reset token (single-use)
-    reset_expires INTEGER                -- reset-token expiry (ms epoch)
+    reset_expires INTEGER,               -- reset-token expiry (ms epoch)
+    last_login_at INTEGER,
+    last_login_ip TEXT,
+    login_count INTEGER DEFAULT 0,
+    last_active_at INTEGER,
+    session_epoch INTEGER DEFAULT 0      -- bumped on password change to revoke other sessions
+  );
+
+  CREATE TABLE IF NOT EXISTS login_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    TEXT NOT NULL,
+    at         INTEGER NOT NULL,
+    ip         TEXT,
+    user_agent TEXT,
+    kind       TEXT NOT NULL             -- login | signup | setup | reset
   );
 
   -- Brokerage scaffolding: linked external accounts (Plaid-style) and order
@@ -222,6 +236,15 @@ try {
     output_tokens  INTEGER NOT NULL DEFAULT 0,
     updated_at     INTEGER,
     PRIMARY KEY (user_id, day)
+  );
+
+  -- Rolling-window meter: one row per billable Ori action (chat / Game Plan).
+  -- Used for the 5-hour session cap; pruned aggressively once outside the window.
+  CREATE TABLE IF NOT EXISTS ori_usage_events (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id  TEXT NOT NULL,
+    at       INTEGER NOT NULL,               -- unix ms
+    kind     TEXT NOT NULL                   -- 'chat' | 'plan'
   );
 `);
   console.log('[db] Schema initialized successfully');
@@ -316,6 +339,11 @@ try {
     ["reset_token_hash", "TEXT"],
     ["reset_expires", "INTEGER"],
     ["notification_email", "TEXT"],
+    ["last_login_at", "INTEGER"],
+    ["last_login_ip", "TEXT"],
+    ["login_count", "INTEGER DEFAULT 0"],
+    ["last_active_at", "INTEGER"],
+    ["session_epoch", "INTEGER DEFAULT 0"],
   ];
   for (const [name, type] of USER_COLS) {
     if (userCols.size > 0 && !userCols.has(name)) {
@@ -342,6 +370,17 @@ try {
 // for the month, so a composite index on (user_id, day) covers both.
 try {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_ori_usage_user_day ON ori_usage(user_id, day);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_ori_usage_events_user_at ON ori_usage_events(user_id, at);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS login_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    at INTEGER NOT NULL,
+    ip TEXT,
+    user_agent TEXT,
+    kind TEXT NOT NULL
+  );`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_login_events_user_at ON login_events(user_id, at DESC);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_login_events_at ON login_events(at DESC);`);
 } catch {}
 
 // Secondary indexes on the stocks table. The screener serves every row ordered by
@@ -1247,6 +1286,8 @@ export function deleteUserCascade(username) {
     db.prepare('DELETE FROM brokerage_orders WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM user_settings WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM ori_usage WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM ori_usage_events WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM login_events WHERE user_id = ?').run(u);
     return db.prepare('DELETE FROM users WHERE username = ?').run(u);
   });
   return tx(username);
@@ -1267,8 +1308,84 @@ export function setResetToken(username, tokenHash, expiresMs) {
 export function setUserPassword(username, plainPassword) {
   const hash = bcrypt.hashSync(plainPassword, 10);
   return db
-    .prepare('UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires = NULL WHERE username = ?')
+    .prepare(`UPDATE users SET password_hash = ?, reset_token_hash = NULL, reset_expires = NULL,
+              session_epoch = COALESCE(session_epoch, 0) + 1 WHERE username = ?`)
     .run(hash, username).changes > 0;
+}
+
+export function bumpSessionEpoch(username) {
+  db.prepare('UPDATE users SET session_epoch = COALESCE(session_epoch, 0) + 1 WHERE username = ?').run(username);
+  return getUserByUsername(username)?.session_epoch ?? 0;
+}
+
+const recordLoginStmt = db.prepare(`
+  UPDATE users SET
+    last_login_at = @at,
+    last_login_ip = @ip,
+    login_count = COALESCE(login_count, 0) + 1,
+    last_active_at = @at
+  WHERE username = @user_id
+`);
+const insertLoginEventStmt = db.prepare(`
+  INSERT INTO login_events (user_id, at, ip, user_agent, kind) VALUES (?, ?, ?, ?, ?)
+`);
+const touchActivityStmt = db.prepare('UPDATE users SET last_active_at = ? WHERE username = ?');
+
+const activityThrottle = new Map();
+const ACTIVITY_THROTTLE_MS = 2 * 60 * 1000;
+
+/** Record a successful sign-in and append to the login audit log. */
+export function recordUserLogin(userId, { ip, userAgent, kind = 'login' } = {}) {
+  const at = Date.now();
+  recordLoginStmt.run({ user_id: userId, at, ip: ip || null });
+  insertLoginEventStmt.run(userId, at, ip || null, userAgent || null, kind);
+  activityThrottle.set(userId, at);
+}
+
+/** Throttled last-seen update (called on authenticated API traffic). */
+export function touchUserActivity(userId) {
+  const now = Date.now();
+  const last = activityThrottle.get(userId) || 0;
+  if (now - last < ACTIVITY_THROTTLE_MS) return;
+  activityThrottle.set(userId, now);
+  touchActivityStmt.run(now, userId);
+}
+
+export function listRecentLoginEvents(limit = 40) {
+  return db.prepare('SELECT * FROM login_events ORDER BY at DESC LIMIT ?').all(limit);
+}
+
+export function listLoginEventsForUser(userId, limit = 20) {
+  return db.prepare('SELECT * FROM login_events WHERE user_id = ? ORDER BY at DESC LIMIT ?').all(userId, limit);
+}
+
+const chatStatsByUserStmt = db.prepare(`
+  SELECT user_id, COUNT(*) AS sessions, MAX(updated_at) AS last_chat_at
+  FROM chat_sessions GROUP BY user_id
+`);
+
+/** Per-user chat session counts and last activity. */
+export function chatStatsByUser() {
+  const map = new Map();
+  for (const row of chatStatsByUserStmt.all()) {
+    map.set(row.user_id, { sessions: row.sessions, lastChatAt: row.last_chat_at });
+  }
+  return map;
+}
+
+export function listUsersWithActivity() {
+  return db.prepare(`
+    SELECT id, username, email, plan, created_at, is_admin,
+           last_login_at, last_login_ip, login_count, last_active_at, session_epoch,
+           notification_email, subscription_status, pro_until
+    FROM users ORDER BY created_at
+  `).all();
+}
+
+/** Drop login audit rows older than `beforeMs`. */
+export function pruneLoginEvents(beforeMs) {
+  try { db.prepare('DELETE FROM login_events WHERE at < ?').run(beforeMs); }
+  catch (e) { console.warn('[db] pruneLoginEvents failed:', e.message); }
 }
 
 // ── PayPal subscription state → plan, with a post-cancellation grace period ───
@@ -1487,6 +1604,38 @@ export function getOriUsageRange(userId, startDay, endDay) {
 export function pruneOriUsage(beforeDay) {
   try { db.prepare('DELETE FROM ori_usage WHERE day < ?').run(beforeDay); }
   catch (e) { console.warn('[db] pruneOriUsage failed:', e.message); }
+}
+
+const insertOriUsageEventStmt = db.prepare(
+  'INSERT INTO ori_usage_events (user_id, at, kind) VALUES (?, ?, ?)',
+);
+const countOriUsageEventsSinceStmt = db.prepare(
+  'SELECT COUNT(*) AS n FROM ori_usage_events WHERE user_id = ? AND at >= ?',
+);
+const oldestOriUsageEventSinceStmt = db.prepare(
+  'SELECT MIN(at) AS at FROM ori_usage_events WHERE user_id = ? AND at >= ?',
+);
+
+/** Record a single billable Ori action for rolling-window limits. */
+export function insertOriUsageEvent(userId, kind, at = Date.now()) {
+  insertOriUsageEventStmt.run(userId, at, kind);
+}
+
+/** Count billable Ori actions since `sinceMs` (5-hour session window). */
+export function countOriUsageEventsSince(userId, sinceMs) {
+  return countOriUsageEventsSinceStmt.get(userId, sinceMs)?.n ?? 0;
+}
+
+/** Oldest event timestamp in the window (for "resets at" UI). */
+export function oldestOriUsageEventSince(userId, sinceMs) {
+  const row = oldestOriUsageEventSinceStmt.get(userId, sinceMs);
+  return row?.at ?? null;
+}
+
+/** Drop event rows older than `beforeMs` (housekeeping). */
+export function pruneOriUsageEvents(beforeMs) {
+  try { db.prepare('DELETE FROM ori_usage_events WHERE at < ?').run(beforeMs); }
+  catch (e) { console.warn('[db] pruneOriUsageEvents failed:', e.message); }
 }
 
 // ── Watchlist alert state ───────────────────────────────────────────────────

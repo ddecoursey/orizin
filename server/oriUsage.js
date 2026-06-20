@@ -2,8 +2,9 @@
 // Ori is the Pro feature, and every Ori action (a chat turn, or a cache-MISS
 // Game Plan generation) spends Gemini tokens — which are not free. To keep a
 // single heavy user from costing more than their $10/mo, Pro accounts get a
-// generous daily + monthly allotment of Ori "requests". Admins, the local-dev
-// `default` user, and legacy env-auth instances are unlimited.
+// layered allotment similar to Anthropic's Claude Pro: a rolling session window,
+// plus daily / weekly / monthly caps. Admins, the local-dev `default` user, and
+// legacy env-auth instances are unlimited.
 //
 // We track BOTH a request count (what the limiter enforces — simple and legible
 // for users) and raw Gemini token counts (input / output / cache-served), so the
@@ -15,9 +16,13 @@ import {
   getUserByUsername,
   userCount,
   incrementOriUsage,
+  insertOriUsageEvent,
+  countOriUsageEventsSince,
+  oldestOriUsageEventSince,
   getOriUsageDay,
   getOriUsageRange,
   pruneOriUsage,
+  pruneOriUsageEvents,
 } from "./db.js";
 import { etSessionDate } from "./marketHours.js";
 
@@ -28,18 +33,36 @@ function envInt(name, dflt) {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
-// Two overlapping windows: the daily cap stops a single-day blowout; the monthly
-// cap bounds the total bill (a sustained ~20/day). Weekly would be redundant
-// between these two, so we don't enforce it.
+const SESSION_HOURS_DEFAULT = 5;
+
+// Layered caps modeled on Claude Pro's session + weekly + monthly structure,
+// scaled for a $10/mo plan (~half of Claude Pro's $20). Defaults are tighter
+// than the original 50/day + 750/month rollout.
 export function oriLimits() {
+  const sessionHours = envInt("ORI_SESSION_HOURS", SESSION_HOURS_DEFAULT);
   return {
-    daily: envInt("ORI_DAILY_LIMIT", 50),
-    monthly: envInt("ORI_MONTHLY_LIMIT", 750),
+    session: envInt("ORI_SESSION_LIMIT", 18),
+    sessionHours,
+    daily: envInt("ORI_DAILY_LIMIT", 25),
+    weekly: envInt("ORI_WEEKLY_LIMIT", 70),
+    monthly: envInt("ORI_MONTHLY_LIMIT", 280),
   };
+}
+
+export function sessionWindowMs(hours = oriLimits().sessionHours) {
+  return hours * 60 * 60 * 1000;
 }
 
 const todayKey = () => etSessionDate();                 // 'YYYY-MM-DD' (ET)
 const monthStartKey = (day = todayKey()) => `${day.slice(0, 7)}-01`;
+
+/** ET calendar day `n` days before `dayKey` (inclusive range helper). */
+function dayKeyDaysAgo(dayKey, n) {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d));
+  t.setUTCDate(t.getUTCDate() - n);
+  return etSessionDate(t);
+}
 
 // Admins / local-dev / legacy env-auth never hit the meter. Mirrors the access
 // rules in access.js (hasOriAccess) so "can use Ori" and "is metered" agree.
@@ -65,14 +88,49 @@ function tokensFrom(usage) {
   };
 }
 
+function limitMessage(scope, limit, used, extra = "") {
+  const msgs = {
+    session: `You've reached your ${oriLimits().sessionHours}-hour Ori limit (${limit} requests). ${extra}Try again when the window resets.`,
+    day: `You've reached today's Ori limit (${limit} requests). It resets at midnight ET.`,
+    week: `You've reached your weekly Ori limit (${limit} requests). It resets every 7 days.`,
+    month: `You've reached your monthly Ori limit (${limit} requests). It resets on the 1st.`,
+  };
+  return msgs[scope] || `Ori usage limit reached (${limit}).`;
+}
+
+function sessionResetsAt(userId, sinceMs) {
+  const oldest = oldestOriUsageEventSince(userId, sinceMs);
+  if (!oldest) return null;
+  return oldest + sessionWindowMs();
+}
+
 /**
  * Is this user allowed to spend another Ori request right now?
- * @returns {{ ok: true, unlimited?: boolean } | { ok: false, scope, limit, used, message }}
+ * @returns {{ ok: true, unlimited?: boolean } | { ok: false, scope, limit, used, resetsAt?, message }}
  */
 export function checkOriQuota(userId) {
   if (isOriUnlimited(userId)) return { ok: true, unlimited: true };
   const limits = oriLimits();
   const day = todayKey();
+  const windowMs = sessionWindowMs(limits.sessionHours);
+  const since = Date.now() - windowMs;
+  const sessionUsed = countOriUsageEventsSince(userId, since);
+
+  if (sessionUsed >= limits.session) {
+    const resetsAt = sessionResetsAt(userId, since);
+    const resetHint = resetsAt
+      ? `Resets around ${new Date(resetsAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })} ET. `
+      : "";
+    return {
+      ok: false,
+      scope: "session",
+      limit: limits.session,
+      used: sessionUsed,
+      resetsAt,
+      message: limitMessage("session", limits.session, sessionUsed, resetHint),
+    };
+  }
+
   const today = getOriUsageDay(userId, day);
   if (today.requests >= limits.daily) {
     return {
@@ -80,9 +138,22 @@ export function checkOriQuota(userId) {
       scope: "day",
       limit: limits.daily,
       used: today.requests,
-      message: `You've reached today's Ori limit (${limits.daily} requests). It resets at midnight ET.`,
+      message: limitMessage("day", limits.daily, today.requests),
     };
   }
+
+  const weekStart = dayKeyDaysAgo(day, 6);
+  const week = getOriUsageRange(userId, weekStart, day);
+  if (week.requests >= limits.weekly) {
+    return {
+      ok: false,
+      scope: "week",
+      limit: limits.weekly,
+      used: week.requests,
+      message: limitMessage("week", limits.weekly, week.requests),
+    };
+  }
+
   const month = getOriUsageRange(userId, monthStartKey(day), day);
   if (month.requests >= limits.monthly) {
     return {
@@ -90,7 +161,7 @@ export function checkOriQuota(userId) {
       scope: "month",
       limit: limits.monthly,
       used: month.requests,
-      message: `You've reached your monthly Ori limit (${limits.monthly} requests). It resets on the 1st.`,
+      message: limitMessage("month", limits.monthly, month.requests),
     };
   }
   return { ok: true };
@@ -106,6 +177,7 @@ export function recordOriUsage(userId, { kind, usage } = {}) {
   if (!userId) return;
   try {
     const t = tokensFrom(usage);
+    const at = Date.now();
     incrementOriUsage(userId, todayKey(), {
       requests: 1,
       chatRequests: kind === "chat" ? 1 : 0,
@@ -114,6 +186,7 @@ export function recordOriUsage(userId, { kind, usage } = {}) {
       cachedTokens: t.cachedTokens,
       outputTokens: t.outputTokens,
     });
+    insertOriUsageEvent(userId, kind === "plan" ? "plan" : "chat", at);
   } catch (e) {
     // Usage accounting must never break the actual feature.
     console.warn("[oriUsage] record failed:", e.message);
@@ -141,19 +214,31 @@ export function getOriUsageSummary(userId) {
   const day = todayKey();
   const limits = oriLimits();
   const unlimited = isOriUnlimited(userId);
+  const windowMs = sessionWindowMs(limits.sessionHours);
+  const since = Date.now() - windowMs;
+  const sessionUsed = unlimited ? 0 : countOriUsageEventsSince(userId, since);
+  const weekStart = dayKeyDaysAgo(day, 6);
   return {
     unlimited,
     limits,
     today: day,
     month: day.slice(0, 7),
+    session: {
+      used: sessionUsed,
+      limit: limits.session,
+      hours: limits.sessionHours,
+      resetsAt: unlimited ? null : sessionResetsAt(userId, since),
+    },
     day: shapeWindow(getOriUsageDay(userId, day)),
+    weekTotals: shapeWindow(getOriUsageRange(userId, weekStart, day)),
     monthTotals: shapeWindow(getOriUsageRange(userId, monthStartKey(day), day)),
   };
 }
 
 // Housekeeping: ledger rows are tiny, but keep ~3 months and drop the rest so the
-// table can't grow without bound. Safe to call on a schedule.
+// table can't grow without bound. Event rows only need ~1 week of history.
 export function pruneOldOriUsage(keepDays = 95) {
   const cutoff = etSessionDate(new Date(Date.now() - keepDays * 24 * 60 * 60 * 1000));
   pruneOriUsage(cutoff);
+  pruneOriUsageEvents(Date.now() - 8 * 24 * 60 * 60 * 1000);
 }

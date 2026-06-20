@@ -176,13 +176,6 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       availableSectors: allSectors,
       availableIndustries: allIndustries,
       focusSymbols,
-      scorecardDefinition: {
-        description: "Conviction (0-100) is the unified, user-facing headline score. The 'Orizin Score' is the background fundamentals ENGINE that feeds Conviction's Fundamentals pillar — a weighted average of three pillars (Q/V/G). All inputs are tie-aware 0-1 percentile ranks within the current filtered set. On the screener, Conviction = Fundamentals (Orizin) + Valuation; on Deep Research it also folds in technicals, insiders (U.S. Congress + corporate insiders), analysts, personal Fit, and Ori's intangibles.",
-        Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
-        V: "Value — average rank of: EV/GP, EV/EBITDA, P/E (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
-        G: "Growth — average rank of: Revenue growth (TTM), EPS growth (TTM), FCF growth (TTM)",
-        note: "Junk guards: negative P/E and negative D/E rank WORST (not best); ROE on negative equity is voided. Missing inputs are imputed at rank 0.45 instead of ignored, and stocks with <3 of 16 real inputs are unscored — so sparse data can't inflate a score. dataCoverage = fraction of the 16 inputs with real data; treat low-coverage scores skeptically."
-      }
     };
   }
 

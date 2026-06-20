@@ -10,6 +10,7 @@ import {
   IconRefresh,
   IconChevronDown,
   IconChart,
+  IconSignal,
 } from "./icons.jsx";
 import DataSyncChip from "./DataSyncChip.jsx";
 
@@ -402,6 +403,20 @@ export default function Header({
                     <IconUsersGroup className="w-3.5 h-3.5 text-gray-500" /> User management
                   </span>
                 </MenuItem>
+              )}
+
+              {isAdmin && (
+                <a
+                  href="/admin/observability"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={close}
+                  className="block w-full text-left px-3 py-2.5 lg:py-2 text-xs text-gray-300 hover:bg-gray-800 transition-colors"
+                >
+                  <span className="flex items-center gap-2">
+                    <IconSignal className="w-3.5 h-3.5 text-gray-500" /> User observability
+                  </span>
+                </a>
               )}
 
               {isAdmin && (

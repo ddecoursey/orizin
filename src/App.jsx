@@ -1,4 +1,5 @@
-import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useMemo, lazy, Suspense, useCallback } from "react";
+import { useInactivityLogout } from "./hooks/useInactivityLogout.js";
 import { useWatchlists } from "./hooks/useWatchlists.js";
 import { useWatchlistAlerts } from "./hooks/useWatchlistAlerts.js";
 import WatchlistPanel from "./components/WatchlistPanel.jsx";
@@ -43,6 +44,7 @@ export default function App() {
   // Deployment environment ('production' | 'qa' | 'development') from the server,
   // so QA (sandbox) and prod (live) are visibly distinct when both are running.
   const [appEnv, setAppEnv] = useState("production");
+  const [inactivityMinutes, setInactivityMinutes] = useState(60);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -56,6 +58,7 @@ export default function App() {
         setIsAdmin(!!data.isAdmin);
         setPlan(data.plan === "pro" ? "pro" : "free");
         setAppEnv(data.env || "production");
+        if (data.inactivityMinutes) setInactivityMinutes(data.inactivityMinutes);
         setAuthState("authed");
       })
       .catch(() => setAuthState("login"));
@@ -113,7 +116,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  async function handleLogout() {
+  const handleLogout = useCallback(async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } catch {
@@ -122,7 +125,13 @@ export default function App() {
     }
     setCurrentUser(null);
     setAuthState("login");
-  }
+  }, []);
+
+  useInactivityLogout({
+    enabled: authState === "authed",
+    onLogout: handleLogout,
+    inactivityMinutes,
+  });
 
   // The marketing/landing page is designed for dark mode only. Strip the global
   // .light class while signed out so a prior in-app light theme doesn't invert
