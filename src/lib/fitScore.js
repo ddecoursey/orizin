@@ -22,8 +22,8 @@ export function buildFitContext({ portfolios = [], goals = [], theses = [], stoc
   let totalDollars = 0;
   for (const p of portfolios) {
     for (const h of p.holdings || []) {
-      const t = (h.ticker || "").trim().toUpperCase();
-      if (!t) continue;
+      const t = String(h.ticker || h.symbol || "").trim().toUpperCase();
+      if (!t || t === "MISC") continue;
       heldSymbols.add(t);
       const dollars = Number(h.dollars) || 0;
       if (dollars > 0) {

@@ -925,6 +925,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             />
           ) : currentView === 'portfolio-goals' ? (
             <PortfolioGoalsPage
+              portfolioGoals={portfolioGoals}
               stocks={stocks}
               theme={theme}
               onSelectStock={handleSelectStock}

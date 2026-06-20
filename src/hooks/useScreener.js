@@ -539,8 +539,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       }),
     [portfolioGoals.portfolios, portfolioGoals.goals, portfolioGoals.theses, stocks],
   );
-  const hasFitContext =
-    !!(portfolioGoals.portfolios?.length || portfolioGoals.goals?.length || portfolioGoals.theses?.length);
+  const hasFitContext = !!fitCtx?.hasContext;
   const fitMap = useMemo(() => {
     if (!hasFitContext) return null;
     const m = Object.create(null);

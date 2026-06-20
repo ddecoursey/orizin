@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { usePortfolioGoals } from '../hooks/usePortfolioGoals.js';
 import BrokeragePanel from '../components/BrokeragePanel.jsx';
 import InvestingPreferences from '../components/InvestingPreferences.jsx';
 import { IconPie } from '../components/icons.jsx';
@@ -64,8 +63,38 @@ function TickerAutocomplete({ value, onChange, symbols, theme = 'dark' }) {
   );
 }
 
-export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSelectStock, detailStock, weights, setWeights, risk, setRisk }) {
-  const { portfolios, goals, theses, hydrated, addPortfolio, updatePortfolio, deletePortfolio, renamePortfolio, addHolding, updateHolding, deleteHolding, addGoal, updateGoal, deleteGoal, addThesis, updateThesis, deleteThesis, grandTotal, overallAllocations } = usePortfolioGoals();
+export default function PortfolioGoalsPage({
+  portfolioGoals,
+  stocks = [],
+  theme = 'dark',
+  onSelectStock,
+  detailStock,
+  weights,
+  setWeights,
+  risk,
+  setRisk,
+}) {
+  const {
+    portfolios,
+    goals,
+    theses,
+    hydrated,
+    addPortfolio,
+    updatePortfolio,
+    deletePortfolio,
+    renamePortfolio,
+    addHolding,
+    updateHolding,
+    deleteHolding,
+    addGoal,
+    updateGoal,
+    deleteGoal,
+    addThesis,
+    updateThesis,
+    deleteThesis,
+    grandTotal,
+    overallAllocations,
+  } = portfolioGoals || {};
   const [goalsVisible, setGoalsVisible] = useState(() => { const saved = localStorage.getItem('portfolio_goals_visible'); return saved !== null ? saved === 'true' : true; });
   const [allocationLimit, setAllocationLimit] = useState(10);
   // Collapse the heavy holdings editor by default for a cleaner page — the
@@ -92,7 +121,7 @@ export default function PortfolioGoalsPage({ stocks = [], theme = 'dark', onSele
   );
   const sectorGaps = useMemo(() => computeSectorGaps(fitCtx, stocks), [fitCtx, stocks]);
 
-  if (!hydrated) return <div className="p-8 text-gray-400">Loading...</div>;
+  if (!portfolioGoals || !hydrated) return <div className="p-8 text-gray-400">Loading...</div>;
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-gray-100">
