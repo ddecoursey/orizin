@@ -296,6 +296,7 @@ try {
     ["pro_until", "INTEGER"],
     ["reset_token_hash", "TEXT"],
     ["reset_expires", "INTEGER"],
+    ["notification_email", "TEXT"],
   ];
   for (const [name, type] of USER_COLS) {
     if (userCols.size > 0 && !userCols.has(name)) {
@@ -1338,6 +1339,13 @@ export function setUserAdmin(username, isAdmin) {
     .prepare('UPDATE users SET is_admin = ? WHERE username = ?')
     .run(isAdmin ? 1 : 0, username);
   return info.changes > 0;
+}
+
+export function setUserNotificationEmail(username, email) {
+  const next = email && String(email).trim() ? String(email).trim() : null;
+  return db
+    .prepare('UPDATE users SET notification_email = ? WHERE username = ?')
+    .run(next, username).changes > 0;
 }
 
 // ── Per-user settings (screens/tabs, pins, weights, theme, sidebar) ─────────

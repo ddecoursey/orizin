@@ -3,6 +3,7 @@ import rateLimit from 'express-rate-limit';
 import * as db from '../db.js';
 import * as paypal from '../paypal.js';
 import { sendEmail, subscriptionEmail, cancelEmail } from '../email.js';
+import { emailForNotifications } from '../userProfile.js';
 
 const router = Router();
 
@@ -14,17 +15,9 @@ const actionLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: tr
 
 // PayPal statuses that count as "subscribed → Pro".
 const ACTIVE = new Set(['ACTIVE', 'APPROVED']);
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 function toMs(t) {
   const ms = t ? Date.parse(t) : NaN;
   return Number.isFinite(ms) ? ms : null;
-}
-function emailFor(user) {
-  if (!user) return null;
-  if (user.email && EMAIL_RE.test(user.email)) return user.email;
-  if (user.username && EMAIL_RE.test(user.username)) return user.username;
-  return null;
 }
 
 // GET /api/billing/config — public config for the browser PayPal SDK.
@@ -80,7 +73,7 @@ router.post('/billing/activate', actionLimiter, async (req, res) => {
   });
 
   const updated = db.getUserByUsername(req.userId);
-  const to = emailFor(updated);
+  const to = emailForNotifications(updated);
   if (to) sendEmail({ to, ...subscriptionEmail() }).catch(() => {});
 
   res.json({ ok: true, plan: 'pro', status: sub.status, proUntil: updated?.pro_until || null });
@@ -116,7 +109,7 @@ router.post('/billing/cancel', actionLimiter, async (req, res) => {
   db.setUserSubscription(req.userId, { subscriptionId: subId || null, status: 'CANCELLED', proUntil });
   const updated = db.getUserByUsername(req.userId);
 
-  const to = emailFor(updated);
+  const to = emailForNotifications(updated);
   if (to) sendEmail({ to, ...cancelEmail(updated?.pro_until) }).catch(() => {});
 
   res.json({

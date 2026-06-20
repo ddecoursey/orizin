@@ -37,6 +37,11 @@ export default function UsersModal({
   const [deleting, setDeleting] = useState(false);
   const [wlAlerts, setWlAlerts] = useState({ ...DEFAULT_WATCHLIST_ALERTS });
   const [wlAlertsSaving, setWlAlertsSaving] = useState(false);
+  const [nickname, setNickname] = useState("");
+  const [nicknameSaving, setNicknameSaving] = useState(false);
+  const [notificationEmail, setNotificationEmail] = useState("");
+  const [notificationEmailSaving, setNotificationEmailSaving] = useState(false);
+  const [loginEmail, setLoginEmail] = useState(null);
 
   async function loadUsers() {
     setLoading(true);
@@ -62,10 +67,54 @@ export default function UsersModal({
 
   useEffect(() => {
     if (!showAccount) return;
-    fetchUserSettings().then((s) => {
+    (async () => {
+      const [s, me] = await Promise.all([
+        fetchUserSettings().catch(() => ({})),
+        fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
       if (s?.watchlistAlerts) setWlAlerts({ ...DEFAULT_WATCHLIST_ALERTS, ...s.watchlistAlerts });
-    }).catch(() => {});
+      if (typeof s?.nickname === "string") setNickname(s.nickname);
+      else if (me?.nickname) setNickname(me.nickname);
+      if (me) {
+        setLoginEmail(me.email || null);
+        setNotificationEmail(me.notificationEmail || "");
+      }
+    })();
   }, [showAccount]);
+
+  async function saveNickname(value) {
+    const next = value.trim().slice(0, 64);
+    setNickname(next);
+    setNicknameSaving(true);
+    try {
+      await patchUserSettings({ nickname: next });
+    } catch {
+      // best-effort
+    }
+    setNicknameSaving(false);
+  }
+
+  async function saveNotificationEmail(value) {
+    const next = value.trim();
+    setNotificationEmail(next);
+    setNotificationEmailSaving(true);
+    setError("");
+    try {
+      const res = await fetch("/api/users/me", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notificationEmail: next }),
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { data = {}; }
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      setNotificationEmail(data.notificationEmail || "");
+    } catch (e) {
+      setError(e.message);
+    }
+    setNotificationEmailSaving(false);
+  }
 
   async function saveWlAlerts(patch) {
     const next = { ...wlAlerts, ...patch };
@@ -332,6 +381,47 @@ export default function UsersModal({
               )}
             </div>
           </>
+        )}
+
+        {showAccount && (
+          <div className="mb-6">
+            <div className="text-xs uppercase tracking-wider text-gray-500 mb-2">Profile</div>
+            <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-3">
+              <div>
+                <label className="text-[11px] text-gray-500 block mb-1">Nickname</label>
+                <input
+                  type="text"
+                  placeholder="How Ori should address you"
+                  value={nickname}
+                  maxLength={64}
+                  onChange={(e) => setNickname(e.target.value)}
+                  onBlur={(e) => saveNickname(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm"
+                />
+                <p className="text-[10px] text-gray-600 mt-1 leading-snug">
+                  Ori uses this instead of your login or email. Leave blank to use your username.
+                  {nicknameSaving && <span className="ml-1 text-gray-500">Saving…</span>}
+                </p>
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-500 block mb-1">Notification email</label>
+                <input
+                  type="email"
+                  placeholder={loginEmail || "you@example.com"}
+                  value={notificationEmail}
+                  onChange={(e) => setNotificationEmail(e.target.value)}
+                  onBlur={(e) => saveNotificationEmail(e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm"
+                />
+                <p className="text-[10px] text-gray-600 mt-1 leading-snug">
+                  {loginEmail
+                    ? "Watchlist digests and billing emails go here when set; otherwise your login email is used."
+                    : "Legacy admin accounts often have no login email — add one here for watchlist digests and billing notices."}
+                  {notificationEmailSaving && <span className="ml-1 text-gray-500">Saving…</span>}
+                </p>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Account mode: current plan + upgrade path */}

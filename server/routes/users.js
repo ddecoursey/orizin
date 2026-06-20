@@ -1,10 +1,40 @@
 import { Router } from "express";
 import bcrypt from 'bcryptjs';
 import * as db from "../db.js";
+import { EMAIL_RE, displayNameFor } from "../userProfile.js";
 
 const router = Router();
 
 // All routes below require authentication (middleware is applied in index.js)
+
+// PATCH /api/users/me — update own profile fields (notification email).
+router.patch("/users/me", (req, res) => {
+  try {
+    const user = db.getUserByUsername(req.userId);
+    if (!user) return res.status(404).json({ error: "Account not found" });
+
+    const { notificationEmail } = req.body || {};
+    if (notificationEmail !== undefined) {
+      const trimmed = String(notificationEmail).trim();
+      if (trimmed && !EMAIL_RE.test(trimmed)) {
+        return res.status(400).json({ error: "Invalid email address" });
+      }
+      db.setUserNotificationEmail(req.userId, trimmed || null);
+    }
+
+    const updated = db.getUserByUsername(req.userId);
+    const settings = db.getUserSettings(req.userId);
+    res.json({
+      ok: true,
+      notificationEmail: updated.notification_email || null,
+      nickname: settings.nickname || null,
+      displayName: displayNameFor(updated, settings),
+    });
+  } catch (err) {
+    console.error("[users] PATCH /users/me error:", err);
+    res.status(500).json({ error: "Failed to update profile" });
+  }
+});
 
 // GET /api/users - List all users (admin only for now)
 router.get("/users", (req, res) => {

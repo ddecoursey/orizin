@@ -5,6 +5,7 @@ import { normalizeWatchlists } from '../src/lib/watchlistNormalize.js';
 import { sanitizeWatchlistAlerts } from '../src/lib/watchlistAlertsConfig.js';
 import { marketSession, etSessionDate } from './marketHours.js';
 import { sendEmail, watchlistDigestEmail, watchlistUrgentEmail } from './email.js';
+import { emailForNotifications } from './userProfile.js';
 
 const COOLDOWN_MS = 4 * 60 * 60 * 1000;
 const CONVICTION_DELTA = 8;
@@ -69,12 +70,6 @@ export function injectTestAlert(userId, { symbol, type = 'price' } = {}) {
   const pending = [...(st?.pending_digest || []), alert].slice(-MAX_DIGEST_ITEMS);
   db.saveWatchlistAlertState(userId, sym, { pending_digest: pending });
   return { alert, symbol: sym };
-}
-
-function userEmail(user) {
-  if (!user) return null;
-  const e = user.email || user.username;
-  return e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) ? e : null;
 }
 
 function pctChange(from, to) {
@@ -169,7 +164,7 @@ export async function runWatchlistAlertScan() {
     if (!symbols.length) continue;
 
     const user = db.getUserByUsername?.(userId);
-    const to = userEmail(user);
+    const to = emailForNotifications(user);
     let instantCandidate = null;
     let newsFetches = 0;
     const NEWS_BUDGET = 50;
@@ -340,7 +335,7 @@ export async function flushDailyDigests() {
     if (!prefs.enabled || !prefs.emailDigest) continue;
 
     const user = db.getUserByUsername?.(userId);
-    const to = userEmail(user);
+    const to = emailForNotifications(user);
     if (!to) continue;
 
     const digestKey = `wl_digest:${userId}:${sessionDate}`;
