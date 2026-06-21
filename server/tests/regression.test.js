@@ -673,14 +673,16 @@ test('screener lite intangibles endpoint is Pro-gated and validates the symbol',
   assert.equal(gated.status, 402);
   assert.equal((await json(gated)).code, 'upgrade_required');
 
-  // Admin clears the paywall and reaches generation, which stops at the missing
-  // Gemini key (503) — proving the route is wired without needing a real LLM call.
+  // Admin clears the paywall. The endpoint is CACHE-ONLY (it never generates —
+  // the global trickle is the sole generator), so a cache miss returns 200 with
+  // ori:null rather than touching the LLM.
   const opened = await fetch(api('/api/stocks/intangibles/AAPL'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', cookie: adminCookie },
     body: '{}',
   });
-  assert.equal(opened.status, 503);
+  assert.equal(opened.status, 200);
+  assert.equal((await json(opened)).ori, null);
 
   // Invalid symbol is rejected before any work.
   const bad = await fetch(api('/api/stocks/intangibles/way-too-long-symbol'), {

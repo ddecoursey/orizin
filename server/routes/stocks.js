@@ -32,7 +32,7 @@ import { hasOriAccess } from "../access.js";
 import { enrichmentManager } from "../enrichment.js";
 import { marketSession } from "../marketHours.js";
 import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
-import { resolveCachedGamePlan, GAME_PLAN_TTL_MS } from "../gamePlanCache.js";
+import { resolveCachedGamePlan, readFreshLiteGamePlan, GAME_PLAN_TTL_MS } from "../gamePlanCache.js";
 import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
 import { execCompAllowed } from "../fmpPlanLimits.js";
 
@@ -1430,25 +1430,19 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
 }
 
 // ── POST /api/stocks/intangibles/:symbol ───────────────────────────────────
-// On-demand lite intangibles for a screener leader. Pro/admin gated + rate
-// limited; result is cached 24h and shared (company-level).
+// CACHE-ONLY. Returns the shared 24h lite review if the background trickle has
+// already produced one, else null. It NEVER generates on demand: the screener
+// used to call this per leader and (via an oriData-driven effect) chained
+// through the whole conviction≥65 universe, running up the bill. The GLOBAL
+// hourly top-LEADERS trickle is the sole generator now. Pro/admin gated.
 router.post("/stocks/intangibles/:symbol", aiDetailLimiter, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
   if (!hasOriAccess(req.userId)) {
     return res.status(402).json({ error: "Ori intangibles is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
   }
-  try {
-    const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
-    const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
-    const ori = await generateLiteIntangibles(symbol, { stats, verdict });
-    res.json({ symbol, ori });
-  } catch (e) {
-    if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
-    if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });
-    if (e.code === "bad_json") return res.status(502).json({ error: "Ori couldn't produce intangibles — try again." });
-    res.status(502).json({ error: "Could not generate intangibles." });
-  }
+  const ori = readFreshLiteGamePlan(symbol, gamePlanCacheDeps()) || null;
+  res.json({ symbol, ori });
 });
 
 // ── GET /api/stocks/earnings/:symbol ───────────────────────────────────────

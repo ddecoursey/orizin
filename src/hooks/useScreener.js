@@ -633,7 +633,13 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     }, ORI_DEBOUNCE_MS);
 
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [filteredWeighted, canUseOri, oriData]);
+    // NOTE: `oriData` is intentionally NOT a dependency. With it in, every fetch
+    // bumped oriData → re-ran this effect → fetched the next 15 uncached leaders,
+    // chaining through the entire conviction≥65 universe (a request storm). The
+    // server endpoint is cache-only now, but we still cap the client to one
+    // bounded pass per filter change. oriFetchedRef de-dupes within the session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredWeighted, canUseOri]);
 
   // Fold any fetched lite review into the displayed Conviction, exactly the way
   // Deep Research's computeVerdict does on open: re-run the shared quickConviction
