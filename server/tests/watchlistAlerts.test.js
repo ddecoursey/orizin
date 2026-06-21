@@ -25,17 +25,29 @@ test('devAlertsTestEnabled is false under NODE_ENV=test', () => {
   }
 });
 
-test('injectTestAlert queues a sample price alert', () => {
+test('injectTestAlert queues multiple sample alerts by default', () => {
   const userId = '__wl_inject_test__';
   db.patchUserSettings(userId, {
     watchlists: [{ id: 'default', name: 'Watchlist', symbols: ['WLINJ'], updatedAt: 1 }],
   });
-  const { alert, symbol } = injectTestAlert(userId, { symbol: 'WLINJ', type: 'price' });
+  const { alerts, symbol } = injectTestAlert(userId, { symbol: 'WLINJ' });
+  assert.equal(symbol, 'WLINJ');
+  assert.equal(alerts.length, 3);
+  assert.deepEqual(alerts.map((a) => a.type), ['price', 'news', 'conviction']);
+  const st = db.getWatchlistAlertState(userId, 'WLINJ');
+  for (const alert of alerts) {
+    assert.ok(st.pending_digest?.some((a) => a.id === alert.id));
+  }
+});
+
+test('injectTestAlert can queue a single alert', () => {
+  const userId = '__wl_inject_single__';
+  db.patchUserSettings(userId, {
+    watchlists: [{ id: 'default', name: 'Watchlist', symbols: ['WLINJ'], updatedAt: 1 }],
+  });
+  const { alert, symbol } = injectTestAlert(userId, { symbol: 'WLINJ', type: 'price', multiple: false });
   assert.equal(symbol, 'WLINJ');
   assert.equal(alert.type, 'price');
-  assert.ok(alert.title.includes('WLINJ'));
-  const st = db.getWatchlistAlertState(userId, 'WLINJ');
-  assert.ok(st.pending_digest?.some((a) => a.id === alert.id));
 });
 
 test('sanitizeWatchlistAlerts clamps thresholds and preserves booleans', () => {

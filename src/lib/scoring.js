@@ -352,3 +352,64 @@ export const SECTOR_COLORS = {
   'Utilities':              { bg: '#78350f', fg: '#fcd34d' },
   'Basic Materials':        { bg: '#1a2e05', fg: '#bef264' },
 };
+
+/** Light-theme sector chips — pale fills with readable dark labels. */
+export const SECTOR_COLORS_LIGHT = {
+  'Technology':             { bg: '#dbeafe', fg: '#1e40af' },
+  'Healthcare':             { bg: '#d1fae5', fg: '#047857' },
+  'Financial Services':     { bg: '#fef3c7', fg: '#b45309' },
+  'Consumer Cyclical':      { bg: '#ffedd5', fg: '#c2410c' },
+  'Consumer Defensive':     { bg: '#ede9fe', fg: '#6d28d9' },
+  'Energy':                 { bg: '#fae8ff', fg: '#a21caf' },
+  'Industrials':            { bg: '#d1fae5', fg: '#047857' },
+  'Communication Services': { bg: '#ede9fe', fg: '#6d28d9' },
+  'Real Estate':            { bg: '#ccfbf1', fg: '#0f766e' },
+  'Utilities':              { bg: '#ffedd5', fg: '#c2410c' },
+  'Basic Materials':        { bg: '#ecfccb', fg: '#4d7c0f' },
+};
+
+export function sectorChipColors(sector, light = false) {
+  const map = light ? SECTOR_COLORS_LIGHT : SECTOR_COLORS;
+  return map[sector] || (light ? { bg: '#e7e5e4', fg: '#57534e' } : { bg: '#1e293b', fg: '#94a3b8' });
+}
+
+const PILLAR_CHIP = {
+  q: {
+    dark: { bg: '#14532d', fg: '#86efac' },
+    light: { bg: '#d1fae5', fg: '#047857' },
+  },
+  v: {
+    dark: { bg: '#713f12', fg: '#fde68a' },
+    light: { bg: '#fef3c7', fg: '#b45309' },
+  },
+  g: {
+    dark: { bg: '#134e4b', fg: '#5eead4' },
+    light: { bg: '#ccfbf1', fg: '#0f766e' },
+  },
+  dataOk: {
+    dark: { bg: '#1e3a5f', fg: '#93c5fd' },
+    light: { bg: '#dbeafe', fg: '#1d4ed8' },
+  },
+  dataWarn: {
+    dark: { bg: '#78350f', fg: '#fcd34d' },
+    light: { bg: '#ffedd5', fg: '#c2410c' },
+  },
+  durHigh: {
+    dark: { bg: '#14532d', fg: '#86efac' },
+    light: { bg: '#d1fae5', fg: '#047857' },
+  },
+  durMid: {
+    dark: { bg: '#713f12', fg: '#fde68a' },
+    light: { bg: '#fef3c7', fg: '#b45309' },
+  },
+  durLow: {
+    dark: { bg: '#78350f', fg: '#fcd34d' },
+    light: { bg: '#ffedd5', fg: '#c2410c' },
+  },
+};
+
+export function pillarChipColors(key, light = false) {
+  const entry = PILLAR_CHIP[key];
+  if (!entry) return light ? { bg: '#e7e5e4', fg: '#57534e' } : { bg: '#1e293b', fg: '#94a3b8' };
+  return light ? entry.light : entry.dark;
+}

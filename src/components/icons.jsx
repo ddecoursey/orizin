@@ -232,6 +232,16 @@ export function IconChevronDown({ className = "" }) {
   );
 }
 
+/** Notification bell — watchlist alerts in the header. */
+export function IconBell({ className = "" }) {
+  return (
+    <Svg className={className} strokeWidth="1.7">
+      <path d="M12 3.2a4.6 4.6 0 0 0-4.6 4.6v2.2c0 .9-.3 1.8-.9 2.5L5.2 15h13.6l-1.3-2.5a3.5 3.5 0 0 1-.9-2.5V7.8A4.6 4.6 0 0 0 12 3.2Z" />
+      <path d="M10.2 17.2a1.9 1.9 0 0 0 3.6 0" />
+    </Svg>
+  );
+}
+
 /** Watchlist — eye mark (distinct from screener ★ pins). */
 export function IconWatchlist({ className = "", active = false }) {
   return (

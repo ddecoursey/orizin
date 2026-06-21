@@ -2,6 +2,7 @@ import InfoHint from "./InfoHint.jsx";
 import Tooltip from "./Tooltip.jsx";
 import { IconRefresh } from "./icons.jsx";
 import { PRO_PRICE_LABEL } from "../lib/billing.js";
+import { upgradeCta } from "../lib/ranks.js";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
 // Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
@@ -101,7 +102,7 @@ export function GamePlanProGate({ onUpgrade }) {
           onClick={onUpgrade}
           className="mt-4 text-xs font-semibold px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-500 transition-colors cursor-pointer"
         >
-          Upgrade to Pro — {PRO_PRICE_LABEL}
+          {upgradeCta(undefined, PRO_PRICE_LABEL)}
         </button>
       )}
     </section>
@@ -353,7 +354,7 @@ function Header({ confidence, canUseOri = true }) {
         <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</h3>
         <InfoHint text={canUseOri
           ? "0–100 conviction from fundamentals, value, technicals, insiders, analysts, Fit, and Ori — plus hold horizon and action. Not financial advice."
-          : "Fundamentals-only view from shared data. Upgrade to Pro for full conviction and Ori's take."} />
+          : "Fundamentals-only view from shared data. Become a Voyager (Pro) for full conviction and Ori's take."} />
       </div>
       <div className="flex items-center gap-2">
         {confidence && (

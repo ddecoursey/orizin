@@ -11,7 +11,7 @@ import {
 } from "../db.js";
 import { displayNameFor } from "../userProfile.js";
 import { hasOriAccess } from "../access.js";
-import { geminiKeys, valueModel, liteModel, modelTier } from "../geminiJson.js";
+import { geminiKeys, valueModel, liteModel, modelTier, paidTiersAllowed } from "../geminiJson.js";
 import { buildChatGeminiBody } from "../geminiContextCache.js";
 import { checkOriQuota, recordOriUsage, getOriUsageSummary } from "../oriUsage.js";
 import {
@@ -457,7 +457,8 @@ async function fetchGeminiWithRetry({ keys, buildBody, send }) {
   let lastStatus = 0;
   let lastBody = "";
   let sawTimeout = false;
-  const models = [valueModel(), liteModel()];
+  // Non-prod runs lite only so testing never spends on flash.
+  const models = paidTiersAllowed() ? [valueModel(), liteModel()] : [liteModel()];
   const fetchTimeoutMs = chatFetchTimeoutMs();
 
   for (const apiKey of keys) {

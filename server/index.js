@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import stocksRouter, { getDetailCacheStats, generateLiteIntangibles } from './routes/stocks.js';
+import { isProductionEnv } from './geminiJson.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import adminRouter from './routes/admin.js';
@@ -79,7 +80,13 @@ app.use(helmet({
       // paypalobjects.com; without these the subscribe button is blocked in prod.
       scriptSrc: ["'self'", "'unsafe-inline'", "https://*.paypal.com", "https://*.paypalobjects.com"],
       // The PayPal button/checkout renders in an iframe and calls PayPal's API.
-      connectSrc: ["'self'", "https://*.paypal.com", "https://*.paypalobjects.com"],
+      connectSrc: [
+        "'self'",
+        "https://*.paypal.com",
+        "https://*.paypalobjects.com",
+        "https://prod.spline.design",
+        "https://*.spline.design",
+      ],
       frameSrc: ["'self'", "https://*.paypal.com", "https://*.paypalobjects.com"],
       // Google Fonts: the stylesheet comes from fonts.googleapis.com and the
       // font files from fonts.gstatic.com — without these the brand font
@@ -399,7 +406,7 @@ app.post('/api/auth/reset-password', loginLimiter, (req, res) => {
   establishSession(res, req, {
     user: username,
     isAdmin: !!updated?.is_admin,
-    plan: updated?.plan === 'pro' ? 'pro' : 'free',
+    plan: db.normalizePlan(updated?.plan),
   }, 'reset');
   res.json({ ok: true });
 });
@@ -441,7 +448,7 @@ app.get('/api/auth/me', (req, res) => {
     // period has ended, so access reflects reality without waiting for the sweep.
     const dbUser = db.reconcileUserPlan(payload.user);
     if (dbUser) {
-      plan = dbUser.plan === 'pro' ? 'pro' : 'free';
+      plan = db.normalizePlan(dbUser.plan);
       email = dbUser.email || null;
       notificationEmail = dbUser.notification_email || null;
       isAdmin = !!dbUser.is_admin;
@@ -798,20 +805,29 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     try { db.pruneLoginEvents(Date.now() - 90 * 24 * 60 * 60 * 1000); } catch (e) { console.error('[auth] login-event prune failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
 
-  // Shared "leaders" baseline for screener intangibles: a slow trickle that gives
-  // the top market-cap names a lite intangibles + X-Factors review so the screener
-  // shows them without anyone opening Deep Research. Bounded to the top
-  // SCREENER_INTANGIBLES_LEADERS names (≈that many lite calls / 24h, shared across
-  // users) and serialized by the lite lane so it never starves chat or DR.
-  if (process.env.SCREENER_INTANGIBLES_ENABLED !== 'false') {
-    const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60_000;
-    const LEADERS = Number(process.env.SCREENER_INTANGIBLES_LEADERS) || 250;
+  // Shared "leaders" baseline for screener intangibles: an HOURLY, lite-only
+  // trickle that keeps a fresh 24h cache warm for the top SCREENER_INTANGIBLES_
+  // LEADERS market-cap names, so the screener serves them from cache without
+  // anyone opening Deep Research. It is CACHE-AWARE — each tick only regenerates
+  // the few leaders whose 24h cache has expired (≈LEADERS/24h total, not a
+  // continuous run) and stops doing anything once they're all warm. Serialized
+  // by the lite lane so it never starves chat or DR.
+  //
+  // Production-only: dev/staging must never spend on this background job.
+  const trickleEnabled =
+    process.env.SCREENER_INTANGIBLES_ENABLED !== 'false' && isProductionEnv();
+  if (trickleEnabled) {
+    const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60 * 60 * 1000; // hourly
+    const LEADERS = Number(process.env.SCREENER_INTANGIBLES_LEADERS) || 50;
+    const BATCH = Number(process.env.SCREENER_INTANGIBLES_BATCH) || 5; // stale leaders per tick
     const geminiSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
     if (geminiSet) {
       setInterval(async () => {
         try {
-          const [sym] = db.nextIntangiblesBacklog(Date.now() - 24 * 60 * 60 * 1000, LEADERS, 1);
-          if (sym) await generateLiteIntangibles(sym, {});
+          const stale = db.nextIntangiblesBacklog(Date.now() - 24 * 60 * 60 * 1000, LEADERS, BATCH);
+          for (const sym of stale) {
+            await generateLiteIntangibles(sym, {}); // lite-only, cached 24h
+          }
         } catch (e) {
           console.error('[intangibles] baseline trickle failed:', e.message);
         }

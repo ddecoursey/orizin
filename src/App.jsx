@@ -3,7 +3,7 @@ import { useInactivityLogout } from "./hooks/useInactivityLogout.js";
 import { useWatchlists } from "./hooks/useWatchlists.js";
 import { useWatchlistAlerts } from "./hooks/useWatchlistAlerts.js";
 import WatchlistPanel from "./components/WatchlistPanel.jsx";
-import NotificationHost from "./components/NotificationHost.jsx";
+
 import { LazyMotion, domAnimation, m, AnimatePresence, useReducedMotion } from "./lib/motion.js";
 import { useScreener } from "./hooks/useScreener.js";
 import { useChat } from "./hooks/useChat.js";
@@ -17,6 +17,7 @@ import StockTable from "./components/StockTable.jsx";
 import ScorecardGrid from "./components/ScorecardGrid.jsx";
 import ProgressBar from "./components/ProgressBar.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
+
 // Lazy: the landing page (and framer-motion with it) is only downloaded by
 // signed-out visitors — signed-in users go straight to the app bundle.
 const HomePage = lazy(() => import("./pages/HomePage.jsx"));
@@ -31,6 +32,7 @@ import AddTickerModal from "./components/AddTickerModal.jsx";
 import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
 import { computeFit } from "./lib/fitScore.js";
 import { computeVerdict } from "./lib/verdict.js";
+import { parseSessionPlan, hasOriAccess } from "./lib/ranks.js";
 
 
 export default function App() {
@@ -56,7 +58,7 @@ export default function App() {
         const data = await r.json().catch(() => ({}));
         setCurrentUser(data.user || "default");
         setIsAdmin(!!data.isAdmin);
-        setPlan(data.plan === "pro" ? "pro" : "free");
+        setPlan(parseSessionPlan(data.plan));
         setAppEnv(data.env || "production");
         if (data.inactivityMinutes) setInactivityMinutes(data.inactivityMinutes);
         setAuthState("authed");
@@ -73,7 +75,7 @@ export default function App() {
       const data = await r.json();
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
-      setPlan(data.plan === "pro" ? "pro" : "free");
+      setPlan(parseSessionPlan(data.plan));
       setAppEnv(data.env || "production");
       setAuthState("authed");
     } catch {
@@ -90,7 +92,7 @@ export default function App() {
       const data = await r.json();
       setCurrentUser(data.user || "default");
       setIsAdmin(!!data.isAdmin);
-      setPlan(data.plan === "pro" ? "pro" : "free");
+      setPlan(parseSessionPlan(data.plan));
       setAppEnv(data.env || "production");
     } catch {
       /* ignore — keep current state */
@@ -167,7 +169,7 @@ function sanitizeTicker(sym) {
 function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", onLogout, onAuthRefresh }) {
   // Ori access: Pro plan or admin. The server enforces this on /api/chat too —
   // this flag just drives the paywall UI.
-  const canUseOri = isAdmin || plan === "pro";
+  const canUseOri = hasOriAccess({ plan, isAdmin });
   // Gate framer transitions for users who prefer reduced motion (the CSS
   // micro-animations are gated in index.css via the same media query).
   const reduceMotion = useReducedMotion();
@@ -455,7 +457,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     if (result?.ok) {
       const sym = result.alert?.symbol || watchlists.watchlist?.symbols?.[0] || "AAPL";
       setWlTestOk(true);
-      setWlTestMsg(`In-app toast sent for ${sym} (bottom-right). Email is not sent by this button.`);
+      const n = result.alerts?.length ?? 1;
+      setWlTestMsg(`${n} alert${n === 1 ? "" : "s"} queued — check the red badge on Watchlist in the header. Email is not sent by this button.`);
     } else {
       setWlTestOk(false);
       setWlTestMsg(result?.error || "Test notification failed");
@@ -819,9 +822,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     }
   };
 
-  // Ori launch: just open the chat. The planet's orbit-out is driven by the
-  // AnimatePresence exit on the floating button (the mirror image of its
-  // orbit-in entry), so opening and closing animate identically in reverse.
+  // Ori launch: just open the chat. The helmet's orbit-out is driven by the
+  // AnimatePresence exit on the floating button (mirror image of orbit-in).
   const launchOri = () => {
     if (chat.isOpen) return;
     chat.setIsOpen(true);
@@ -831,21 +833,18 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     <LazyMotion features={domAnimation} strict>
     <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
       {isAdmin && enrichNotice && (
-        <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-emerald-950/50 border-b border-emerald-800/50 text-xs text-emerald-200">
+        <div className="enrich-notice shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-emerald-950/50 border-b border-emerald-800/50 text-xs text-emerald-200">
           <span>
             Refreshed <strong>{enrichNotice.symbols.join(", ")}</strong> — visible to all users
           </span>
-          <button type="button" onClick={clearEnrichNotice} className="text-emerald-400/80 hover:text-emerald-200 cursor-pointer">Dismiss</button>
+          <button type="button" onClick={clearEnrichNotice} className="enrich-notice-dismiss text-emerald-400/80 hover:text-emerald-200 cursor-pointer">Dismiss</button>
         </div>
       )}
       <Header
         status={status}
         filtered={filtered}
-        onOpenWatchlist={() => {
-          wlAlerts.markRead();
-          setShowWatchlist(true);
-        }}
-        watchlistUnread={wlAlerts.unread}
+        onOpenWatchlist={() => setShowWatchlist(true)}
+        watchlistUnread={wlAlerts.alerts.length}
 
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
@@ -1368,6 +1367,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         snapshots={wlAlerts.snapshots}
         pendingSymbols={pendingWlSymbols}
         canUseOri={canUseOri}
+        alerts={wlAlerts.alerts}
+        onDismissAlert={wlAlerts.dismiss}
+        onClearAlerts={wlAlerts.markRead}
+        onOpenAlertSymbol={(sym) => {
+          setShowWatchlist(false);
+          openDeepResearch(sym);
+        }}
         onSelectSymbol={(sym) => {
           setShowWatchlist(false);
           openDeepResearch(sym);
@@ -1377,12 +1383,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         testAlertBusy={wlTestBusy}
         testAlertMsg={wlTestMsg}
         testAlertOk={wlTestOk}
-      />
-
-      <NotificationHost
-        alerts={wlAlerts.alerts}
-        onDismiss={wlAlerts.dismiss}
-        onOpenSymbol={(sym) => openDeepResearch(sym)}
       />
 
       {showUpgradeModal && (

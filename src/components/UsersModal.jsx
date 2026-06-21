@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { PRO_PRICE_LABEL } from "../lib/billing.js";
+import RankBadge from "./RankBadge.jsx";
+import { upgradeCta, hasOriAccess } from "../lib/ranks.js";
 import { DEFAULT_WATCHLIST_ALERTS } from "../lib/watchlistAlertsConfig.js";
 import { fetchUserSettings, patchUserSettings } from "../lib/userStore.js";
 
@@ -9,6 +11,15 @@ function userListLabel(u) {
   const email = u.email || (EMAIL_RE.test(u.username) ? u.username : u.username);
   if (u.nickname) return { primary: u.nickname, secondary: email };
   return { primary: email, secondary: null };
+}
+
+const ACTIVE_SUB = new Set(["ACTIVE", "APPROVED"]);
+
+function planAfterRevokeStarfarer(u) {
+  const sub = String(u.subscription_status || "").toUpperCase();
+  if (ACTIVE_SUB.has(sub)) return "pro";
+  if (u.pro_until && u.pro_until > Date.now()) return "pro";
+  return "free";
 }
 
 function usagePct(used, limit) {
@@ -483,7 +494,7 @@ export default function UsersModal({
 
             <Section title="Users">
               <HelperText className="mb-3">
-                Click a user for login history and Ori usage. Open the full observability dashboard from the profile menu.
+                Click a user for login history and Ori usage. Starfarer is admin-only — higher Ori limits, not sold via PayPal.
               </HelperText>
               {loading ? (
                 <div className="text-sm text-gray-400">Loading...</div>
@@ -510,9 +521,7 @@ export default function UsersModal({
                             {u.is_admin && (
                               <span className="text-[10px] px-1.5 py-0.5 bg-emerald-900 text-emerald-300 rounded">admin</span>
                             )}
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${u.plan === 'pro' ? 'bg-violet-900 text-violet-300' : 'bg-gray-800 text-gray-500'}`}>
-                              {u.plan === 'pro' ? 'PRO' : 'free'}
-                            </span>
+                            <RankBadge plan={u.plan} isAdmin={u.is_admin} size="sm" />
                             {u.username === currentUser && (
                               <span className="text-xs text-blue-400">(you)</span>
                             )}
@@ -525,13 +534,32 @@ export default function UsersModal({
                           </div>
                         </div>
                         <div className="flex items-center gap-3 shrink-0 flex-wrap sm:justify-end" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => setPlan(u.username, u.plan === 'pro' ? 'free' : 'pro')}
-                            className="text-xs text-gray-400 hover:text-violet-300 whitespace-nowrap"
-                            title="Toggle the paid plan after the user's payment arrives"
-                          >
-                            {u.plan === 'pro' ? 'Downgrade' : 'Set Pro'}
-                          </button>
+                          {u.plan !== 'ultimate' && (
+                            <button
+                              onClick={() => setPlan(u.username, u.plan === 'pro' ? 'free' : 'pro')}
+                              className="text-xs text-gray-400 hover:text-violet-300 whitespace-nowrap"
+                              title="Toggle Voyager after PayPal payment"
+                            >
+                              {u.plan === 'pro' ? 'Downgrade to Traveler' : 'Set Voyager'}
+                            </button>
+                          )}
+                          {u.plan === 'ultimate' ? (
+                            <button
+                              onClick={() => setPlan(u.username, planAfterRevokeStarfarer(u))}
+                              className="text-xs text-gray-400 hover:text-amber-300 whitespace-nowrap"
+                              title="Remove admin Starfarer grant"
+                            >
+                              Revoke Starfarer
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setPlan(u.username, 'ultimate')}
+                              className="text-xs text-gray-400 hover:text-amber-300 whitespace-nowrap"
+                              title="Grant Starfarer — higher Ori limits only"
+                            >
+                              Grant Starfarer
+                            </button>
+                          )}
                           {u.username !== currentUser && (
                             <button
                               onClick={() => toggleAdmin(u.username, !u.is_admin)}
@@ -656,9 +684,7 @@ export default function UsersModal({
             <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 sm:p-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="min-w-0">
-                  <span className={`text-sm font-bold ${(plan === 'pro' || isAdmin) ? 'text-violet-300' : 'text-gray-200'}`}>
-                    {isAdmin ? 'Admin (full access)' : plan === 'pro' ? 'Pro' : 'Free'}
-                  </span>
+                  <RankBadge plan={plan} isAdmin={isAdmin} layout="stacked" size="md" showTagline />
                   {!isAdmin && subStatus?.proUntil && (
                     <div className="text-[11px] text-gray-500 mt-0.5">
                       {['ACTIVE', 'APPROVED'].includes(String(subStatus.status || '').toUpperCase())
@@ -669,18 +695,18 @@ export default function UsersModal({
                 </div>
 
                 {/* Free → upgrade via the real PayPal checkout modal */}
-                {!isAdmin && plan !== 'pro' && (
+                {!isAdmin && !hasOriAccess({ plan, isAdmin }) && (
                   <button
                     onClick={() => onUpgradeToPro && onUpgradeToPro()}
                     className="w-full sm:w-auto shrink-0 text-xs font-semibold px-3 py-2 rounded-md text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all text-center"
                   >
-                    Upgrade — {PRO_PRICE_LABEL}
+                    {upgradeCta(undefined, PRO_PRICE_LABEL)}
                   </button>
                 )}
 
                 {/* Pro with an ACTIVE subscription → cancel (won't renew, keeps grace) */}
                 {!isAdmin && plan === 'pro' && subStatus?.subscriptionId &&
-                  ['ACTIVE', 'APPROVED'].includes(String(subStatus.status || '').toUpperCase()) && (
+                  ACTIVE_SUB.has(String(subStatus.status || '').toUpperCase()) && (
                   <button
                     onClick={cancelSubscription}
                     disabled={canceling}
@@ -691,9 +717,11 @@ export default function UsersModal({
                 )}
               </div>
               <HelperText className="mt-3">
-                {isAdmin || plan === 'pro'
-                  ? 'You have full access to Ori, the AI analyst.'
-                  : `Free includes the full screener, Deep Research, and portfolio tools. Pro (${PRO_PRICE_LABEL}) unlocks Ori — the portfolio-aware AI analyst.`}
+                {plan === 'ultimate'
+                  ? 'Starfarer — admin-granted tier with higher Ori usage limits.'
+                  : hasOriAccess({ plan, isAdmin })
+                    ? 'You have full access to Ori, the AI analyst.'
+                    : `Travelers get the full screener, Deep Research, and portfolio tools. Voyager (${PRO_PRICE_LABEL}) unlocks Ori — your portfolio-aware AI analyst.`}
               </HelperText>
             </div>
           </Section>

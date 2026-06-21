@@ -30,6 +30,61 @@ function pctCls(pct) {
   return "text-gray-400";
 }
 
+function WatchlistAlerts({ alerts = [], onDismiss, onOpenSymbol, onClearAll }) {
+  if (!alerts.length) return null;
+
+  return (
+    <div className="px-3 py-2 border-b border-gray-800/80 bg-gray-900/35 space-y-1 max-h-36 overflow-y-auto">
+      {alerts.slice(0, 8).map((a) => (
+        <div
+          key={a.id}
+          className="flex items-start gap-1.5 rounded-md px-2 py-1.5 hover:bg-gray-800/50 transition-colors group"
+        >
+          <button
+            type="button"
+            onClick={() => onOpenSymbol?.(a.symbol)}
+            className="min-w-0 flex-1 text-left cursor-pointer"
+          >
+            <div className="text-[10px] text-gray-300 truncate group-hover:text-gray-100 transition-colors">
+              {a.title}
+            </div>
+            {a.message && (
+              <div className="text-[9px] text-gray-500 truncate">{a.message}</div>
+            )}
+          </button>
+          {a.type === "news" && a.url && (
+            <a
+              href={a.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shrink-0 text-[9px] text-violet-400/80 hover:text-violet-300"
+            >
+              →
+            </a>
+          )}
+          <button
+            type="button"
+            onClick={() => onDismiss?.(a.id)}
+            className="shrink-0 text-gray-600 hover:text-gray-400 text-xs leading-none opacity-60 hover:opacity-100"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      {alerts.length > 1 && (
+        <button
+          type="button"
+          onClick={onClearAll}
+          className="w-full text-[9px] text-gray-500 hover:text-gray-400 py-0.5 transition-colors"
+        >
+          Clear all ({alerts.length})
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function WatchlistPanel({
   open,
   onClose,
@@ -42,6 +97,10 @@ export default function WatchlistPanel({
   pendingSymbols = new Set(),
   canUseOri = false,
   onSelectSymbol,
+  alerts = [],
+  onDismissAlert,
+  onClearAlerts,
+  onOpenAlertSymbol,
   showDevTest = false,
   onTestAlert,
   testAlertBusy = false,
@@ -52,6 +111,7 @@ export default function WatchlistPanel({
 
   const stockMap = new Map(stocks.map((s) => [s.symbol, s]));
   const symbols = watchlist?.symbols || [];
+  const alertCount = alerts.length;
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
@@ -64,6 +124,15 @@ export default function WatchlistPanel({
           </div>
           <button type="button" onClick={onClose} className="text-gray-500 hover:text-gray-200 px-1 cursor-pointer shrink-0">×</button>
         </header>
+
+        {alertCount > 0 && (
+          <WatchlistAlerts
+            alerts={alerts}
+            onDismiss={onDismissAlert}
+            onOpenSymbol={onOpenAlertSymbol}
+            onClearAll={onClearAlerts}
+          />
+        )}
 
         <div className="px-4 py-3 border-b border-gray-800 shrink-0">
           <GlobalSearch

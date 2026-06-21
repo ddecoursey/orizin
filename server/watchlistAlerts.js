@@ -23,8 +23,43 @@ export function devAlertsTestEnabled() {
   return env === 'development';
 }
 
-/** Inject a sample alert into pending_digest so the in-app toast can be previewed. */
-export function injectTestAlert(userId, { symbol, type = 'price' } = {}) {
+function buildTestAlert(userId, sym, type, ts, row) {
+  if (type === 'news') {
+    return {
+      id: `${userId}:${sym}:news:test:${ts}`,
+      type: 'news',
+      symbol: sym,
+      title: `${sym}: [Dev test] Sample headline`,
+      message: 'Test news notification',
+      url: 'https://example.com/watchlist-test',
+      ts,
+    };
+  }
+  if (type === 'conviction') {
+    return {
+      id: `${userId}:${sym}:conviction:test:${ts}`,
+      type: 'conviction',
+      symbol: sym,
+      title: `${sym} conviction rose to 72`,
+      message: 'Dev test — conviction shift (+9)',
+      conviction: 72,
+      ts,
+    };
+  }
+  const px = row?.price ?? 100;
+  return {
+    id: `${userId}:${sym}:price:test:${ts}`,
+    type: 'price',
+    symbol: sym,
+    title: `${sym} up 6.1%`,
+    message: `Dev test — now $${Number(px).toFixed(2)} vs session baseline`,
+    pct: 6.1,
+    ts,
+  };
+}
+
+/** Inject sample alert(s) into pending_digest so the in-app toast can be previewed. */
+export function injectTestAlert(userId, { symbol, type = 'price', multiple = true } = {}) {
   const settings = db.getUserSettings(userId);
   const lists = normalizeWatchlists(settings.watchlists);
   const symbols = lists[0]?.symbols || [];
@@ -32,44 +67,17 @@ export function injectTestAlert(userId, { symbol, type = 'price' } = {}) {
   const row = db.getStock(sym);
   const now = Date.now();
 
-  let alert;
-  if (type === 'news') {
-    alert = {
-      id: `${userId}:${sym}:news:test:${now}`,
-      type: 'news',
-      symbol: sym,
-      title: `${sym}: [Dev test] Sample headline`,
-      message: 'Test news notification',
-      url: 'https://example.com/watchlist-test',
-      ts: now,
-    };
-  } else if (type === 'conviction') {
-    alert = {
-      id: `${userId}:${sym}:conviction:test:${now}`,
-      type: 'conviction',
-      symbol: sym,
-      title: `${sym} conviction rose to 72`,
-      message: 'Dev test — conviction shift (+9)',
-      conviction: 72,
-      ts: now,
-    };
-  } else {
-    const px = row?.price ?? 100;
-    alert = {
-      id: `${userId}:${sym}:price:test:${now}`,
-      type: 'price',
-      symbol: sym,
-      title: `${sym} up 6.1%`,
-      message: `Dev test — now $${Number(px).toFixed(2)} vs session baseline`,
-      pct: 6.1,
-      ts: now,
-    };
-  }
+  const types = multiple
+    ? ['price', 'news', 'conviction']
+    : [type];
+  const alerts = types.map((t, i) => buildTestAlert(userId, sym, t, now + i, row));
 
   const st = db.getWatchlistAlertState(userId, sym);
-  const pending = [...(st?.pending_digest || []), alert].slice(-MAX_DIGEST_ITEMS);
+  const pending = [...(st?.pending_digest || []), ...alerts].slice(-MAX_DIGEST_ITEMS);
   db.saveWatchlistAlertState(userId, sym, { pending_digest: pending });
-  return { alert, symbol: sym };
+
+  if (multiple) return { alerts, symbol: sym };
+  return { alert: alerts[0], symbol: sym };
 }
 
 function pctChange(from, to) {

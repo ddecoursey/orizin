@@ -1,4 +1,4 @@
-import { reconcileUserPlan, getUserByUsername, userCount } from "./db.js";
+import { reconcileUserPlan, getUserByUsername, userCount, hasOriPlan } from "./db.js";
 
 // Explicit opt-in to bypass the Pro gate while developing (so the owner can
 // exercise Ori on their own box without marking their account Pro). Off by
@@ -29,7 +29,7 @@ export function hasOriAccess(userId) {
       // A valid session with no matching user (e.g. after admin delete) is denied.
       return userCount() === 0;
     }
-    return !!user.is_admin || user.plan === "pro";
+    return !!user.is_admin || hasOriPlan(user.plan);
   } catch {
     return false;
   }

@@ -97,13 +97,19 @@ export function useWatchlistAlerts({ enabled = true, pollMs = 60_000 } = {}) {
         return { error: body?.error || "Failed" };
       }
       const data = await res.json();
-      if (data.alert?.id) {
-        rememberAlertId(seenIds.current, data.alert.id);
-        setAlerts((prev) => [data.alert, ...prev].slice(0, 30));
-        setUnread((n) => n + 1);
-        sinceRef.current = Math.max(sinceRef.current, data.alert.ts || 0);
+      const incoming = Array.isArray(data.alerts)
+        ? data.alerts
+        : data.alert?.id
+          ? [data.alert]
+          : [];
+      if (incoming.length) {
+        incoming.forEach((a) => rememberAlertId(seenIds.current, a.id));
+        setAlerts((prev) => [...incoming, ...prev].slice(0, 30));
+        setUnread((n) => n + incoming.length);
+        const maxTs = Math.max(...incoming.map((a) => a.ts || 0), sinceRef.current);
+        sinceRef.current = maxTs;
       }
-      return { ok: true, alert: data.alert };
+      return { ok: true, alert: incoming[0], alerts: incoming };
     } catch {
       return { error: "Network error" };
     }

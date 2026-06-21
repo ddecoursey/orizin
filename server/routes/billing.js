@@ -30,7 +30,7 @@ router.get('/billing/status', (req, res) => {
   const user = db.reconcileUserPlan(req.userId) || db.getUserByUsername(req.userId);
   if (!user) return res.json({ plan: 'free', status: null, subscriptionId: null, proUntil: null });
   res.json({
-    plan: user.plan === 'pro' ? 'pro' : 'free',
+    plan: db.normalizePlan(user.plan),
     status: user.subscription_status || null,
     subscriptionId: user.paypal_subscription_id || null,
     proUntil: user.pro_until || null,
@@ -76,7 +76,7 @@ router.post('/billing/activate', actionLimiter, async (req, res) => {
   const to = emailForNotifications(updated);
   if (to) sendEmail({ to, ...subscriptionEmail(), priority: 'critical' }).catch(() => {});
 
-  res.json({ ok: true, plan: 'pro', status: sub.status, proUntil: updated?.pro_until || null });
+  res.json({ ok: true, plan: db.normalizePlan(updated?.plan), status: sub.status, proUntil: updated?.pro_until || null });
 });
 
 // POST /api/billing/cancel — stop the recurring PayPal billing, but KEEP Pro
@@ -114,7 +114,7 @@ router.post('/billing/cancel', actionLimiter, async (req, res) => {
 
   res.json({
     ok: true,
-    plan: updated?.plan === 'pro' ? 'pro' : 'free',
+    plan: db.normalizePlan(updated?.plan),
     status: 'CANCELLED',
     proUntil: updated?.pro_until || null,
   });

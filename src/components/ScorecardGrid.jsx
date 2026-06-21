@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { fmt } from '../lib/format.js';
-import { SECTOR_COLORS } from '../lib/scoring.js';
+import { sectorChipColors, pillarChipColors } from '../lib/scoring.js';
+import { useIsLightTheme } from '../hooks/useIsLightTheme.js';
 import { IconChart } from './icons.jsx';
 import Tooltip from "./Tooltip.jsx";
 import OriTip from "./OriTip.jsx";
@@ -46,9 +47,10 @@ function SubChip({ label, value, colors, title, lowCov }) {
 }
 
 function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = false }) {
+  const isLight = useIsLightTheme();
   const sc = r.conviction != null ? r.conviction : null;
   const scoreColor = sc >= 70 ? '#10b981' : sc >= 45 ? '#f59e0b' : '#ef4444';
-  const sec = SECTOR_COLORS[r.sector] || { bg: '#1e293b', fg: '#94a3b8' };
+  const sec = sectorChipColors(r.sector, isLight);
 
   return (
     <div
@@ -61,7 +63,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
     >
       <div className="flex justify-between items-start mb-1">
         <div>
-          <span className="text-[9px] font-bold text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded mr-1">
+          <span className="text-[9px] font-bold text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded mr-1 scorecard-rank">
             #{rank}
           </span>
           <span className="font-black text-gray-100 text-base">{r.symbol}</span>
@@ -141,21 +143,21 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
         <SubChip
           label="Q"
           value={r.qScore}
-          colors={{ bg: '#14532d', fg: '#86efac' }}
+          colors={pillarChipColors('q', isLight)}
           lowCov={r.pillarCoverage && r.pillarCoverage.q < 0.5}
           title={`Quality: ROIC, margins, balance sheet. ${r.pillarCoverage ? Math.round(r.pillarCoverage.q * 100) : '—'}% data.`}
         />
         <SubChip
           label="V"
           value={r.vScore}
-          colors={{ bg: '#713f12', fg: '#fde68a' }}
+          colors={pillarChipColors('v', isLight)}
           lowCov={r.pillarCoverage && r.pillarCoverage.v < 0.5}
           title={`Value: multiples + margin of safety. ${r.pillarCoverage ? Math.round(r.pillarCoverage.v * 100) : '—'}% data.`}
         />
         <SubChip
           label="G"
           value={r.gScore}
-          colors={{ bg: '#134e4b', fg: '#5eead4' }}
+          colors={pillarChipColors('g', isLight)}
           lowCov={r.pillarCoverage && r.pillarCoverage.g < 0.5}
           title={`Growth: rev/EPS/FCF (TTM). ${r.pillarCoverage ? Math.round(r.pillarCoverage.g * 100) : '—'}% data.`}
         />
@@ -165,8 +167,8 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
             value={r.dataCoverage}
             colors={
               (r.dataCoveragePenalty && r.dataCoveragePenalty > 0)
-                ? { bg: '#78350f', fg: '#fcd34d' }
-                : (r.dataCoverage >= 0.75 ? { bg: '#1e3a5f', fg: '#93c5fd' } : { bg: '#78350f', fg: '#fcd34d' })
+                ? pillarChipColors('dataWarn', isLight)
+                : (r.dataCoverage >= 0.75 ? pillarChipColors('dataOk', isLight) : pillarChipColors('dataWarn', isLight))
             }
             title={
               (r.dataCoveragePenalty && r.dataCoveragePenalty > 0)
@@ -180,8 +182,8 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
             label="Dur"
             value={r.durabilityProxy / 100}
             colors={
-              r.durabilityProxy >= 70 ? { bg: '#14532d', fg: '#86efac' } :
-              r.durabilityProxy >= 50 ? { bg: '#713f12', fg: '#fde68a' } : { bg: '#78350f', fg: '#fcd34d' }
+              r.durabilityProxy >= 70 ? pillarChipColors('durHigh', isLight) :
+              r.durabilityProxy >= 50 ? pillarChipColors('durMid', isLight) : pillarChipColors('durLow', isLight)
             }
             title={`Durability ${r.durabilityProxy}/100. Quality + efficiency proxy. Full Ori on Deep Research.`}
           />

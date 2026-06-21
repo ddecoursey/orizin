@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import OrizinLogo from "./OrizinLogo.jsx";
+import RankBadge from "./RankBadge.jsx";
+import RankEmblem from "./RankEmblem.jsx";
+import { resolveRank, upgradeCta, hasOriAccess } from "../lib/ranks.js";
 import {
   IconSun,
   IconMoon,
@@ -160,11 +163,23 @@ export default function Header({
       ? currentUser.charAt(0).toUpperCase()
       : "•";
 
-  const tier = isAdmin ? "admin" : (String(plan || "free").toLowerCase() === "pro" ? "pro" : "free");
-  const tierLabel = tier === "admin" ? "Admin" : tier === "pro" ? "Pro" : "Free";
+  const rank = resolveRank({ plan, isAdmin });
 
   return (
     <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex items-center gap-2 sm:gap-3 shrink-0 text-sm">
+      {currentUser && currentUser !== "default" && (
+        <>
+          <div
+            className={`pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r opacity-[0.82] ${rank.headerAccent}`}
+            aria-hidden="true"
+            title={`${rank.name} (${rank.label})`}
+          />
+          <div
+            className={`pointer-events-none absolute inset-x-6 bottom-0 h-px bg-gradient-to-r blur-[2px] opacity-35 ${rank.headerAccent}`}
+            aria-hidden="true"
+          />
+        </>
+      )}
       {/* Orizin logo + wordmark + tagline */}
       <div className="flex items-center gap-2.5 shrink-0">
         <OrizinLogo className="w-5 h-5" />
@@ -223,12 +238,15 @@ export default function Header({
             type="button"
             onClick={onOpenWatchlist}
             className="relative px-2.5 py-1.5 lg:px-2 lg:py-1 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700/80 hover:border-gray-600 rounded-md transition-colors cursor-pointer whitespace-nowrap"
-            title="Open watchlist panel — track news and price moves"
+            title={watchlistUnread > 0 ? `${watchlistUnread} watchlist alert${watchlistUnread === 1 ? "" : "s"}` : "Open watchlist"}
           >
             Watchlist
             {watchlistUnread > 0 && (
-              <span className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-violet-600 text-[9px] font-bold text-white flex items-center justify-center">
-                {watchlistUnread > 9 ? "9+" : watchlistUnread}
+              <span
+                className="absolute -top-1.5 -right-1.5 min-w-[17px] h-[17px] px-1 rounded-full bg-red-500 text-[10px] font-bold text-white leading-none flex items-center justify-center shadow-sm ring-2 ring-gray-950"
+                aria-hidden="true"
+              >
+                {watchlistUnread > 99 ? "99+" : watchlistUnread > 9 ? "9+" : watchlistUnread}
               </span>
             )}
           </button>
@@ -322,41 +340,31 @@ export default function Header({
             <button
               onClick={toggle}
               className={`relative w-9 h-9 lg:w-8 lg:h-8 rounded-full p-[2px] bg-gradient-to-br transition duration-150 cursor-pointer hover:brightness-110 active:scale-95
-                ${tier === "admin" ? "from-emerald-400 to-teal-500" : tier === "pro" ? "from-violet-400 to-fuchsia-500" : "from-blue-500 to-indigo-500"}
+                ${rank.ringGradient}
                 ${open ? "ring-2 ring-blue-400/40 ring-offset-2 ring-offset-gray-950" : ""}
                 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400`}
-              title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser} (${tierLabel})` : "Account"}
+              title={currentUser && currentUser !== "default" ? `Signed in as ${currentUser} — ${rank.name} (${rank.label})` : "Account"}
             >
               <span className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center text-[11px] font-bold text-gray-100">
                 {initial}
               </span>
-              {/* Always-visible tier dot (emerald = admin, violet = pro, gray = free) */}
               <span
-                className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-gray-950
-                  ${tier === "admin" ? "bg-emerald-400" : tier === "pro" ? "bg-violet-400" : "bg-gray-500"}`}
+                className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-gray-950 bg-gray-900 flex items-center justify-center`}
                 aria-hidden="true"
-              />
+              >
+                <RankEmblem rankId={rank.id} className="w-2 h-2" />
+              </span>
             </button>
           )}
         >
           {(close) => (
             <>
-              <div className="px-3 py-2 border-b border-gray-800">
+              <div className="px-3 py-2 border-b border-gray-800 space-y-2">
                 <div className="text-[10px] uppercase tracking-wider text-gray-500">Signed in as</div>
-                <div className="text-sm text-gray-200 font-medium truncate flex items-center gap-1.5">
+                <div className="text-sm text-gray-200 font-medium truncate">
                   {currentUser && currentUser !== "default" ? currentUser : "Guest"}
-                  <span
-                    className={`text-[9px] px-1.5 py-0.5 rounded ${
-                      tier === "admin"
-                        ? "bg-emerald-900 text-emerald-300"
-                        : tier === "pro"
-                        ? "bg-violet-900 text-violet-300"
-                        : "bg-gray-800 text-gray-500"
-                    }`}
-                  >
-                    {tier}
-                  </span>
                 </div>
+                <RankBadge plan={plan} isAdmin={isAdmin} layout="stacked" size="sm" showTagline />
               </div>
 
               <MenuItem onClick={onToggleTheme}>
@@ -369,13 +377,13 @@ export default function Header({
               </MenuItem>
 
               {/* Upgrade to Pro - only for free users */}
-              {!isAdmin && plan !== "pro" && onUpgradeToPro && (
+              {!isAdmin && !hasOriAccess({ plan, isAdmin }) && onUpgradeToPro && (
                 <MenuItem 
                   onClick={() => { close(); onUpgradeToPro(); }}
                   className="text-violet-300 hover:bg-violet-950/40"
                 >
                   <span className="flex items-center gap-2">
-                    ⬆ Upgrade to Pro — $10/mo
+                    {upgradeCta()}
                   </span>
                 </MenuItem>
               )}
@@ -389,7 +397,7 @@ export default function Header({
               )}
 
               {/* Ori usage — only meaningful for accounts that can use Ori. */}
-              {(isAdmin || plan === "pro") && onOriUsage && (
+              {hasOriAccess({ plan, isAdmin }) && onOriUsage && (
                 <MenuItem onClick={() => { close(); onOriUsage(); }}>
                   <span className="flex items-center gap-2">
                     <IconChart className="w-3.5 h-3.5 text-gray-500" /> Ori usage

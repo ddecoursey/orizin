@@ -633,6 +633,30 @@ test('Ori is gated behind the Pro plan (402 for free users, open after upgrade)'
   assert.equal(junk.status, 400);
 });
 
+test('admin can grant Starfarer (ultimate) to a free user', async () => {
+  const patch = await fetch(api(`/api/users/${encodeURIComponent(VIEWER_EMAIL)}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ plan: 'ultimate' }),
+  });
+  const patchBody = await json(patch);
+  assert.equal(patch.status, 200, `expected 200, got ${patch.status}: ${JSON.stringify(patchBody)}`);
+  assert.equal(patchBody.plan, 'ultimate');
+
+  const opened = await fetch(api('/api/chat'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ message: 'hello' }),
+  });
+  assert.equal(opened.status, 503);
+
+  await fetch(api(`/api/users/${encodeURIComponent(VIEWER_EMAIL)}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+    body: JSON.stringify({ plan: 'free' }),
+  });
+});
+
 test('screener lite intangibles endpoint is Pro-gated and validates the symbol', async () => {
   // A fresh free signup is behind the paywall.
   const email = `intang_${Date.now()}@example.com`;

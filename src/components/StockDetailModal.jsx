@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { fmt } from "../lib/format.js";
-import { SECTOR_COLORS } from "../lib/scoring.js";
+import { sectorChipColors } from "../lib/scoring.js";
+import { useIsLightTheme } from "../hooks/useIsLightTheme.js";
 import { IconResearch, IconCompare } from "./icons.jsx";
 import RatingsSnapshot from "./RatingsSnapshot.jsx";
 
@@ -779,6 +780,7 @@ export default function StockDetailModal({
   const [tabInternal, setTabInternal] = useState("overview");
   const activeTab = tab ?? tabInternal;
   const setActiveTab = onTabChange || setTabInternal;
+  const isLight = useIsLightTheme();
 
   // Close on Escape
   useEffect(() => {
@@ -789,7 +791,7 @@ export default function StockDetailModal({
 
   if (!row) return null;
 
-  const sec = SECTOR_COLORS[row.sector] || { bg: "#1e293b", fg: "#94a3b8" };
+  const sec = sectorChipColors(row.sector, isLight);
   const sc = row.conviction != null ? row.conviction : row.score != null ? Math.round(row.score * 100) : null;
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 

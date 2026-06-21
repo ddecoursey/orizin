@@ -125,7 +125,7 @@ export function establishSession(res, req, { user, isAdmin, plan }, kind = "logi
     maxAgeMs: SESSION_MAX_AGE_MS,
     secure: req.secure,
   }));
-  return { tokenPayload, plan: plan || (dbUser?.plan === "pro" ? "pro" : "free") };
+  return { tokenPayload, plan: plan || db.normalizePlan(dbUser?.plan) };
 }
 
 /** Throttled last-seen update on authenticated API traffic. */

@@ -3,6 +3,8 @@ import { m, useReducedMotion } from "../lib/motion.js";
 import OriEmblem from "./OriEmblem.jsx";
 import { IconResearch } from "./icons.jsx";
 import { PRO_PRICE_LABEL, PRO_FEATURES } from "../lib/billing.js";
+import RankBadge from "./RankBadge.jsx";
+import { upgradeCta } from "../lib/ranks.js";
 
 function relTime(ts) {
   if (!ts) return "";
@@ -132,8 +134,9 @@ function ProPaywall({ onUpgradeToPro }) {
       <div className="flex items-center gap-2 mb-2">
         <OriEmblem className="w-7 h-7 text-violet-400" />
         <div>
-          <div className="text-sm font-bold text-gray-100">Unlock Ori with Pro</div>
-          <div className="text-[11px] text-violet-300 font-semibold">{PRO_PRICE_LABEL}</div>
+          <div className="text-sm font-bold text-gray-100">Unlock Ori as a Voyager</div>
+          <div className="mt-1"><RankBadge plan="pro" size="sm" /></div>
+          <div className="text-[11px] text-violet-300 font-semibold mt-1">{PRO_PRICE_LABEL}</div>
         </div>
       </div>
       <ul className="space-y-1 mb-3">
@@ -153,7 +156,7 @@ function ProPaywall({ onUpgradeToPro }) {
         }}
         className="block w-full text-center px-3 py-2 rounded-lg text-xs font-semibold text-white bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110 transition-all"
       >
-        Upgrade — pay {PRO_PRICE_LABEL} via PayPal
+        {upgradeCta(undefined, PRO_PRICE_LABEL)} via PayPal
       </button>
       <p className="text-[10px] text-gray-500 mt-2 leading-snug">
         Uses PayPal sandbox for testing. After subscribing, you’ll be upgraded to Pro.
@@ -308,7 +311,6 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false, el
       />
       {/* Header */}
       <div className="relative px-3 py-2 lg:py-2.5 border-b border-gray-800 flex items-center gap-2">
-        {/* "Landing" pop — Ori arrives in the header right after the launch arc */}
         <m.div
           className="shrink-0"
           initial={reduce ? false : { scale: 0, rotate: -90 }}
@@ -567,7 +569,7 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false, el
               setHistIdx(null);
             }}
             onKeyDown={handleInputKeyDown}
-            placeholder={canUseOri ? "Ask about your stocks…" : "Ori is a Pro feature — upgrade to chat"}
+            placeholder={canUseOri ? "Ask about your stocks…" : "Ori is for Voyagers (Pro) — upgrade to chat"}
             disabled={chat.isStreaming || !canUseOri}
             className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2
               text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-blue-500

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { DONATE_URL } from "../lib/billing.js";
 
 // Slim app footer: trademark, contact, donation, and social links.
+const SHOW_DONATE = false; // set true to restore footer donate button + popover
 const CONTACT_EMAIL = "dylan@orizin.io";
 // Socials go nowhere for now — wire up real URLs later.
 const SOCIALS = [
@@ -26,7 +27,7 @@ function NewsTicker({ news }) {
     return (
       <button
         onClick={() => setHidden(false)}
-        className="shrink-0 w-full flex items-center justify-center gap-1 py-0.5 text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-300 bg-gray-950/90 border-t border-gray-800 transition-colors"
+        className="relative z-[48] shrink-0 w-full flex items-center justify-center gap-1 py-0.5 text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-300 bg-gray-950/90 border-t border-gray-800 transition-colors"
         title="Show trending news"
       >
         ▴ Trending
@@ -51,7 +52,7 @@ function NewsTicker({ news }) {
       </a>
     ));
   return (
-    <div className="shrink-0 flex items-stretch border-t border-gray-800 bg-gray-950/90 overflow-hidden">
+    <div className="relative z-[48] shrink-0 flex items-stretch border-t border-gray-800 bg-gray-950/90 overflow-hidden">
       <span className="shrink-0 z-10 flex items-center px-2.5 text-[9px] font-bold uppercase tracking-wider text-amber-300 bg-gray-900 border-r border-gray-800">
         Trending
       </span>
@@ -92,7 +93,7 @@ export default function Footer({ news = [] }) {
     <>
       <NewsTicker news={news} />
       <footer
-        className="relative z-10 shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500"
+        className="relative z-[48] shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500"
         style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
       >
       <span className="whitespace-nowrap">
@@ -136,45 +137,49 @@ export default function Footer({ news = [] }) {
         )}
       </div>
 
-      <span className="text-gray-700 hidden sm:inline">·</span>
+      {SHOW_DONATE && (
+        <>
+          <span className="text-gray-700 hidden sm:inline">·</span>
 
-      {/* Donate — opens a small popover with QR code + PayPal link */}
-      <div className="relative">
-        <button
-          onClick={() => setDonateOpen((o) => !o)}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold
-            bg-gradient-to-br from-pink-500 via-rose-500 to-red-500 text-white
-            hover:brightness-110 transition-all whitespace-nowrap"
-        >
-          ♥ Donate
-        </button>
+          {/* Donate — opens a small popover with QR code + PayPal link */}
+          <div className="relative">
+            <button
+              onClick={() => setDonateOpen((o) => !o)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold
+                bg-gradient-to-br from-pink-500 via-rose-500 to-red-500 text-white
+                hover:brightness-110 transition-all whitespace-nowrap"
+            >
+              ♥ Donate
+            </button>
 
-        {donateOpen && (
-          <>
-            {/* Click-away backdrop */}
-            <div className="fixed inset-0 z-40" onClick={() => setDonateOpen(false)} />
-            <div className="absolute bottom-full left-0 mb-2 z-50 w-52 rounded-xl bg-gray-900 border border-gray-700 shadow-2xl shadow-black/50 p-3 flex flex-col items-center gap-2">
-              <span className="text-[11px] font-semibold text-gray-300">Scan to donate</span>
-              <img
-                src="/qr-code.png"
-                alt="PayPal donation QR code"
-                className="w-36 h-36 rounded-lg bg-white p-1"
-              />
-              <a
-                href={DONATE_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={() => setDonateOpen(false)}
-                className="w-full text-center px-3 py-1.5 rounded-lg text-[11px] font-semibold
-                  bg-gradient-to-br from-pink-500 via-rose-500 to-red-500 text-white
-                  hover:brightness-110 transition-all"
-              >
-                Donate via PayPal
-              </a>
-            </div>
-          </>
-        )}
-      </div>
+            {donateOpen && (
+              <>
+                {/* Click-away backdrop */}
+                <div className="fixed inset-0 z-40" onClick={() => setDonateOpen(false)} />
+                <div className="absolute bottom-full left-0 mb-2 z-50 w-52 rounded-xl bg-gray-900 border border-gray-700 shadow-2xl shadow-black/50 p-3 flex flex-col items-center gap-2">
+                  <span className="text-[11px] font-semibold text-gray-300">Scan to donate</span>
+                  <img
+                    src="/qr-code.png"
+                    alt="PayPal donation QR code"
+                    className="w-36 h-36 rounded-lg bg-white p-1"
+                  />
+                  <a
+                    href={DONATE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setDonateOpen(false)}
+                    className="w-full text-center px-3 py-1.5 rounded-lg text-[11px] font-semibold
+                      bg-gradient-to-br from-pink-500 via-rose-500 to-red-500 text-white
+                      hover:brightness-110 transition-all"
+                  >
+                    Donate via PayPal
+                  </a>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
 
       <div className="ml-auto flex items-center gap-3">
         {SOCIALS.map(({ name, href, icon: Icon }) => (

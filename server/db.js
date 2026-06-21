@@ -151,7 +151,7 @@ try {
     created_at    INTEGER,
     is_admin      INTEGER DEFAULT 0,
     email         TEXT,
-    plan          TEXT DEFAULT 'free',   -- 'free' | 'pro'
+    plan          TEXT DEFAULT 'free',   -- 'free' | 'pro' | 'ultimate' (Starfarer — admin-granted)
     plan_updated_at INTEGER,
     paypal_subscription_id TEXT,         -- PayPal Subscriptions API id (I-XXXXXXXX)
     subscription_status TEXT,            -- PayPal status: ACTIVE | CANCELLED | SUSPENDED | EXPIRED
@@ -1247,6 +1247,19 @@ export function getUserByEmail(email) {
   return getUserByEmailStmt.get(String(email).trim());
 }
 
+/** Canonical plan id: free | pro | ultimate (Starfarer). */
+export function normalizePlan(plan) {
+  const p = String(plan || 'free').toLowerCase();
+  if (p === 'ultimate' || p === 'starfarer') return 'ultimate';
+  if (p === 'pro' || p === 'voyager') return 'pro';
+  return 'free';
+}
+
+export function hasOriPlan(plan) {
+  const p = normalizePlan(plan);
+  return p === 'pro' || p === 'ultimate';
+}
+
 export function createUser(username, password, isAdmin = false, email = null, plan = 'free') {
   const hash = bcrypt.hashSync(password, 10);
   const now = Date.now();
@@ -1257,7 +1270,7 @@ export function createUser(username, password, isAdmin = false, email = null, pl
       now,
       isAdmin ? 1 : 0,
       email ? String(email).trim().toLowerCase() : null,
-      plan === 'pro' ? 'pro' : 'free',
+      normalizePlan(plan) === 'pro' ? 'pro' : 'free',
       now,
     );
     return { success: true };
@@ -1288,13 +1301,13 @@ export function verifyUserPassword(identifier, password) {
         id: user.id,
         username: user.username,
         isAdmin: !!user.is_admin,
-        plan: user.plan === 'pro' ? 'pro' : 'free',
+        plan: normalizePlan(user.plan),
       }
     : null;
 }
 
 export function setUserPlan(username, plan) {
-  const next = plan === 'pro' ? 'pro' : 'free';
+  const next = normalizePlan(plan);
   const info = db
     .prepare('UPDATE users SET plan = ?, plan_updated_at = ? WHERE username = ?')
     .run(next, Date.now(), username);
@@ -1432,6 +1445,19 @@ export function setUserSubscription(username, { subscriptionId, status = null, p
   const nextProUntil = proUntil === undefined ? (u.pro_until ?? null) : (proUntil || null);
   const nextSubId = subscriptionId === undefined ? (u.paypal_subscription_id ?? null) : (subscriptionId || null);
 
+  // Starfarer (ultimate) is admin-granted for higher Ori limits — never driven by PayPal.
+  if (normalizePlan(u.plan) === 'ultimate') {
+    const info = db
+      .prepare(
+        `UPDATE users
+           SET paypal_subscription_id = ?, subscription_status = ?, subscription_updated_at = ?,
+               pro_until = ?
+         WHERE username = ?`,
+      )
+      .run(nextSubId, status, now, nextProUntil, username);
+    return info.changes > 0;
+  }
+
   let plan;
   if (ACTIVE_SUB_STATUSES.has(s)) plan = 'pro';
   else if (s === 'EXPIRED') plan = 'free';
@@ -1460,6 +1486,7 @@ export function getUserBySubscriptionId(subscriptionId) {
 export function reconcileUserPlan(username) {
   const u = getUserByUsername(username);
   if (!u) return u;
+  if (normalizePlan(u.plan) === 'ultimate') return u;
   const lapsed =
     u.plan === 'pro' &&
     u.pro_until &&

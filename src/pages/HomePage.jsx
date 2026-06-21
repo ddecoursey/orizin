@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { LazyMotion, domAnimation, m, useReducedMotion } from "../lib/motion.js";
 import OrizinLogo from "../components/OrizinLogo.jsx";
 import AuthModal from "../components/AuthModal.jsx";
-import { PRO_PRICE_LABEL, PRO_FEATURES, FREE_FEATURES } from "../lib/billing.js";
+import { PRO_PRICE_LABEL, PRO_FEATURES, FREE_FEATURES, ULTIMATE_FEATURES } from "../lib/billing.js";
+import RankBadge from "../components/RankBadge.jsx";
+import { RANKS } from "../lib/ranks.js";
 
 // ── Orizin landing page ─────────────────────────────────────────────────────
 // Shown to signed-out visitors. Hero → stats → features → how it works →
@@ -142,7 +144,9 @@ function GamePlanMock() {
           <span className="text-[11px] uppercase tracking-wider font-bold text-gray-300">Game Plan</span>
           <span className="text-xs text-gray-500">· NVDA</span>
         </div>
-        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">✦ Ori · Pro</span>
+        <span className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full bg-violet-950/50 text-violet-300/80 border border-violet-900/50">
+          ✦ Ori · <RankBadge plan="pro" showLabel={false} size="sm" className="!gap-1" />
+        </span>
       </div>
 
       <div className="grid grid-cols-[auto_1fr] gap-3 mb-4">
@@ -376,7 +380,9 @@ export default function HomePage({ onAuthed }) {
                   <span className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-500 to-violet-500 flex items-center justify-center text-[9px] font-bold text-white" style={BRAND_FONT}>
                     Ori
                   </span>
-                  <span className="text-[10px] text-gray-500">AI analyst · Pro</span>
+                  <span className="text-[10px] text-gray-500 inline-flex items-center gap-1">
+                    AI analyst · <RankBadge plan="pro" size="sm" />
+                  </span>
                 </div>
                 <p className="text-[11px] text-gray-300 leading-snug">
                   NBIX scores 74 with full data coverage — strong ROIC and clean balance
@@ -436,7 +442,7 @@ export default function HomePage({ onAuthed }) {
               <ul className="space-y-2.5 text-sm text-gray-400">
                 <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Beginner-clear: a hold horizon plus a right-now action</li>
                 <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Tuned to your risk tolerance — retiree or risk-taker</li>
-                <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Ori adds the story a spreadsheet misses (Pro)</li>
+                <li className="flex gap-2.5"><span className="text-emerald-400 shrink-0">✓</span> Ori adds the story a spreadsheet misses (Voyager / Pro)</li>
               </ul>
             </m.div>
             <m.div variants={fadeUp} aria-hidden="true">
@@ -511,20 +517,20 @@ export default function HomePage({ onAuthed }) {
               Simple pricing
             </m.h2>
             <m.p variants={fadeUp} className="text-gray-400">
-              Screen and research free, forever. Add Ori when you want an analyst in the room.
+              Ranks reflect how far you travel with Orizin — familiar Free / Pro labels stay alongside.
             </m.p>
           </m.div>
 
           <m.div
-            className="grid md:grid-cols-2 gap-5 max-w-3xl mx-auto items-stretch"
+            className="grid md:grid-cols-3 gap-5 max-w-5xl mx-auto items-stretch"
             variants={stagger}
             initial="hidden"
             whileInView="show"
             viewport={inView}
           >
-            {/* Free */}
+            {/* Traveler / Free */}
             <m.div variants={fadeUp} className="rounded-2xl border border-gray-800 bg-gray-900/50 p-6 flex flex-col">
-              <h3 className="text-sm font-semibold text-gray-300 mb-1">Free</h3>
+              <RankBadge plan="free" layout="stacked" size="md" showTagline className="mb-3" />
               <div className="flex items-baseline gap-1 mb-4">
                 <span className="text-4xl text-white" style={{ ...BRAND_FONT, fontWeight: 700 }}>$0</span>
                 <span className="text-sm text-gray-500">/ forever</span>
@@ -538,11 +544,11 @@ export default function HomePage({ onAuthed }) {
                 ))}
               </ul>
               <button onClick={openSignup} className={ghostBtn + " w-full mt-auto py-2.5"}>
-                Create free account
+                Begin as Traveler {I.arrow}
               </button>
             </m.div>
 
-            {/* Pro */}
+            {/* Voyager / Pro */}
             <m.div
               variants={fadeUp}
               className="relative rounded-2xl border border-violet-700/60 bg-gradient-to-b from-violet-950/40 to-gray-900/60 p-6 flex flex-col shadow-xl shadow-violet-950/30"
@@ -550,7 +556,7 @@ export default function HomePage({ onAuthed }) {
               <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[10px] font-bold px-3 py-1 rounded-full bg-gradient-to-r from-blue-500 to-violet-500 text-white shadow-lg shadow-violet-500/30">
                 UNLOCKS ORI
               </span>
-              <h3 className="text-sm font-semibold text-violet-300 mb-1">Pro</h3>
+              <RankBadge plan="pro" layout="stacked" size="md" showTagline className="mb-3" />
               <div className="flex items-baseline gap-1 mb-4">
                 <span className="text-4xl text-white" style={{ ...BRAND_FONT, fontWeight: 700 }}>$10</span>
                 <span className="text-sm text-gray-500">/ month</span>
@@ -564,15 +570,40 @@ export default function HomePage({ onAuthed }) {
                 ))}
                 <li className="flex items-start gap-2 text-[13px] text-gray-400">
                   <span className="text-violet-400/60 mt-0.5 shrink-0">{I.check}</span>
-                  Everything in Free
+                  Everything in {RANKS.traveler.name}
                 </li>
               </ul>
               <p className="text-[11px] text-gray-500 leading-snug mb-5">
-                Subscribe in two steps: create your account, then upgrade from Account
-                Settings ({PRO_PRICE_LABEL}, PayPal). Activated personally — usually within a day.
+                Subscribe from Account Settings ({PRO_PRICE_LABEL}, PayPal) after you create an account.
               </p>
               <button onClick={openSignup} className={primaryBtn + " w-full mt-auto py-2.5"}>
-                Start with Pro {I.arrow}
+                Start as Voyager {I.arrow}
+              </button>
+            </m.div>
+
+            {/* Starfarer / Ultimate — coming soon */}
+            <m.div
+              variants={fadeUp}
+              className="rounded-2xl border border-amber-800/30 bg-gradient-to-b from-amber-950/20 to-gray-900/40 p-6 flex flex-col opacity-90"
+            >
+              <RankBadge plan="ultimate" layout="stacked" size="md" showTagline className="mb-3" />
+              <div className="flex items-baseline gap-1 mb-4">
+                <span className="text-2xl text-amber-200/90" style={{ ...BRAND_FONT, fontWeight: 700 }}>Soon</span>
+              </div>
+              <ul className="space-y-2.5 mb-6">
+                {ULTIMATE_FEATURES.map((feat) => (
+                  <li key={feat} className="flex items-start gap-2 text-[13px] text-gray-400">
+                    <span className="text-amber-500/70 mt-0.5 shrink-0">{I.check}</span>
+                    {feat}
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                disabled
+                className="w-full mt-auto py-2.5 rounded-lg border border-amber-800/40 text-amber-200/60 text-sm font-medium cursor-not-allowed"
+              >
+                Starfarer — notify me
               </button>
             </m.div>
           </m.div>

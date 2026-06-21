@@ -65,7 +65,9 @@ router.get("/users", (req, res) => {
       username: u.username,
       email: loginEmail,
       nickname: nicknames.get(u.username) || null,
-      plan: u.plan === 'pro' ? 'pro' : 'free',
+      plan: db.normalizePlan(u.plan),
+      subscription_status: u.subscription_status || null,
+      pro_until: u.pro_until || null,
       created_at: u.created_at,
       is_admin: !!u.is_admin,
       last_login_at: u.last_login_at || null,
@@ -118,8 +120,8 @@ router.post("/users", (req, res) => {
 });
 
 // PATCH /api/users/:username - Update a user's admin role and/or plan (admin only).
-// Body may contain { isAdmin } and/or { plan: 'free'|'pro' } — the plan switch
-// is how a paid (donate-link) subscription gets activated for now.
+// Body may contain { isAdmin } and/or { plan: 'free'|'pro'|'ultimate' }.
+// 'ultimate' = Starfarer (admin-granted higher Ori limits; not sold via PayPal).
 router.patch("/users/:username", (req, res) => {
   try {
     const currentUser = db.getUserByUsername(req.userId);
@@ -136,10 +138,11 @@ router.patch("/users/:username", (req, res) => {
     const body = req.body || {};
 
     if ('plan' in body) {
-      if (!['free', 'pro'].includes(body.plan)) {
-        return res.status(400).json({ error: "plan must be 'free' or 'pro'" });
+      const raw = String(body.plan || '').toLowerCase();
+      if (!['free', 'pro', 'ultimate', 'starfarer', 'voyager', 'traveler'].includes(raw)) {
+        return res.status(400).json({ error: "plan must be 'free', 'pro', or 'ultimate'" });
       }
-      db.setUserPlan(username, body.plan);
+      db.setUserPlan(username, raw);
     }
 
     if ('isAdmin' in body) {
@@ -157,7 +160,7 @@ router.patch("/users/:username", (req, res) => {
       ok: true,
       username,
       isAdmin: !!updated.is_admin,
-      plan: updated.plan === 'pro' ? 'pro' : 'free',
+      plan: db.normalizePlan(updated.plan),
     });
   } catch (err) {
     console.error("[users] PATCH error:", err);

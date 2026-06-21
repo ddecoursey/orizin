@@ -14,6 +14,7 @@
 
 import {
   getUserByUsername,
+  normalizePlan,
   userCount,
   incrementOriUsage,
   insertOriUsageEvent,
@@ -53,6 +54,25 @@ export function oriLimits() {
     weekly: envInt("ORI_WEEKLY_LIMIT", 70),
     monthly: envInt("ORI_MONTHLY_LIMIT", 280),
   };
+}
+
+/** Starfarer (ultimate) — admin-granted; ~2× Voyager caps by default, env-tunable. */
+export function oriLimitsForPlan(plan) {
+  const base = oriLimits();
+  if (normalizePlan(plan) !== 'ultimate') return base;
+  return {
+    session: envInt("ORI_STARFARER_SESSION_LIMIT", base.session * 2),
+    sessionHours: base.sessionHours,
+    daily: envInt("ORI_STARFARER_DAILY_LIMIT", base.daily * 2),
+    weekly: envInt("ORI_STARFARER_WEEKLY_LIMIT", base.weekly * 2),
+    monthly: envInt("ORI_STARFARER_MONTHLY_LIMIT", base.monthly * 2),
+  };
+}
+
+function limitsForUser(userId) {
+  if (isOriUnlimited(userId)) return oriLimits();
+  const user = getUserByUsername(userId);
+  return oriLimitsForPlan(user?.plan);
 }
 
 export function sessionWindowMs(hours = oriLimits().sessionHours) {
@@ -105,7 +125,7 @@ function sessionResetsAt(userId, sinceMs) {
  */
 export function checkOriQuota(userId) {
   if (isOriUnlimited(userId)) return { ok: true, unlimited: true };
-  const limits = oriLimits();
+  const limits = limitsForUser(userId);
   const day = todayKey();
   const windowMs = sessionWindowMs(limits.sessionHours);
   const since = Date.now() - windowMs;
@@ -229,8 +249,10 @@ function shapeWindow(row) {
 /** Everything the account panel needs to render the usage meters. */
 export function getOriUsageSummary(userId) {
   const day = todayKey();
-  const limits = oriLimits();
   const unlimited = isOriUnlimited(userId);
+  const limits = limitsForUser(userId);
+  const user = unlimited ? null : getUserByUsername(userId);
+  const planTier = unlimited ? null : normalizePlan(user?.plan);
   const windowMs = sessionWindowMs(limits.sessionHours);
   const since = Date.now() - windowMs;
   const sessionUsed = unlimited ? 0 : countOriUsageEventsSince(userId, since);
@@ -238,6 +260,7 @@ export function getOriUsageSummary(userId) {
   return {
     unlimited,
     limits,
+    planTier,
     today: day,
     month: day.slice(0, 7),
     session: {

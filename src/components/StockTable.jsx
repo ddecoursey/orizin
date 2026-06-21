@@ -1,7 +1,8 @@
 import { useState, useRef, useMemo, useEffect, useLayoutEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { fmt } from "../lib/format.js";
-import { SECTOR_COLORS } from "../lib/scoring.js";
+import { sectorChipColors } from "../lib/scoring.js";
+import { useIsLightTheme } from "../hooks/useIsLightTheme.js";
 import Sparkline from "./Sparkline";
 import { IconSearch } from "./icons.jsx";
 import Tooltip from "./Tooltip.jsx";
@@ -60,7 +61,8 @@ function heatClass(val, key, heat) {
 }
 
 function SectorChip({ sector }) {
-  const c = SECTOR_COLORS[sector] || { bg: "#1e293b", fg: "#94a3b8" };
+  const isLight = useIsLightTheme();
+  const c = sectorChipColors(sector, isLight);
   return (
     <span
       className="inline-block rounded-full px-2 py-0.5 text-[9.5px] font-medium whitespace-nowrap"

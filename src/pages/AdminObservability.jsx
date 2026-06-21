@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { IconSignal, IconUsersGroup } from "../components/icons.jsx";
+import RankBadge from "../components/RankBadge.jsx";
 
 function Tile({ label, value, sub, accent = "" }) {
   return (
@@ -156,7 +157,7 @@ export default function AdminObservability() {
             <Tile label="Online now" value={summary.onlineNow} accent="text-emerald-300" sub={`within ${data.onlineWindowMinutes}m`} />
             <Tile label="Active today" value={summary.activeToday} />
             <Tile label="Logins today" value={summary.loginsToday} />
-            <Tile label="Pro users" value={summary.proUsers} accent="text-violet-300" />
+            <Tile label="Voyagers (Pro)" value={summary.proUsers} accent="text-violet-300" />
             <Tile label="Admins" value={summary.adminUsers} />
             <Tile
               label="Gemini today"
@@ -209,7 +210,9 @@ export default function AdminObservability() {
                             {u.online ? "Online" : "Away"}
                           </span>
                         </div>
-                        <div className="text-[10px] text-gray-600 mt-0.5">{u.plan}{u.is_admin ? " · admin" : ""}</div>
+                        <div className="mt-1">
+                          <RankBadge plan={u.plan} isAdmin={u.is_admin} size="sm" />
+                        </div>
                       </td>
                       <td className="px-3 py-2.5 text-gray-400 hidden sm:table-cell whitespace-nowrap">
                         {u.lastLoginAgo || "—"}
@@ -254,7 +257,7 @@ export default function AdminObservability() {
                   <div className="font-semibold text-gray-100 break-words">{detail.nickname || detail.email || detail.username}</div>
                   <div className="text-gray-500 break-all mt-0.5">{detail.username}</div>
                   <div className="flex flex-wrap gap-1.5 mt-2">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] ${detail.plan === "pro" ? "bg-violet-900 text-violet-300" : "bg-gray-800 text-gray-500"}`}>{detail.plan}</span>
+                    <RankBadge plan={detail.plan} isAdmin={detail.is_admin} size="sm" />
                     {detail.is_admin && <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-900 text-emerald-300">admin</span>}
                     {detail.online && <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-950 text-emerald-400">online</span>}
                   </div>

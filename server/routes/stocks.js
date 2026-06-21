@@ -1411,7 +1411,11 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
-        models: [valueModel(), liteModel()], // flash → flash-lite; never frontier
+        // Lite-ONLY: this powers the unmetered background screener trickle and
+        // the on-demand /intangibles endpoint. Leading with flash quietly burned
+        // real money (~3K flash req/day). Lite still gets two attempts (key A,
+        // key B) for resilience; it must never escalate to flash/frontier.
+        models: [liteModel()],
       });
       if (typeof onUsage === "function") {
         try { onUsage(usage, model); } catch { /* accounting must not break generation */ }

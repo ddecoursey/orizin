@@ -178,7 +178,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
               {mode === "setup"
                 ? "No users exist yet — this account becomes the administrator."
                 : mode === "signup"
-                ? "Free forever: full screener, Deep Research & portfolio tools. Upgrade anytime to unlock Ori."
+                ? "Start as a Traveler (Free): full screener, Deep Research & portfolio tools. Upgrade to Voyager anytime for Ori."
                 : mode === "forgot"
                 ? "Enter your account email and we'll send you a link to reset your password."
                 : "Sign in with your username or email."}

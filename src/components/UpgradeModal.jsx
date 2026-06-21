@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PRO_PRICE_LABEL, PRO_FEATURES } from "../lib/billing.js";
+import RankBadge from "./RankBadge.jsx";
+import { RANKS } from "../lib/ranks.js";
 
 // Load the PayPal JS SDK once, with the client id served by the backend
 // (/api/billing/config). The same SDK URL is used for sandbox and live — PayPal
@@ -172,8 +174,11 @@ export default function UpgradeModal({ onClose, onSuccess }) {
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-800 px-6 py-4">
           <div>
-            <h3 className="text-lg font-semibold text-white">Upgrade to Pro</h3>
-            <p className="mt-0.5 text-xs text-gray-400">{PRO_PRICE_LABEL} · cancel anytime</p>
+            <div>
+              <h3 className="text-lg font-semibold text-white">Become a Voyager</h3>
+              <p className="mt-1"><RankBadge plan="pro" size="md" /></p>
+              <p className="mt-1 text-xs text-gray-400">{PRO_PRICE_LABEL} · cancel anytime</p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -189,9 +194,12 @@ export default function UpgradeModal({ onClose, onSuccess }) {
           {phase === "success" ? (
             <div className="py-6 text-center">
               <div className="mb-3 text-4xl">🎉</div>
-              <h4 className="mb-1 text-xl font-semibold text-emerald-400">You're Pro!</h4>
+              <div className="mb-3 flex justify-center">
+                <RankBadge plan="pro" layout="stacked" size="lg" showTagline />
+              </div>
+              <h4 className="mb-1 text-xl font-semibold text-emerald-400">Welcome, Voyager!</h4>
               <p className="mb-4 text-sm text-gray-300">
-                Your subscription is active and Ori is unlocked. You can manage or cancel it anytime
+                Your Pro subscription is active and Ori is unlocked. You can manage or cancel it anytime
                 from Account Settings.
               </p>
               {subId && <p className="mb-5 text-[10px] text-gray-500">Subscription: {subId}</p>}
@@ -210,7 +218,7 @@ export default function UpgradeModal({ onClose, onSuccess }) {
             </div>
           ) : (
             <>
-              <h4 className="mb-2 text-sm font-semibold text-white">What you get with Pro</h4>
+              <h4 className="mb-2 text-sm font-semibold text-white">What Voyagers ({RANKS.voyager.label}) get</h4>
               <ul className="mb-5 space-y-1.5 text-sm text-gray-300">
                 {PRO_FEATURES.map((f) => (
                   <li key={f} className="flex items-start gap-2">

@@ -12,6 +12,14 @@
 
 export const PRO_PRICE_LABEL = "$10/month";
 
+// Future Ultimate tier (Starfarer) — not purchasable yet; used in marketing UI.
+export const ULTIMATE_PRICE_LABEL = "Coming soon";
+export const ULTIMATE_FEATURES = [
+  "Everything in Voyager (Pro)",
+  "Higher Ori limits for power researchers",
+  "Priority access to new Ori capabilities",
+];
+
 export const PRO_FEATURES = [
   "Chat with Ori — portfolio-aware AI analyst",
   "Personalized memory across conversations",

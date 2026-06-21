@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmt } from "../lib/format.js";
-import { SECTOR_COLORS } from "../lib/scoring.js";
+import { sectorChipColors } from "../lib/scoring.js";
+import { useIsLightTheme } from "../hooks/useIsLightTheme.js";
 import { IconResearch, IconRefresh, IconWatchlist } from "./icons.jsx";
 import OriEmblem from "./OriEmblem.jsx";
 import Tooltip from "./Tooltip.jsx";
@@ -239,6 +240,7 @@ function smLabel(signal) {
 }
 
 export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgradeToPro, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
+  const isLight = useIsLightTheme();
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
 
@@ -359,7 +361,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
     );
   }
 
-  const sec = SECTOR_COLORS[row?.sector] || { bg: "#1e293b", fg: "#94a3b8" };
+  const sec = sectorChipColors(row?.sector, isLight);
   // Header shows the unified Conviction (from the Game Plan verdict), falling
   // back to the row's lean conviction / Orizin score for arbitrary symbols.
   const sc = canUseOri
@@ -650,8 +652,8 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
               ) : (
                 <div>
                   {earnNext && (
-                    <div className="mb-3 rounded-lg border border-blue-900/40 bg-blue-950/30 px-3 py-2">
-                      <div className="text-[10px] uppercase tracking-wider text-blue-300/80">Next report</div>
+                    <div className="dr-earn-next mb-3 rounded-lg border border-blue-900/40 bg-blue-950/30 px-3 py-2">
+                      <div className="dr-earn-next-label text-[10px] uppercase tracking-wider text-blue-300/80">Next report</div>
                       <div className="text-sm font-semibold text-gray-100">
                         {fmtEarnDate(earnNext.date)}
                         {daysUntil(earnNext.date) && (
