@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import { gamePlanFrontierTtlMs, gamePlanLiteTtlMs } from './gamePlanCache.js';
 
 const DB_PATH = process.env.DB_PATH || './data/screener.db';
 
@@ -570,7 +571,6 @@ export function saveRat(symbol, data) {
 // consensus targets (target_consensus/high/low), and LEFT JOIN the persistent
 // detail cache for ratings snapshots already gathered by detail/deep-research
 // flows. (mom lives on the stocks row.)
-const GAMEPLAN_TTL_MS = 24 * 60 * 60 * 1000;
 export function getAllStocks() {
   const now = Date.now();
   const rows = db
@@ -604,8 +604,8 @@ export function getAllStocks() {
     // frontier review from a Deep Research visit (`gameplan:`); fall back to the
     // cheap lite review the screener/background trickle generates (`gameplan-lite:`).
     // modelTier on the object tells them apart (frontier vs lite).
-    const parseFresh = (jsonStr, at) => {
-      if (!jsonStr || !at || now - at >= GAMEPLAN_TTL_MS) return null;
+    const parseFresh = (jsonStr, at, ttlMs) => {
+      if (!jsonStr || !at || now - at >= ttlMs) return null;
       try {
         const parsed = JSON.parse(jsonStr);
         return parsed && typeof parsed === "object" ? parsed : null;
@@ -614,8 +614,8 @@ export function getAllStocks() {
       }
     };
     const ori =
-      parseFresh(row.gameplan_json, row.gameplan_at) ||
-      parseFresh(row.gameplan_lite_json, row.gameplan_lite_at);
+      parseFresh(row.gameplan_json, row.gameplan_at, gamePlanFrontierTtlMs()) ||
+      parseFresh(row.gameplan_lite_json, row.gameplan_lite_at, gamePlanLiteTtlMs());
     const clean = { ...row };
     delete clean.ratings_json;
     delete clean.gameplan_json;
@@ -626,10 +626,9 @@ export function getAllStocks() {
   });
 }
 
-// Background "shared baseline" trickle for screener intangibles: return the next
-// few top-by-market-cap leaders (within `leaderCap`) that DON'T yet have a fresh
-// frontier (gameplan:) OR lite (gameplan-lite:) review. Bounding to a leader cap
-// keeps the lite spend finite (≈leaderCap generations / 24h, shared across users).
+// Background screener trickle: top `leaderCap` by mcap names needing a fresh
+// lite review — only when lite is missing/stale AND there is no fresh frontier
+// Pro cache (frontier TTL is longer than lite).
 const nextIntangiblesStmt = db.prepare(`
   SELECT t.symbol FROM (
     SELECT symbol, mcap FROM stocks
@@ -638,13 +637,15 @@ const nextIntangiblesStmt = db.prepare(`
   ) t
   LEFT JOIN kv_cache gp  ON gp.key  = ('gameplan:' || t.symbol)
   LEFT JOIN kv_cache gpl ON gpl.key = ('gameplan-lite:' || t.symbol)
-  WHERE (gp.updated_at  IS NULL OR gp.updated_at  < ?)
-    AND (gpl.updated_at IS NULL OR gpl.updated_at < ?)
+  WHERE (gpl.updated_at IS NULL OR gpl.updated_at < ?)
+    AND (gp.updated_at IS NULL OR gp.updated_at < ?)
   ORDER BY t.mcap DESC
   LIMIT ?
 `);
-export function nextIntangiblesBacklog(cutoffMs, leaderCap = 250, limit = 1) {
-  return nextIntangiblesStmt.all(leaderCap, cutoffMs, cutoffMs, limit).map((r) => r.symbol);
+export function nextIntangiblesBacklog(now = Date.now(), leaderCap = 50, limit = 1) {
+  const liteCutoff = now - gamePlanLiteTtlMs();
+  const frontierCutoff = now - gamePlanFrontierTtlMs();
+  return nextIntangiblesStmt.all(leaderCap, liteCutoff, frontierCutoff, limit).map((r) => r.symbol);
 }
 
 // Persist the ~45-day price return used by the screener Technicals signal.

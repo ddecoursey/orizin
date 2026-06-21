@@ -280,7 +280,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
   useEffect(() => {
     oriPayloadRef.current = oriPayload;
   }, [oriPayload]);
-  // Deferred Ori layer (Pro) — frontier take is cached 24h per symbol; FMP
+  // Deferred Ori layer (Pro) — frontier take is cached ~1 week per symbol; FMP
   // re-gather refreshes panels but does not re-bill Gemini Pro on every open.
   const oriReady = !!symbol && !deterministic.insufficient;
   const initialFrontierOri = row?.ori?.modelTier === "frontier" ? row.ori : null;

@@ -7,7 +7,7 @@
 
 // ── Model tiers (env-overridable so we can re-point without a deploy) ─────────
 //   frontier — top-quality, used VERY sparingly (Deep Research Game Plan only,
-//              and only once per stock per 24h thanks to the per-symbol cache).
+//              and only once per stock per week thanks to the per-symbol cache).
 //   value    — the workhorse for chat + everything else.
 //   lite     — cheap, high-throughput backup for both.
 // The ladder tries these in order, per key, falling through on "too busy".

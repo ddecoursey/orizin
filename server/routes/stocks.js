@@ -32,7 +32,12 @@ import { hasOriAccess } from "../access.js";
 import { enrichmentManager } from "../enrichment.js";
 import { marketSession } from "../marketHours.js";
 import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
-import { resolveCachedGamePlan, readFreshLiteGamePlan, GAME_PLAN_TTL_MS } from "../gamePlanCache.js";
+import {
+  resolveCachedGamePlan,
+  readFreshLiteGamePlan,
+  gamePlanFrontierTtlMs,
+  gamePlanLiteTtlMs,
+} from "../gamePlanCache.js";
 import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
 import { execCompAllowed } from "../fmpPlanLimits.js";
 
@@ -1336,7 +1341,7 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     // coalesced waiter (which shares an in-flight promise) double-counting.
     let genUsage = null;
     let didGenerate = false;
-    const data = await cachedDetail(`gameplan:${symbol}`, GAME_PLAN_TTL_MS, async () => {
+    const data = await cachedDetail(`gameplan:${symbol}`, gamePlanFrontierTtlMs(), async () => {
       // Profile/news are enrichment for the prompt, not hard requirements — a
       // transient fetch failure shouldn't sink the whole Game Plan, so degrade
       // to null and let Ori reason from the stats it already has.
@@ -1344,8 +1349,8 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
         cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
         cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
       ]);
-      // Model ladder per the request mode. Because this whole block is cached 24h
-      // per symbol, the frontier model is hit at most once per stock per 24h, and
+      // Model ladder per the request mode. Because this whole block is cached ~1 week
+      // per symbol (frontier), Pro is hit at most once per stock per week, and
       // it appears only on the primary key so a single generation never spends the
       // scarce frontier quota twice.
       const { data: raw, model, usage } = await geminiGenerateJson({
@@ -1400,7 +1405,7 @@ function releaseLiteLane() {
 // meter the user (the explicit Game Plan refresh) pass it; the automatic screener
 // sweep and the background trickle pass nothing, so they're never charged.
 export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}, force = false, onUsage } = {}) {
-  return cachedDetail(`gameplan-lite:${symbol}`, 24 * 60 * 60 * 1000, async () => {
+  return cachedDetail(`gameplan-lite:${symbol}`, gamePlanLiteTtlMs(), async () => {
     await acquireLiteLane();
     try {
       const [profile, news] = await Promise.all([

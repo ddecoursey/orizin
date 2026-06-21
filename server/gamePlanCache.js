@@ -1,9 +1,30 @@
-/** Shared 24h Ori Game Plan cache helpers (frontier Pro vs flash/lite). */
+/** Shared Ori Game Plan cache helpers (frontier Pro vs flash-lite). */
 
-export const GAME_PLAN_TTL_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+function envDays(name, defaultDays) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : defaultDays;
+}
+
+function envHours(name, defaultHours) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : defaultHours;
+}
+
+/** Pro/frontier Deep Research Game Plan (gemini-3.1-pro) — default 1 week. */
+export function gamePlanFrontierTtlMs() {
+  return envDays("GAME_PLAN_FRONTIER_TTL_DAYS", 7) * DAY_MS;
+}
+
+/** Lite screener intangibles (gemini-3.1-flash-lite) — default 24h. */
+export function gamePlanLiteTtlMs() {
+  return envHours("GAME_PLAN_LITE_TTL_HOURS", 24) * HOUR_MS;
+}
 
 export function isFrontierGamePlan(ori) {
-  return ori?.modelTier === 'frontier' || ori?.model === 'gemini-3.1-pro-preview';
+  return ori?.modelTier === "frontier" || ori?.model === "gemini-3.1-pro-preview";
 }
 
 /**
@@ -25,11 +46,11 @@ export function readFreshDetail(key, ttlMs, { detailCache, kvGet, promote }) {
   return null;
 }
 
-export function readFreshFrontierGamePlan(symbol, deps, ttlMs = GAME_PLAN_TTL_MS) {
+export function readFreshFrontierGamePlan(symbol, deps, ttlMs = gamePlanFrontierTtlMs()) {
   return readFreshDetail(`gameplan:${symbol}`, ttlMs, deps);
 }
 
-export function readFreshLiteGamePlan(symbol, deps, ttlMs = GAME_PLAN_TTL_MS) {
+export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs()) {
   return readFreshDetail(`gameplan-lite:${symbol}`, ttlMs, deps);
 }
 
@@ -40,12 +61,12 @@ export function readFreshLiteGamePlan(symbol, deps, ttlMs = GAME_PLAN_TTL_MS) {
 export function resolveCachedGamePlan(symbol, deps, { retry = false } = {}) {
   const frontier = readFreshFrontierGamePlan(symbol, deps);
   if (frontier) {
-    return { ori: frontier, tier: frontier.modelTier || 'frontier', source: 'frontier' };
+    return { ori: frontier, tier: frontier.modelTier || "frontier", source: "frontier" };
   }
   if (!retry) {
     const lite = readFreshLiteGamePlan(symbol, deps);
     if (lite) {
-      return { ori: lite, tier: 'lite', source: 'lite' };
+      return { ori: lite, tier: "lite", source: "lite" };
     }
   }
   return null;

@@ -806,10 +806,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   }, 60 * 60 * 1000).unref?.();
 
   // Shared "leaders" baseline for screener intangibles: an HOURLY, lite-only
-  // trickle that keeps a fresh 24h cache warm for the top SCREENER_INTANGIBLES_
+  // trickle that keeps a fresh lite cache warm for the top SCREENER_INTANGIBLES_
   // LEADERS market-cap names, so the screener serves them from cache without
   // anyone opening Deep Research. It is CACHE-AWARE — each tick only regenerates
-  // the few leaders whose 24h cache has expired (≈LEADERS/24h total, not a
+  // leaders whose lite cache expired and who lack a fresh frontier Pro cache
+  // (≈LEADERS lite gens / 24h, not a
   // continuous run) and stops doing anything once they're all warm. Serialized
   // by the lite lane so it never starves chat or DR.
   //
@@ -824,7 +825,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     if (geminiSet) {
       setInterval(async () => {
         try {
-          const stale = db.nextIntangiblesBacklog(Date.now() - 24 * 60 * 60 * 1000, LEADERS, BATCH);
+          const stale = db.nextIntangiblesBacklog(Date.now(), LEADERS, BATCH);
           for (const sym of stale) {
             await generateLiteIntangibles(sym, {}); // lite-only, cached 24h
           }

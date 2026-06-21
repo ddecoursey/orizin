@@ -5,7 +5,7 @@ const ORI_TIMEOUT_MS = 30_000;
 
 // Fetches Ori's intelligence layer for the Game Plan — DEFERRED, so the
 // deterministic Game Plan paints instantly and Ori's take fades in after.
-// Frontier (Pro) is cached 24h server-side per symbol (memory + SQLite) and is
+// Frontier (Pro) is cached ~1 week server-side per symbol (memory + SQLite) and is
 // always served when present. FMP re-gather does not bust it. Explicit "Refresh
 // Ori" re-runs flash/lite only. `initialOri` can show a cached Pro take instantly
 // from the screener row while the server revalidates.
@@ -185,7 +185,7 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, initialOri 
       if (inFlight) return;
       setRetryNonce((n) => n + 1);
     },
-    // Admin-only: flash/lite re-run without busting the 24h frontier cache.
+    // Admin-only: flash/lite re-run without busting the weekly frontier cache.
     refresh: () => {
       if (inFlight) return;
       setRefreshNonce((n) => n + 1);

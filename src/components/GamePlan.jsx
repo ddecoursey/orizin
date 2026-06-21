@@ -213,7 +213,7 @@ function OriTake({ ori, oriState, canUseOri = false, oriReady = false }) {
             </button>
           )}
           {canUseOri && oriReady && oriState?.refresh && !locked && (
-            <Tooltip content="Refresh with flash/lite — your 24h Pro analysis stays cached" side="top" maxWidth={240}>
+            <Tooltip content="Refresh with flash/lite — your weekly Pro analysis stays cached" side="top" maxWidth={240}>
               <button
                 type="button"
                 onClick={oriState.refresh}
