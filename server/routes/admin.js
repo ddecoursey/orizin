@@ -5,6 +5,9 @@ import { getOriUsageSummary } from "../oriUsage.js";
 import { inactivityMs } from "../session.js";
 import { etSessionDate } from "../marketHours.js";
 import { EMAIL_RE } from "../userProfile.js";
+import { microsToUsd, fmtUsd } from "../geminiTokens.js";
+
+const PRO_NET_USD = Number(process.env.PRO_NET_REVENUE_USD) || 9.2;
 
 const router = Router();
 
@@ -58,6 +61,11 @@ function shapeUserRow(u, nicknames, chatStats) {
     oriMonth: ori.monthTotals,
     oriLimits: ori.limits,
     oriSession: ori.session,
+    oriCostToday: ori.day.cost,
+    oriCostMonth: ori.monthTotals.cost,
+    estMarginMonthUsd: u.plan === "pro" && !u.is_admin
+      ? Math.max(0, PRO_NET_USD - (ori.monthTotals.cost?.totalUsd || 0))
+      : null,
   };
 }
 
@@ -76,7 +84,10 @@ router.get("/admin/observability", requireAdmin, (req, res) => {
     const chatStats = db.chatStatsByUser();
     const users = db.listUsersWithActivity().map((u) => shapeUserRow(u, nicknames, chatStats));
     const today = etSessionDate();
+    const monthStart = `${today.slice(0, 7)}-01`;
     const dayStart = new Date(`${today}T00:00:00-05:00`).getTime();
+    const geminiCostMonthMicros = db.sumOriCostAllUsers(monthStart, today);
+    const geminiCostTodayMicros = db.sumOriCostAllUsers(today, today);
 
     const recentLogins = db.listRecentLoginEvents(50).map((e) => ({
       user_id: e.user_id,
@@ -97,6 +108,10 @@ router.get("/admin/observability", requireAdmin, (req, res) => {
         onlineNow: users.filter((u) => u.online).length,
         activeToday: users.filter((u) => u.last_active_at && u.last_active_at >= dayStart).length,
         loginsToday: recentLogins.filter((e) => e.at >= dayStart).length,
+        geminiCostTodayUsd: microsToUsd(geminiCostTodayMicros),
+        geminiCostMonthUsd: microsToUsd(geminiCostMonthMicros),
+        geminiCostMonthLabel: fmtUsd(microsToUsd(geminiCostMonthMicros)),
+        proNetRevenueUsd: PRO_NET_USD,
       },
       users,
       recentLogins,

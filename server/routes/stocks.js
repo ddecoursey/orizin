@@ -1314,7 +1314,9 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       if (!quota.ok) return res.status(429).json({ error: quota.message, code: "ori_limit", scope: quota.scope });
       const ori = await generateLiteIntangibles(symbol, {
         stats, verdict, force: true,
-        onUsage: (usage) => recordOriUsage(req.userId, { kind: "plan", usage }),
+        onUsage: (usage, model) => {
+          recordOriUsage(req.userId, { kind: "plan", usage, model }).catch(() => {});
+        },
       });
       return res.json({ symbol, ori, tier: ori?.modelTier || "lite" });
     }
@@ -1358,7 +1360,9 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;
     }, false);
-    if (didGenerate) recordOriUsage(req.userId, { kind: "plan", usage: genUsage });
+    if (didGenerate) {
+      await recordOriUsage(req.userId, { kind: "plan", usage: genUsage, model: data?.model });
+    }
     res.json({ symbol, ori: data, tier: data?.modelTier || "frontier" });
   } catch (e) {
     if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
@@ -1409,7 +1413,9 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
         schema: GAME_PLAN_SCHEMA,
         models: [valueModel(), liteModel()], // flash → flash-lite; never frontier
       });
-      if (typeof onUsage === "function") { try { onUsage(usage); } catch { /* accounting must not break generation */ } }
+      if (typeof onUsage === "function") {
+        try { onUsage(usage, model); } catch { /* accounting must not break generation */ }
+      }
       const sane = sanitizeGamePlan(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;

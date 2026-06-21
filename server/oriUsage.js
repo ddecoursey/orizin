@@ -25,6 +25,12 @@ import {
   pruneOriUsageEvents,
 } from "./db.js";
 import { etSessionDate } from "./marketHours.js";
+import { valueModel, frontierModel } from "./geminiJson.js";
+import {
+  resolveTokenCounts,
+  estimateCostUsd,
+  costBreakdownFromTotals,
+} from "./geminiTokens.js";
 
 // Positive integer from env, else the default. A non-positive / garbage value
 // falls back to the default rather than silently locking every Pro user out.
@@ -75,17 +81,6 @@ export function isOriUnlimited(userId) {
   } catch {
     return true; // never let a bookkeeping error block a paying user
   }
-}
-
-// Normalize a Gemini usageMetadata blob (from streaming or generateContent) into
-// our column deltas. Missing/garbage fields degrade to 0.
-function tokensFrom(usage) {
-  const n = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.round(Number(v))) : 0);
-  return {
-    promptTokens: n(usage?.promptTokenCount),
-    cachedTokens: n(usage?.cachedContentTokenCount),
-    outputTokens: n(usage?.candidatesTokenCount),
-  };
 }
 
 function limitMessage(scope, limit, used, extra = "") {
@@ -170,23 +165,43 @@ export function checkOriQuota(userId) {
 /**
  * Record one billable Ori generation. Call this only when a REAL Gemini call
  * happened (a chat turn, or a cache-miss Game Plan) — never on a cache hit.
+ * Uses inference usageMetadata when present; otherwise free countTokens (GetTokens).
  * @param {string} userId
- * @param {{ kind: 'chat' | 'plan', usage?: object }} opts
+ * @param {{ kind: 'chat' | 'plan', usage?: object, model?: string, fallback?: object }} opts
  */
-export function recordOriUsage(userId, { kind, usage } = {}) {
+export async function recordOriUsage(userId, { kind, usage, model, fallback } = {}) {
   if (!userId) return;
   try {
-    const t = tokensFrom(usage);
+    const isPlan = kind === "plan";
+    const usedModel = model || (isPlan ? frontierModel() : valueModel());
+    const t = await resolveTokenCounts({ usage, model: usedModel, fallback });
+    const cost = estimateCostUsd(usedModel, t);
     const at = Date.now();
-    incrementOriUsage(userId, todayKey(), {
+    const delta = {
       requests: 1,
-      chatRequests: kind === "chat" ? 1 : 0,
-      planRequests: kind === "plan" ? 1 : 0,
+      chatRequests: isPlan ? 0 : 1,
+      planRequests: isPlan ? 1 : 0,
       promptTokens: t.promptTokens,
       cachedTokens: t.cachedTokens,
       outputTokens: t.outputTokens,
-    });
-    insertOriUsageEvent(userId, kind === "plan" ? "plan" : "chat", at);
+      costUsdMicros: cost.totalUsdMicros,
+    };
+    if (isPlan) {
+      delta.planPromptTokens = t.promptTokens;
+      delta.planCachedTokens = t.cachedTokens;
+      delta.planOutputTokens = t.outputTokens;
+      delta.planCostUsdMicros = cost.totalUsdMicros;
+    } else {
+      delta.chatPromptTokens = t.promptTokens;
+      delta.chatCachedTokens = t.cachedTokens;
+      delta.chatOutputTokens = t.outputTokens;
+      delta.chatCostUsdMicros = cost.totalUsdMicros;
+    }
+    incrementOriUsage(userId, todayKey(), delta);
+    insertOriUsageEvent(userId, isPlan ? "plan" : "chat", at);
+    if (t.source === "countTokens") {
+      console.log(`[oriUsage] countTokens fallback for ${userId} (${kind}): ${t.promptTokens}+${t.outputTokens} tok → ${cost.totalUsd.toFixed(4)} USD`);
+    }
   } catch (e) {
     // Usage accounting must never break the actual feature.
     console.warn("[oriUsage] record failed:", e.message);
@@ -196,6 +211,7 @@ export function recordOriUsage(userId, { kind, usage } = {}) {
 function shapeWindow(row) {
   const prompt = row.prompt_tokens || 0;
   const cached = row.cached_tokens || 0;
+  const cost = costBreakdownFromTotals(row);
   return {
     requests: row.requests || 0,
     chatRequests: row.chat_requests || 0,
@@ -206,6 +222,7 @@ function shapeWindow(row) {
     // Share of input tokens the context cache served (0..1). Only meaningful
     // once there's been some input volume.
     cacheHitRate: prompt > 0 ? Math.min(1, cached / prompt) : 0,
+    cost,
   };
 }
 

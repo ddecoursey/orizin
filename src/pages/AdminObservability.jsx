@@ -21,6 +21,20 @@ function fmtWhen(ms) {
   });
 }
 
+function fmtCost(usd) {
+  const n = Number(usd);
+  if (!Number.isFinite(n) || n <= 0) return "$0.00";
+  if (n < 0.01) return "<$0.01";
+  return `$${n.toFixed(2)}`;
+}
+
+function fmtTokens(n) {
+  const v = Number(n) || 0;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
+  return String(v);
+}
+
 function StatusDot({ online }) {
   return (
     <span
@@ -113,7 +127,7 @@ export default function AdminObservability() {
               User observability
             </h1>
             <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-              Logins, sessions, Ori usage · auto-logout after {data?.inactivityMinutes ?? 60}m idle
+              Logins, sessions, Ori usage & Gemini cost · auto-logout after {data?.inactivityMinutes ?? 60}m idle
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
@@ -137,13 +151,25 @@ export default function AdminObservability() {
         {loading && !data ? (
           <p className="text-sm text-gray-500">Loading…</p>
         ) : summary && (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
             <Tile label="Total users" value={summary.totalUsers} />
             <Tile label="Online now" value={summary.onlineNow} accent="text-emerald-300" sub={`within ${data.onlineWindowMinutes}m`} />
             <Tile label="Active today" value={summary.activeToday} />
             <Tile label="Logins today" value={summary.loginsToday} />
             <Tile label="Pro users" value={summary.proUsers} accent="text-violet-300" />
             <Tile label="Admins" value={summary.adminUsers} />
+            <Tile
+              label="Gemini today"
+              value={fmtCost(summary.geminiCostTodayUsd)}
+              accent="text-amber-300"
+              sub="All users · ET day"
+            />
+            <Tile
+              label="Gemini month"
+              value={fmtCost(summary.geminiCostMonthUsd)}
+              accent="text-amber-300"
+              sub="Paid API estimate"
+            />
           </div>
         )}
 
@@ -162,6 +188,7 @@ export default function AdminObservability() {
                     <th className="text-left px-3 py-2 font-medium hidden sm:table-cell">Last login</th>
                     <th className="text-left px-3 py-2 font-medium hidden md:table-cell">Last active</th>
                     <th className="text-right px-3 py-2 font-medium">Ori</th>
+                    <th className="text-right px-3 py-2 font-medium hidden lg:table-cell">Gemini</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -203,6 +230,10 @@ export default function AdminObservability() {
                             <div className="text-[10px] text-gray-600">{u.oriMonth?.requests ?? 0} month</div>
                           </>
                         )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums hidden lg:table-cell">
+                        <div className="text-amber-200/90">{fmtCost(u.oriCostMonth?.totalUsd)}</div>
+                        <div className="text-[10px] text-gray-600">month</div>
                       </td>
                     </tr>
                   ))}
@@ -258,6 +289,40 @@ export default function AdminObservability() {
                       Session {detail.oriSession?.used ?? 0}/{detail.oriLimits.session} ·
                       Today {detail.oriToday?.requests ?? 0}/{detail.oriLimits.daily} ·
                       Week {detail.oriWeek?.requests ?? 0}/{detail.oriLimits.weekly}
+                    </div>
+                  </div>
+                )}
+
+                {detail.oriCostMonth && (
+                  <div>
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Gemini cost (this month)</div>
+                    <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 space-y-2">
+                      <div className="flex justify-between gap-2">
+                        <span className="text-gray-400">Total API estimate</span>
+                        <span className="text-amber-200 font-semibold tabular-nums">{fmtCost(detail.oriCostMonth.totalUsd)}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-[10px] text-gray-500">
+                        <div>Chat {fmtCost(detail.oriCostMonth.chatUsd)}</div>
+                        <div>Game plans {fmtCost(detail.oriCostMonth.planUsd)}</div>
+                        <div>Input {fmtCost(detail.oriCostMonth.inputUsd)}</div>
+                        <div>Output {fmtCost(detail.oriCostMonth.outputUsd)}</div>
+                      </div>
+                      <div className="text-[10px] text-gray-600 leading-relaxed pt-1 border-t border-gray-800">
+                        {fmtTokens(detail.oriCostMonth.promptTokens)} in ·{" "}
+                        {fmtTokens(detail.oriCostMonth.cachedTokens)} cached ·{" "}
+                        {fmtTokens(detail.oriCostMonth.outputTokens)} out
+                      </div>
+                      {detail.estMarginMonthUsd != null && (
+                        <div className="flex justify-between gap-2 text-[10px] pt-1 border-t border-gray-800">
+                          <span className="text-gray-500">Est. Pro margin (after ~${summary?.proNetRevenueUsd ?? 9.2} net sub)</span>
+                          <span className={`font-semibold tabular-nums ${detail.estMarginMonthUsd >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                            {fmtCost(detail.estMarginMonthUsd)}
+                          </span>
+                        </div>
+                      )}
+                      <p className="text-[9px] text-gray-600 leading-relaxed">
+                        Uses inference usageMetadata when available; otherwise free countTokens (GetTokens — not billed).
+                      </p>
                     </div>
                   </div>
                 )}

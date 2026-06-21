@@ -366,6 +366,32 @@ try {
   db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id, updated_at DESC);`);
 } catch {}
 
+// Ori usage cost columns (per-kind tokens + USD micros for admin cost panels).
+try {
+  const oriCols = new Set(
+    db.prepare("PRAGMA table_info(ori_usage)").all().map((r) => r.name),
+  );
+  const ORI_USAGE_COLS = [
+    ["chat_prompt_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["chat_cached_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["chat_output_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["plan_prompt_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["plan_cached_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["plan_output_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["chat_cost_usd_micros", "INTEGER NOT NULL DEFAULT 0"],
+    ["plan_cost_usd_micros", "INTEGER NOT NULL DEFAULT 0"],
+    ["cost_usd_micros", "INTEGER NOT NULL DEFAULT 0"],
+  ];
+  for (const [name, type] of ORI_USAGE_COLS) {
+    if (oriCols.size > 0 && !oriCols.has(name)) {
+      db.exec(`ALTER TABLE ori_usage ADD COLUMN ${name} ${type}`);
+      console.log(`[db] Migration: added column "${name}" to ori_usage`);
+    }
+  }
+} catch (e) {
+  console.error("[db] ori_usage cost migration failed:", e.message);
+}
+
 // Ori usage is read by (user, day) for the daily total and by (user, day-range)
 // for the month, so a composite index on (user_id, day) covers both.
 try {
@@ -1538,10 +1564,18 @@ export function patchUserSettings(userId = 'default', partial = {}) {
 const incOriUsageStmt = db.prepare(`
   INSERT INTO ori_usage (
     user_id, day, requests, chat_requests, plan_requests,
-    prompt_tokens, cached_tokens, output_tokens, updated_at
+    prompt_tokens, cached_tokens, output_tokens,
+    chat_prompt_tokens, chat_cached_tokens, chat_output_tokens,
+    plan_prompt_tokens, plan_cached_tokens, plan_output_tokens,
+    chat_cost_usd_micros, plan_cost_usd_micros, cost_usd_micros,
+    updated_at
   ) VALUES (
     @user_id, @day, @requests, @chat_requests, @plan_requests,
-    @prompt_tokens, @cached_tokens, @output_tokens, @updated_at
+    @prompt_tokens, @cached_tokens, @output_tokens,
+    @chat_prompt_tokens, @chat_cached_tokens, @chat_output_tokens,
+    @plan_prompt_tokens, @plan_cached_tokens, @plan_output_tokens,
+    @chat_cost_usd_micros, @plan_cost_usd_micros, @cost_usd_micros,
+    @updated_at
   )
   ON CONFLICT(user_id, day) DO UPDATE SET
     requests       = requests + excluded.requests,
@@ -1550,11 +1584,23 @@ const incOriUsageStmt = db.prepare(`
     prompt_tokens  = prompt_tokens + excluded.prompt_tokens,
     cached_tokens  = cached_tokens + excluded.cached_tokens,
     output_tokens  = output_tokens + excluded.output_tokens,
+    chat_prompt_tokens = chat_prompt_tokens + excluded.chat_prompt_tokens,
+    chat_cached_tokens = chat_cached_tokens + excluded.chat_cached_tokens,
+    chat_output_tokens = chat_output_tokens + excluded.chat_output_tokens,
+    plan_prompt_tokens = plan_prompt_tokens + excluded.plan_prompt_tokens,
+    plan_cached_tokens = plan_cached_tokens + excluded.plan_cached_tokens,
+    plan_output_tokens = plan_output_tokens + excluded.plan_output_tokens,
+    chat_cost_usd_micros = chat_cost_usd_micros + excluded.chat_cost_usd_micros,
+    plan_cost_usd_micros = plan_cost_usd_micros + excluded.plan_cost_usd_micros,
+    cost_usd_micros = cost_usd_micros + excluded.cost_usd_micros,
     updated_at     = excluded.updated_at
 `);
 
 /** Increment a user's usage for an ET day. Each delta field defaults to 0. */
 export function incrementOriUsage(userId, day, delta = {}) {
+  const chatCost = delta.chatCostUsdMicros | 0;
+  const planCost = delta.planCostUsdMicros | 0;
+  const totalCost = delta.costUsdMicros != null ? (delta.costUsdMicros | 0) : (chatCost + planCost);
   incOriUsageStmt.run({
     user_id: userId,
     day,
@@ -1564,6 +1610,15 @@ export function incrementOriUsage(userId, day, delta = {}) {
     prompt_tokens: delta.promptTokens | 0,
     cached_tokens: delta.cachedTokens | 0,
     output_tokens: delta.outputTokens | 0,
+    chat_prompt_tokens: delta.chatPromptTokens | 0,
+    chat_cached_tokens: delta.chatCachedTokens | 0,
+    chat_output_tokens: delta.chatOutputTokens | 0,
+    plan_prompt_tokens: delta.planPromptTokens | 0,
+    plan_cached_tokens: delta.planCachedTokens | 0,
+    plan_output_tokens: delta.planOutputTokens | 0,
+    chat_cost_usd_micros: chatCost,
+    plan_cost_usd_micros: planCost,
+    cost_usd_micros: totalCost,
     updated_at: Date.now(),
   });
 }
@@ -1571,6 +1626,9 @@ export function incrementOriUsage(userId, day, delta = {}) {
 const ZERO_USAGE = {
   requests: 0, chat_requests: 0, plan_requests: 0,
   prompt_tokens: 0, cached_tokens: 0, output_tokens: 0,
+  chat_prompt_tokens: 0, chat_cached_tokens: 0, chat_output_tokens: 0,
+  plan_prompt_tokens: 0, plan_cached_tokens: 0, plan_output_tokens: 0,
+  chat_cost_usd_micros: 0, plan_cost_usd_micros: 0, cost_usd_micros: 0,
 };
 
 const getOriUsageDayStmt = db.prepare(
@@ -1585,10 +1643,29 @@ const sumOriUsageRangeStmt = db.prepare(`
     COALESCE(SUM(plan_requests), 0) AS plan_requests,
     COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
     COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
-    COALESCE(SUM(output_tokens), 0) AS output_tokens
+    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(chat_prompt_tokens), 0) AS chat_prompt_tokens,
+    COALESCE(SUM(chat_cached_tokens), 0) AS chat_cached_tokens,
+    COALESCE(SUM(chat_output_tokens), 0) AS chat_output_tokens,
+    COALESCE(SUM(plan_prompt_tokens), 0) AS plan_prompt_tokens,
+    COALESCE(SUM(plan_cached_tokens), 0) AS plan_cached_tokens,
+    COALESCE(SUM(plan_output_tokens), 0) AS plan_output_tokens,
+    COALESCE(SUM(chat_cost_usd_micros), 0) AS chat_cost_usd_micros,
+    COALESCE(SUM(plan_cost_usd_micros), 0) AS plan_cost_usd_micros,
+    COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros
   FROM ori_usage
   WHERE user_id = ? AND day >= ? AND day <= ?
 `);
+
+/** Sum Gemini cost across all users for an inclusive ET-day range. */
+export function sumOriCostAllUsers(startDay, endDay) {
+  const row = db.prepare(`
+    SELECT COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros
+    FROM ori_usage
+    WHERE day >= ? AND day <= ?
+  `).get(startDay, endDay);
+  return row?.cost_usd_micros ?? 0;
+}
 
 /** A single ET day's usage row (zeroed if the user hasn't used Ori that day). */
 export function getOriUsageDay(userId, day) {

@@ -640,7 +640,21 @@ router.post("/chat", chatLimiter, async (req, res) => {
     // for the usage panel). A turn that produced a real answer always cost tokens;
     // record even if usageMetadata was missing so the request count stays honest.
     if (fullResponse || usageMeta) {
-      recordOriUsage(req.userId, { kind: "chat", usage: usageMeta });
+      const chatBody = buildChatGeminiBody(usedModel, dynamicContext, geminiContents);
+      const fallback = usageMeta?.promptTokenCount == null && usageMeta?.candidatesTokenCount == null
+        ? {
+            contents: chatBody.contents,
+            systemInstruction: chatBody.system_instruction,
+            cachedContent: chatBody.cachedContent,
+            outputText: fullResponse,
+          }
+        : null;
+      await recordOriUsage(req.userId, {
+        kind: "chat",
+        usage: usageMeta,
+        model: usedModel,
+        fallback,
+      });
     }
 
     // Persist any [[remember: ...]] facts Ori emitted, and store the cleaned
