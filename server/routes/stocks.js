@@ -1304,9 +1304,14 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       req.query.refresh === "1" ||
       req.query.refresh === "true";
     const retry = req.query.retry === "1" || req.query.retry === "true";
+    // Normal load leads with the scarce frontier (Pro) model, then flash → lite,
+    // and geminiGenerateJson repeats that whole ladder on the backup key, riding
+    // out "too busy" with backoff (~6 attempts) inside this one request. A manual
+    // retry skips frontier and leads cheap/fast (lite → flash) — it's the last
+    // resort after the in-request loop already gave up.
     const ladder = retry
       ? { models: [liteModel(), valueModel()] }
-      : { leadModel: frontierModel(), models: [valueModel(), liteModel()] };
+      : { models: [frontierModel(), valueModel(), liteModel()] };
     const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
 
@@ -1347,9 +1352,10 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
         cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
       ]);
       // Model ladder per the request mode. Because this whole block is cached ~1 week
-      // per symbol (frontier), Pro is hit at most once per stock per week, and
-      // it appears only on the primary key so a single generation never spends the
-      // scarce frontier quota twice.
+      // per symbol (frontier), Pro is hit at most once per stock per week. Frontier
+      // leads the ladder and is retried on the backup key only when the primary
+      // key's whole ladder is "too busy" — and Gemini bills only on success, so a
+      // single generation never pays for the scarce frontier tier twice.
       const { data: raw, model, usage } = await geminiGenerateJson({
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),

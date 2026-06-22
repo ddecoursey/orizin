@@ -141,3 +141,32 @@ test('gamePlanMaxOutputTokens defaults to 4000 and honors GAME_PLAN_MAX_OUTPUT',
     else process.env.GAME_PLAN_MAX_OUTPUT = prev;
   }
 });
+
+test('a sub-frontier gameplan: entry goes stale at the lite TTL; frontier stays fresh ~7d', () => {
+  const s = 'ZZGPTIER';
+  const value = { bottomLine: 'Value take', modelTier: 'value', convictionDelta: 1 };
+  const ageTo = (key, ms) =>
+    sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(Date.now() - ms, key);
+  try {
+    // Value-tier take aged ~36h: past the 24h lite window, well within 7d. It only
+    // landed under gameplan: because frontier was busy, so it must NOT be pinned —
+    // it reads as stale so the next open re-attempts Pro (self-heal).
+    kvSet(`gameplan:${s}`, value);
+    ageTo(`gameplan:${s}`, 36 * 60 * 60 * 1000);
+    assert.equal(readFreshFrontierGamePlan(s, deps()), null);
+    assert.equal(resolveCachedGamePlan(s, deps()), null);
+    assert.equal(shouldRunLiteIntangiblesGeneration(s, deps()), true);
+
+    // Same age, but a REAL frontier take → still authoritative for the full ~7d.
+    kvSet(`gameplan:${s}`, frontier);
+    ageTo(`gameplan:${s}`, 36 * 60 * 60 * 1000);
+    assert.equal(resolveCachedGamePlan(s, deps())?.tier, 'frontier');
+
+    // A FRESH value take (inside the lite window) is still served instantly.
+    kvSet(`gameplan:${s}`, value);
+    ageTo(`gameplan:${s}`, 1 * 60 * 60 * 1000);
+    assert.equal(readFreshFrontierGamePlan(s, deps())?.modelTier, 'value');
+  } finally {
+    sqliteDb.prepare('DELETE FROM kv_cache WHERE key LIKE ?').run(`gameplan%:${s}`);
+  }
+});

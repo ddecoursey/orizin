@@ -64,8 +64,22 @@ export function readFreshDetail(key, ttlMs, { detailCache, kvGet, promote }) {
   return null;
 }
 
-export function readFreshFrontierGamePlan(symbol, deps, ttlMs = gamePlanFrontierTtlMs()) {
-  return readFreshDetail(`gameplan:${symbol}`, ttlMs, deps);
+// Tier-aware freshness. A real frontier (Pro) take is authoritative for the full
+// frontier TTL (~7d). A SUB-frontier take only lands under this key because the
+// frontier model was busy at first-open; pinning it for a week would serve a
+// degraded "Pro" review (and feed the shared screener intangibles) the whole time
+// with no upgrade path. So treat a non-frontier entry as fresh for just the lite
+// window (~24h) — the next open then re-attempts frontier and it self-heals. An
+// explicit ttlMs (callers/tests) overrides and keeps the old single-TTL behavior.
+export function readFreshFrontierGamePlan(symbol, deps, ttlMs) {
+  const key = `gameplan:${symbol}`;
+  if (ttlMs != null) return readFreshDetail(key, ttlMs, deps);
+  const data = readFreshDetail(key, gamePlanFrontierTtlMs(), deps);
+  if (!data) return null;
+  if (isFrontierGamePlan(data)) return data; // real Pro take — fresh for the full ~7d
+  // Sub-frontier (value/lite) take: only honor it for the lite window so frontier
+  // gets re-attempted soon instead of being pinned for the whole frontier TTL.
+  return readFreshDetail(key, gamePlanLiteTtlMs(), deps);
 }
 
 export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs()) {

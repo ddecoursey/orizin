@@ -86,34 +86,80 @@ const genUrl = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const REQUEST_TIMEOUT_MS = 30000; // don't let a hung LLM call tie up the request + rate-limit slot
 
-// Cap concurrent structured (game-plan / intangibles) Gemini calls. These are now
-// generated on demand (a user opening a Deep Research Game Plan), but several can
-// still land at once across users; without a ceiling they fan out into many
-// simultaneous requests that trip 429/503 "overloaded" — and, because chat shares
-// the same key + quota, that also makes interactive Ori "too busy". This gate
-// keeps the structured path to a trickle so the streaming chat path stays clear.
-// A waiter inherits the releasing call's slot, so `active` never exceeds the cap.
+// ── Overload-retry budget ────────────────────────────────────────────────────
+// The structured ladder rides out a transient Gemini overload INSIDE a single
+// request, so the user sees one "thinking" spinner instead of clicking "try
+// again" ten times. We walk pro→flash→lite on key A, then the same on key B, and
+// after each "too busy" we WAIT (capped backoff) before the next attempt so we
+// never burst an already-overloaded API. Bounded by attempts AND a wall-clock
+// budget; env-overridable so ops can retune without a deploy.
+const ladderMaxAttempts = () => Number(process.env.GEMINI_JSON_MAX_ATTEMPTS) || 6;
+const ladderBudgetMs = () => Number(process.env.GEMINI_JSON_BUDGET_MS) || 45000;
+const backoffBaseMs = () => Number(process.env.GEMINI_JSON_BACKOFF_BASE_MS) || 600;
+const backoffMaxMs = () => Number(process.env.GEMINI_JSON_BACKOFF_MAX_MS) || 6000;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Equal-jitter exponential backoff (half fixed + half random), capped and clamped
+// to the time left. Equal jitter guarantees real spacing (never a 0ms "burst")
+// while de-syncing concurrent retriers so they don't all re-hit at once.
+function backoffDelay(n, remainingMs) {
+  const cap = Math.min(backoffMaxMs(), backoffBaseMs() * 2 ** n);
+  const delay = cap / 2 + Math.random() * (cap / 2);
+  return Math.max(0, Math.min(delay, remainingMs));
+}
+
+// Cap concurrent structured (game-plan / intangibles) Gemini calls. Several can
+// land at once across users; without a ceiling they fan out into simultaneous
+// requests that trip 429/503 "overloaded" — and, because chat shares the same key
+// + quota, that also makes interactive Ori "too busy". This gate keeps the
+// structured path to a trickle so the streaming chat path stays clear. A waiter
+// inherits the releasing call's slot, so `active` never exceeds the cap; a waiter
+// that waits past its deadline drops out, so a pile-up during an overload can't
+// queue a request longer than the caller's own budget.
 const MAX_CONCURRENT = 2;
 let active = 0;
 const waiters = [];
-function acquireSlot() {
+function acquireSlot(deadline) {
   if (active < MAX_CONCURRENT) {
     active++;
     return Promise.resolve();
   }
-  return new Promise((resolve) => waiters.push(resolve));
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const take = () => {            // releaseSlot calls this to hand off a live slot
+      if (settled) return false;   // already gave up → tell releaseSlot to skip us
+      settled = true;
+      clearTimeout(timer);
+      resolve();                   // inherit the releaser's slot (active unchanged)
+      return true;
+    };
+    const wait = Math.max(0, (deadline ?? Date.now() + ladderBudgetMs()) - Date.now());
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const i = waiters.indexOf(take);
+      if (i >= 0) waiters.splice(i, 1);
+      reject(Object.assign(new Error("Gemini error: all models/keys busy"), { code: "overloaded", status: 503 }));
+    }, wait);
+    waiters.push(take);
+  });
 }
 function releaseSlot() {
-  const next = waiters.shift();
-  if (next) next();   // hand the slot straight to the next waiter (active unchanged)
-  else active--;
+  // Hand the slot to the next LIVE waiter; skip any that already timed out.
+  while (waiters.length) {
+    if (waiters.shift()()) return; // a live waiter took it → active unchanged
+  }
+  active--;                        // no live waiter → free the slot
 }
-// "Move to the next model/key" cases: rate-limited / overloaded (429/503/5xx),
-// OR 404 (a model id this key can't serve — e.g. a preview not enabled), so an
-// unavailable frontier model falls through to value→lite gracefully.
-const failover = (status, body) =>
-  status === 429 || status === 503 || status === 404 ||
+// An OVERLOAD / rate response (429/503/5xx "overloaded") — worth WAITING out with
+// a backoff before retrying. A 404 (a model id this key can't serve — e.g. a
+// preview not enabled) is also a failover but NOT an overload: fall straight
+// through to the next model with no wait.
+const isOverload = (status, body) =>
+  status === 429 || status === 503 ||
   (status >= 500 && /unavailable|overloaded|try again/i.test(body || ""));
+// "Move to the next model/key" cases: any overload, plus 404.
+const failover = (status, body) => status === 404 || isOverload(status, body);
 
 function err(message, code, extra = {}) {
   const e = new Error(message);
@@ -132,19 +178,24 @@ export function geminiKeys() {
 }
 
 /**
- * Generate a structured JSON object from Gemini, walking a model+key ladder.
- * Tries every model (in order) on the PRIMARY key, then the same models on the
- * BACKUP key, failing over on each "too busy"/unavailable response. Returns the
- * parsed object plus the model id that actually produced it (for display).
+ * Generate a structured JSON object from Gemini, walking a model+key ladder with
+ * overload-aware retry + backoff. Tries every model (in order) on the PRIMARY
+ * key, then the same models on the BACKUP key; on each "too busy"/unavailable
+ * response it WAITS (capped backoff) and moves on, cycling back to the top of the
+ * ladder until it succeeds, hits maxAttempts, or runs out the time budget — so a
+ * transient overload is ridden out inside ONE request instead of surfacing as a
+ * "try again". Returns the parsed object plus the model id that produced it.
  * @param {object}  opts
  * @param {string}  opts.system   system instruction
  * @param {string}  opts.prompt   user prompt
  * @param {object}  opts.schema   Gemini responseSchema (UPPERCASE OpenAPI types)
  * @param {number} [opts.temperature]
- * @param {string[]} [opts.models]   per-key model ladder, tried on every key (default value→lite)
- * @param {string}  [opts.leadModel] a scarce model (e.g. frontier) tried ONCE, on the primary key
- *                                    only, ahead of the per-key ladder — so its quota is never
- *                                    spent twice in one generation.
+ * @param {string[]} [opts.models]   per-key model ladder, tried on every key (default value→lite).
+ *                                    Put the scarce/best model first (e.g. frontier→value→lite); it
+ *                                    is only re-tried on the backup key when the primary key's whole
+ *                                    ladder is busy, and Gemini bills only on success, so a single
+ *                                    generation never pays for the scarce tier twice.
+ * @param {number} [opts.maxAttempts] total attempts across the cycled ladder (default 6).
  * @param {string}  [opts.thinkingLevel] "minimal"|"low"|"medium"|"high" — applied per model via
  *                                    thinkingConfigFor (3.x thinkingLevel / 2.5 thinkingBudget).
  * @returns {Promise<{ data: object, model: string, usage: object|null }>}
@@ -156,26 +207,23 @@ export async function geminiGenerateJson({
   schema,
   temperature = 0.45,
   models,
-  leadModel,
   maxOutputTokens = 2000,
   cachedContent = null,
   getCachedContent = null,
   thinkingLevel = null,
+  maxAttempts = ladderMaxAttempts(),
 }) {
   const keys = geminiKeys();
   if (!keys.length) throw err("GEMINI_API_KEY not configured", "no_key");
   let ladder = models && models.length ? models : [valueModel(), liteModel()];
-  let lead = leadModel;
-  // Non-prod test cost guard: lite only, and drop the frontier/value lead.
-  if (!paidTiersAllowed()) {
-    ladder = [liteModel()];
-    lead = null;
-  }
+  // Non-prod test cost guard: collapse any ladder to lite only.
+  if (!paidTiersAllowed()) ladder = [liteModel()];
 
-  // Ordered (key, model) attempts: lead once on the primary key, then the
-  // ladder on the primary key, then the ladder on the backup key.
+  // Ordered (key, model) attempts: the whole ladder on the primary key, then the
+  // whole ladder on the backup key (a different Google Cloud project → fresh
+  // quota). runLadder walks these with backoff and, if needed, cycles back to the
+  // top until it succeeds, exhausts maxAttempts, or runs out the time budget.
   const combos = [];
-  if (lead) combos.push({ apiKey: keys[0], model: lead });
   for (const apiKey of keys) for (const model of ladder) combos.push({ apiKey, model });
 
   const baseBody = {
@@ -188,9 +236,15 @@ export async function geminiGenerateJson({
     },
   };
 
-  await acquireSlot();
+  const deadline = Date.now() + ladderBudgetMs();
+  await acquireSlot(deadline);
   try {
-    return await runLadder(baseBody, combos, { system, cachedContent, getCachedContent, thinkingLevel });
+    return await runLadder(
+      baseBody,
+      combos,
+      { system, cachedContent, getCachedContent, thinkingLevel },
+      { deadline, maxAttempts },
+    );
   } finally {
     releaseSlot();
   }
@@ -211,44 +265,67 @@ function bodyForModel(baseBody, model, { system, cachedContent, getCachedContent
   return body;
 }
 
-async function runLadder(baseBody, combos, cacheOpts = {}) {
+// Walk the (key, model) combos with overload-aware retry. One attempt per loop
+// iteration, cycling combos (combos[attempt % combos.length]) so the ladder
+// repeats across keys until it succeeds, hits maxAttempts, or passes the deadline.
+// We back off (sleep) only after an OVERLOAD or a network blip — never after a 404
+// (that just moves to the next model at once) and never after the final attempt —
+// so we ride out a "too busy" without bursting the API.
+async function runLadder(baseBody, combos, cacheOpts = {}, { deadline = 0, maxAttempts = ladderMaxAttempts() } = {}) {
   let lastStatus = 0;
-  {
-    for (const { apiKey, model } of combos) {
-      const body = bodyForModel(baseBody, model, cacheOpts);
-      let res;
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let overloads = 0; // grows the backoff exponent each time we wait one out
+  const limit = Math.max(1, maxAttempts);
+
+  for (let attempt = 0; attempt < limit; attempt++) {
+    if (deadline && Date.now() >= deadline) break;
+    const { apiKey, model } = combos[attempt % combos.length];
+    const body = bodyForModel(baseBody, model, cacheOpts);
+    let res = null;
+    let transient = false; // network/timeout blip or overload → back off, then retry
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      res = await fetch(genUrl(model), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch {
+      transient = true; // network error / timeout abort — treat as transient
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (res && res.ok) {
+      const data = await res.json();
+      const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+      if (!text) throw err("Ori returned an empty response", "bad_json");
       try {
-        res = await fetch(genUrl(model), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+        // usage carries Gemini's token accounting (incl. cachedContentTokenCount)
+        // so callers can meter cost and the context-cache hit rate.
+        return { data: JSON.parse(text), model, usage: data.usageMetadata || null };
       } catch {
-        continue; // network error / timeout abort — try the next model/key
-      } finally {
-        clearTimeout(timer);
+        throw err("Ori returned malformed JSON", "bad_json");
       }
+    }
 
-      if (res.ok) {
-        const data = await res.json();
-        const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
-        if (!text) throw err("Ori returned an empty response", "bad_json");
-        try {
-          // usage carries Gemini's token accounting (incl. cachedContentTokenCount)
-          // so callers can meter cost and the context-cache hit rate.
-          return { data: JSON.parse(text), model, usage: data.usageMetadata || null };
-        } catch {
-          throw err("Ori returned malformed JSON", "bad_json");
-        }
-      }
-
+    if (res) {
       const bodyText = await res.text();
       lastStatus = res.status;
-      if (failover(res.status, bodyText)) continue; // busy / unavailable — next combo
-      throw err(`Gemini error ${res.status}`, "error", { status: res.status });
+      if (!failover(res.status, bodyText)) {
+        throw err(`Gemini error ${res.status}`, "error", { status: res.status });
+      }
+      // Overload → wait it out; 404 → fall through to the next model immediately.
+      if (isOverload(res.status, bodyText)) transient = true;
+    }
+
+    // Back off before the next attempt, but only when there IS a next attempt and
+    // budget remains — equal jitter so concurrent retriers don't re-burst in sync.
+    if (transient && attempt + 1 < limit && (!deadline || Date.now() < deadline)) {
+      const remaining = deadline ? deadline - Date.now() : backoffMaxMs();
+      const wait = backoffDelay(overloads++, remaining);
+      if (wait > 0) await sleep(wait);
     }
   }
   throw err("Gemini error: all models/keys busy", "overloaded", { status: lastStatus });

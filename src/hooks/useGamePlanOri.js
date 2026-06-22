@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ORI_FRONTIER_TTL_MS, isFreshOriCache } from "../lib/oriCacheTtl.js";
 
 const DEFER_MS = 350;
-const ORI_TIMEOUT_MS = 30_000;
+// Must exceed the server's structured-retry budget (GEMINI_JSON_BUDGET_MS ≈ 45s):
+// the game-plan route now rides out a Gemini overload with up to ~6 backed-off
+// attempts inside a single request, so the client waits for that to settle (or
+// return a friendly 503) rather than aborting mid-retry.
+const ORI_TIMEOUT_MS = 70_000;
 
 // Fetches Ori's intelligence layer for the Game Plan — DEFERRED, so the
 // deterministic Game Plan paints instantly and Ori's take fades in after.
@@ -160,7 +164,7 @@ export function useGamePlanOri(symbol, {
             if (abortReasonRef.current === "timeout") {
               settle({
                 ori: null,
-                error: "Ori's take timed out after 30 seconds.",
+                error: "Ori's take timed out — Gemini may be overloaded. Try again in a moment.",
                 locked: false,
                 done: true,
                 cancelled: false,
