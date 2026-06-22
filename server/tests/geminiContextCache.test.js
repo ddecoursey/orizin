@@ -79,11 +79,11 @@ test("buildChatGeminiBody applies the configured chat thinking level (cached + f
   process.env.ORI_CHAT_THINKING_LEVEL = "low";
   try {
     const fallback = buildChatGeminiBody(model, "ctx", []);
-    assert.equal(fallback.generationConfig.thinkingLevel, "low");
+    assert.equal(fallback.generationConfig.thinkingConfig.thinkingLevel, "low");
 
     _setChatContextCacheForTests(model, "cachedContents/test-cache");
     const cached = buildChatGeminiBody(model, "ctx", []);
-    assert.equal(cached.generationConfig.thinkingLevel, "low");
+    assert.equal(cached.generationConfig.thinkingConfig.thinkingLevel, "low");
   } finally {
     if (prev == null) delete process.env.ORI_CHAT_THINKING_LEVEL;
     else process.env.ORI_CHAT_THINKING_LEVEL = prev;

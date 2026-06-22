@@ -46,21 +46,21 @@ async function captureStructuredBody({ thinkingLevel }) {
   }
 }
 
-test("thinkingConfigFor maps 3.x levels to thinkingLevel", () => {
-  assert.deepEqual(thinkingConfigFor("gemini-3.5-flash", "low"), { thinkingLevel: "low" });
-  assert.deepEqual(thinkingConfigFor("gemini-3.1-flash-lite", "minimal"), { thinkingLevel: "minimal" });
-  assert.deepEqual(thinkingConfigFor("gemini-3.1-pro-preview", "high"), { thinkingLevel: "high" });
+test("thinkingConfigFor maps 3.x levels to a nested thinkingConfig.thinkingLevel", () => {
+  assert.deepEqual(thinkingConfigFor("gemini-3.5-flash", "low"), { thinkingConfig: { thinkingLevel: "low" } });
+  assert.deepEqual(thinkingConfigFor("gemini-3.1-flash-lite", "minimal"), { thinkingConfig: { thinkingLevel: "minimal" } });
+  assert.deepEqual(thinkingConfigFor("gemini-3.1-pro-preview", "high"), { thinkingConfig: { thinkingLevel: "high" } });
 });
 
 test("thinkingConfigFor clamps 'minimal' up to 'low' for 3.x Pro (which rejects minimal)", () => {
-  assert.deepEqual(thinkingConfigFor("gemini-3.1-pro-preview", "minimal"), { thinkingLevel: "low" });
+  assert.deepEqual(thinkingConfigFor("gemini-3.1-pro-preview", "minimal"), { thinkingConfig: { thinkingLevel: "low" } });
 });
 
-test("thinkingConfigFor maps 2.5 levels to a numeric thinkingBudget", () => {
-  assert.deepEqual(thinkingConfigFor("gemini-2.5-flash", "minimal"), { thinkingBudget: 0 });
-  assert.deepEqual(thinkingConfigFor("gemini-2.5-flash", "low"), { thinkingBudget: 1024 });
+test("thinkingConfigFor maps 2.5 levels to a nested thinkingConfig.thinkingBudget", () => {
+  assert.deepEqual(thinkingConfigFor("gemini-2.5-flash", "minimal"), { thinkingConfig: { thinkingBudget: 0 } });
+  assert.deepEqual(thinkingConfigFor("gemini-2.5-flash", "low"), { thinkingConfig: { thinkingBudget: 1024 } });
   // 2.5 Pro can't disable thinking — a 0 budget is clamped up.
-  assert.deepEqual(thinkingConfigFor("gemini-2.5-pro", "minimal"), { thinkingBudget: 1024 });
+  assert.deepEqual(thinkingConfigFor("gemini-2.5-pro", "minimal"), { thinkingConfig: { thinkingBudget: 1024 } });
 });
 
 test("thinkingConfigFor returns null for sentinels, unknown levels, and unknown models", () => {
@@ -74,7 +74,7 @@ test("thinkingConfigFor returns null for sentinels, unknown levels, and unknown 
 test("geminiGenerateJson injects thinkingConfig into the structured request body", async () => {
   const { captured, res } = await captureStructuredBody({ thinkingLevel: "low" });
   assert.deepEqual(res.data, { ok: true });
-  assert.equal(captured.generationConfig.thinkingLevel, "low");
+  assert.equal(captured.generationConfig.thinkingConfig.thinkingLevel, "low");
   // Thinking config must not clobber the other generationConfig fields.
   assert.equal(captured.generationConfig.maxOutputTokens, 900);
   assert.ok(captured.generationConfig.responseSchema);
@@ -84,8 +84,7 @@ test("geminiGenerateJson injects thinkingConfig into the structured request body
 
 test("geminiGenerateJson sends no thinkingConfig for the 'default' sentinel", async () => {
   const { captured } = await captureStructuredBody({ thinkingLevel: "default" });
-  assert.equal(captured.generationConfig.thinkingLevel, undefined);
-  assert.equal(captured.generationConfig.thinkingBudget, undefined);
+  assert.equal(captured.generationConfig.thinkingConfig, undefined);
   assert.equal(captured.generationConfig.maxOutputTokens, 900);
 });
 

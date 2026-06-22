@@ -54,12 +54,12 @@ export function thinkingConfigFor(model, level) {
   if (/gemini-3/.test(model)) {
     // 3.x Pro rejects "minimal" — clamp up to the lowest level it allows.
     if (lvl === "minimal" && /pro/.test(model)) lvl = "low";
-    return { thinkingLevel: lvl };
+    return { thinkingConfig: { thinkingLevel: lvl } };
   }
   if (/gemini-2\.5/.test(model)) {
     let budget = LEVEL_TO_BUDGET[lvl];
     if (budget === 0 && /pro/.test(model)) budget = 1024; // 2.5 Pro can't disable
-    return { thinkingBudget: budget };
+    return { thinkingConfig: { thinkingBudget: budget } };
   }
   return null; // unknown family — don't risk an invalid field
 }
