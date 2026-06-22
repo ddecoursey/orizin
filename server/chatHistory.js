@@ -10,6 +10,12 @@ export function chatHistoryMaxMessages() {
   return envInt("ORI_CHAT_HISTORY_MAX", 24);
 }
 
+/** Deep Research chat uses a shorter window — one-stock threads rarely need 24 msgs. */
+export function chatHistoryMaxMessagesForView(view) {
+  if (view === "deep-research") return envInt("ORI_CHAT_HISTORY_MAX_DR", 12);
+  return chatHistoryMaxMessages();
+}
+
 /** Per-message char cap when replaying history (long old replies are clipped). */
 export function chatHistoryMsgChars() {
   return envInt("ORI_CHAT_HISTORY_MSG_CHARS", 12000);

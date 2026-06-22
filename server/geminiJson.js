@@ -34,6 +34,54 @@ export function modelTier(model) {
   if (model === liteModel()) return "lite";
   return "value";
 }
+
+// ── Thinking control ─────────────────────────────────────────────────────────
+// Gemini 3.x exposes `thinkingLevel` ("minimal"|"low"|"medium"|"high"); the 2.5
+// series instead takes a numeric `thinkingBudget`, and sending BOTH in one
+// request is an error. Default thinking is "high" on 3.x Pro/Flash, and those
+// thinking tokens bill at the full OUTPUT rate (response price = output + thinking
+// tokens) — the single biggest cost driver — so each journey dials it down.
+// Returns a thinkingConfig object to merge into generationConfig, or null when
+// the model family is unknown or the level is a passthrough sentinel ("default"/
+// "none"/anything unrecognized) — so we never send an invalid field.
+const THINKING_LEVELS = ["minimal", "low", "medium", "high"];
+// 3.x level → nearest 2.5 numeric budget (tokens). 0 = off (Flash/Lite only).
+const LEVEL_TO_BUDGET = { minimal: 0, low: 1024, medium: 8192, high: 24576 };
+
+export function thinkingConfigFor(model, level) {
+  let lvl = THINKING_LEVELS.includes(level) ? level : null;
+  if (!lvl || !model) return null;
+  if (/gemini-3/.test(model)) {
+    // 3.x Pro rejects "minimal" — clamp up to the lowest level it allows.
+    if (lvl === "minimal" && /pro/.test(model)) lvl = "low";
+    return { thinkingLevel: lvl };
+  }
+  if (/gemini-2\.5/.test(model)) {
+    let budget = LEVEL_TO_BUDGET[lvl];
+    if (budget === 0 && /pro/.test(model)) budget = 1024; // 2.5 Pro can't disable
+    return { thinkingBudget: budget };
+  }
+  return null; // unknown family — don't risk an invalid field
+}
+
+// Desired thinking level per journey, env-overridable (set to "default" to leave
+// the model at its built-in level). The levels reflect WHERE spend lives, not just
+// per-call cost: chat runs every turn uncached, so that's where aggressive cuts pay
+// off (low); the Game Plan is cached ~1 gen/stock/week on the premium frontier tier,
+// so cutting it barely moves the bill but risks the premium output — keep it richer
+// (medium); the lite trickle wants the cheapest — Flash-Lite already defaults to
+// minimal, but we set it so re-pointing the lite model can't silently re-enable
+// thinking.
+export function chatThinkingLevel() {
+  return process.env.ORI_CHAT_THINKING_LEVEL || "low";
+}
+export function gamePlanThinkingLevel() {
+  return process.env.GAME_PLAN_THINKING_LEVEL || "medium";
+}
+export function liteThinkingLevel() {
+  return process.env.GEMINI_LITE_THINKING_LEVEL || "minimal";
+}
+
 const genUrl = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const REQUEST_TIMEOUT_MS = 30000; // don't let a hung LLM call tie up the request + rate-limit slot
@@ -97,10 +145,23 @@ export function geminiKeys() {
  * @param {string}  [opts.leadModel] a scarce model (e.g. frontier) tried ONCE, on the primary key
  *                                    only, ahead of the per-key ladder — so its quota is never
  *                                    spent twice in one generation.
+ * @param {string}  [opts.thinkingLevel] "minimal"|"low"|"medium"|"high" — applied per model via
+ *                                    thinkingConfigFor (3.x thinkingLevel / 2.5 thinkingBudget).
  * @returns {Promise<{ data: object, model: string, usage: object|null }>}
  * @throws  Error with .code: "no_key" | "overloaded" | "bad_json" | "error"
  */
-export async function geminiGenerateJson({ system, prompt, schema, temperature = 0.45, models, leadModel }) {
+export async function geminiGenerateJson({
+  system,
+  prompt,
+  schema,
+  temperature = 0.45,
+  models,
+  leadModel,
+  maxOutputTokens = 2000,
+  cachedContent = null,
+  getCachedContent = null,
+  thinkingLevel = null,
+}) {
   const keys = geminiKeys();
   if (!keys.length) throw err("GEMINI_API_KEY not configured", "no_key");
   let ladder = models && models.length ? models : [valueModel(), liteModel()];
@@ -117,24 +178,44 @@ export async function geminiGenerateJson({ system, prompt, schema, temperature =
   if (lead) combos.push({ apiKey: keys[0], model: lead });
   for (const apiKey of keys) for (const model of ladder) combos.push({ apiKey, model });
 
-  const body = {
+  const baseBody = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: { responseMimeType: "application/json", responseSchema: schema, temperature },
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: schema,
+      temperature,
+      maxOutputTokens,
+    },
   };
-  if (system) body.systemInstruction = { parts: [{ text: system }] };
 
   await acquireSlot();
   try {
-    return await runLadder(body, combos);
+    return await runLadder(baseBody, combos, { system, cachedContent, getCachedContent, thinkingLevel });
   } finally {
     releaseSlot();
   }
 }
 
-async function runLadder(body, combos) {
+function bodyForModel(baseBody, model, { system, cachedContent, getCachedContent, thinkingLevel }) {
+  const body = { ...baseBody, contents: baseBody.contents.map((c) => ({ ...c, parts: c.parts.map((p) => ({ ...p })) })) };
+  const cacheName = getCachedContent?.(model) || cachedContent || null;
+  if (cacheName) {
+    body.cachedContent = cacheName;
+  } else if (system) {
+    body.systemInstruction = { parts: [{ text: system }] };
+  }
+  // Per-model thinking control (3.x level / 2.5 budget). Fresh generationConfig
+  // only when it applies, so the shared baseBody.generationConfig is never mutated.
+  const tc = thinkingConfigFor(model, thinkingLevel);
+  if (tc) body.generationConfig = { ...baseBody.generationConfig, ...tc };
+  return body;
+}
+
+async function runLadder(baseBody, combos, cacheOpts = {}) {
   let lastStatus = 0;
   {
     for (const { apiKey, model } of combos) {
+      const body = bodyForModel(baseBody, model, cacheOpts);
       let res;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);

@@ -30,14 +30,47 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     };
   }
 
-  function buildContext() {
+  function classifyChatIntent(message, view, symbols, stock) {
+    if (view === 'portfolio-goals') return 'portfolio';
+    if (view !== 'screener') return 'general';
+    const m = (message || '').toLowerCase();
+    if (/\b(filter|narrow|refine|show me only|only show|exclude|remove the|tighten|screen for|less than|greater than|under \$|over \$)\b/.test(m)) {
+      return 'filter';
+    }
+    if (symbols?.length || /\b(analyze|compare|vs\.?|versus|deep dive|tell me about|what do you think of|should i buy)\b/.test(m)) {
+      return 'analyze';
+    }
+    if (/\b(portfolio|holdings|trim|sell|overlap|concentrat|rebalance)\b/.test(m)) {
+      return 'portfolio';
+    }
+    if (stock?.symbol && /\b(this stock|this one|it\b)/.test(m)) return 'analyze';
+    return 'general';
+  }
+
+  function buildContext(message = '') {
     const currentView = session.view || 'screener';
-    // On the Deep Research page the user is studying ONE stock — Ori should focus
-    // on it (the activeStock below), NOT a table of other names. Everywhere else,
-    // give Ori a generous slice of the screener (top 100 by Conviction) to work with.
     const isDeepResearch = currentView === 'deep-research';
+    const chatIntent = isDeepResearch ? 'general' : classifyChatIntent(message, currentView, focusSymbols, activeStock);
     const sorted = [...(filteredStocks || [])].sort((a, b) => (b.conviction || 0) - (a.conviction || 0));
-    const top = isDeepResearch ? [] : sorted.slice(0, 100);
+
+    let tableSize = 30;
+    if (chatIntent === 'filter') tableSize = 20;
+    else if (chatIntent === 'analyze') tableSize = 15;
+    else if (chatIntent === 'portfolio') tableSize = 15;
+
+    let top = isDeepResearch ? [] : sorted.slice(0, tableSize);
+
+    if (!isDeepResearch && chatIntent === 'analyze') {
+      const want = new Set([
+        ...(focusSymbols || []).map((s) => String(s).toUpperCase()),
+        activeStock?.symbol,
+      ].filter(Boolean));
+      if (want.size) {
+        const picked = sorted.filter((s) => want.has(s.symbol));
+        const rest = sorted.filter((s) => !want.has(s.symbol)).slice(0, Math.max(0, tableSize - picked.length));
+        top = [...picked, ...rest];
+      }
+    }
 
     // Provide Ori with the list of available sectors and industries so it uses correct values
     const allSectors = [...new Set((filteredStocks || []).map(s => s.sector).filter(Boolean))].sort();
@@ -151,31 +184,72 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       };
     }
 
-    const activeStockContext = toContextStock(activeStock);
-    const focusStocksContext = (session.focusStocks || []).map(toContextStock).filter(Boolean);
+    function slimPortfolioGoals(pg, symbol) {
+      if (!pg) return null;
+      const sym = (symbol || '').toUpperCase();
+      const alloc = (pg.overallAllocations || []).find((a) => (a.ticker || '').toUpperCase() === sym);
+      const goals = (pg.goals || []).filter((g) => g && String(g).trim()).slice(0, 5);
+      const theses = (pg.theses || [])
+        .filter((t) => t && String(t).trim() && (!sym || String(t).toUpperCase().includes(sym)))
+        .slice(0, 4);
+      if (!alloc && !goals.length && !theses.length) return null;
+      return {
+        holdsSymbol: !!alloc,
+        position: alloc
+          ? { percent: alloc.overallPercent, dollars: alloc.dollars }
+          : null,
+        goals,
+        theses,
+      };
+    }
+
+    function toDrContextStock(s) {
+      const ctx = toContextStock(s);
+      if (!ctx) return null;
+      if (ctx.profile?.description) {
+        ctx.profile = { ...ctx.profile, description: String(ctx.profile.description).slice(0, 400) };
+      }
+      ctx.grades = (ctx.grades || []).slice(0, 4);
+      ctx.insider = (ctx.insider || []).slice(0, 4);
+      ctx.news = (ctx.news || []).slice(0, 5);
+      return ctx;
+    }
+
+    const activeStockContext = isDeepResearch
+      ? toDrContextStock(activeStock)
+      : (chatIntent === 'analyze' ? toContextStock(activeStock) : (activeStock ? compact(activeStock) : null));
+    const focusStocksContext = (isDeepResearch || chatIntent !== 'analyze')
+      ? []
+      : (session.focusStocks || []).map(toContextStock).filter(Boolean);
+
+    const newsCap = chatIntent === 'filter' ? 0 : chatIntent === 'analyze' ? 4 : 6;
 
     return {
       filters: isDeepResearch ? {} : filters,
       weights,
       view: currentView,
+      chatIntent,
       today: new Date().toISOString().slice(0, 10),
       totalFiltered: isDeepResearch ? 0 : (filteredStocks || []).length,
       activeScreener: isDeepResearch ? null : (session.activeScreener || null),
-      pinnedStocks: isDeepResearch ? [] : (session.pinnedStocks || []).map(compact),
-      news: (session.news || []).slice(0, 10).map((a) => ({
-        title: a.title,
-        source: a.site || a.publisher,
-        symbol: a.symbol,
-        date: a.publishedDate,
-      })),
+      pinnedStocks: (isDeepResearch || chatIntent === 'filter') ? [] : (session.pinnedStocks || []).map(compact),
+      news: (isDeepResearch || newsCap === 0)
+        ? []
+        : (session.news || []).slice(0, newsCap).map((a) => ({
+            title: a.title,
+            source: a.site || a.publisher,
+            symbol: a.symbol,
+            date: a.publishedDate,
+          })),
       activeStock: activeStockContext,
       focusStocks: focusStocksContext,
-      // User's portfolios + goals (framing context for all Ori advice)
-      portfolioGoals: session.portfolioGoals || null,
+      portfolioGoals: isDeepResearch
+        ? slimPortfolioGoals(session.portfolioGoals, activeStock?.symbol)
+        : (session.portfolioGoals || null),
       stocks: top.map(compact),
-      availableSectors: isDeepResearch ? [] : allSectors,
-      availableIndustries: isDeepResearch ? [] : allIndustries,
-      focusSymbols,
+      availableSectors: (isDeepResearch || chatIntent === 'filter') ? [] : allSectors,
+      availableIndustries: (isDeepResearch || chatIntent === 'filter') ? [] : allIndustries,
+      focusSymbols: isDeepResearch ? (activeStock?.symbol ? [activeStock.symbol] : focusSymbols) : focusSymbols,
     };
   }
 
@@ -197,7 +271,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
         body: JSON.stringify({
           sessionId,
           message: text,
-          context: buildContext(),
+          context: buildContext(text),
         }),
       });
 

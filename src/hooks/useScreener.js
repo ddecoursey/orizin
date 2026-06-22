@@ -572,10 +572,8 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
 
   // Lite intangibles for the *visible top* of the current list — the personalized
   // half of the screener enrichment (the shared server "leaders" trickle covers
-  // broad names). Each is a LITE-only game-plan call (gemini-3.1-flash-lite,
-  // cap-1 server lane, separate gameplan-lite: cache that never clobbers a Deep
-  // Research frontier review), so it's far gentler than the old frontier/value
-  // sweep that tripped "Ori is busy". Frugal by design:
+  // broad names). Each leader issues a cache-only GET (no Gemini); background
+  // trickle is the sole lite generator. Frugal by design:
   //   • only a handful of the highest-Conviction leaders,
   //   • Pro/admin only (free users get 402s — don't spend the quota),
   //   • debounced so dragging Q/V/G sliders doesn't sweep per frame,
@@ -596,33 +594,28 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     if (!leaders.length) return;
 
     let cancelled = false;
+    const inFlight = new Set();
     const fetchOne = async (r) => {
       const sym = r.symbol;
       oriFetchedRef.current.add(sym);
+      inFlight.add(sym);
       try {
-        const payload = {
-          stats: {
-            price: r.price, mcap: r.mcap, sector: r.sector, beta: r.beta,
-            pe: r.pe, ps: r.ps, pb: r.pb, fcf_yield: r.fcf_yield,
-            roic: r.roic, roe: r.roe, net_margin: r.net_margin, op_margin: r.op_margin,
-            revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
-            orizinScore: r.score != null ? Math.round(r.score * 100) : null,
-          },
-          verdict: { conviction: r.conviction, orizinScore: r.score != null ? Math.round(r.score * 100) : null },
-        };
-        const res = await fetch(`/api/stocks/intangibles/${sym}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        // Cache-only read — background trickle is the sole generator; no body needed.
+        const res = await fetch(`/api/stocks/intangibles/${sym}`);
         if (res.ok) {
           const j = await res.json();
-          if (j.ori && !cancelled) setOriData((prev) => ({ ...prev, [sym]: j.ori }));
+          if (j.ori && !cancelled) {
+            setOriData((prev) => ({ ...prev, [sym]: j.ori }));
+          } else {
+            oriFetchedRef.current.delete(sym); // cache not warm yet — retry after trickle
+          }
         } else if (res.status === 503 || res.status === 429) {
           oriFetchedRef.current.delete(sym); // transient — let a later sweep retry
         }
       } catch {
         oriFetchedRef.current.delete(sym);
+      } finally {
+        inFlight.delete(sym);
       }
     };
 
@@ -632,7 +625,11 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       while (!cancelled && queue.length) await fetchOne(queue.shift());
     }, ORI_DEBOUNCE_MS);
 
-    return () => { cancelled = true; clearTimeout(timer); };
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      for (const sym of inFlight) oriFetchedRef.current.delete(sym);
+    };
     // NOTE: `oriData` is intentionally NOT a dependency. With it in, every fetch
     // bumped oriData → re-ran this effect → fetched the next 15 uncached leaders,
     // chaining through the entire conviction≥65 universe (a request storm). The

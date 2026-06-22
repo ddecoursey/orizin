@@ -14,10 +14,13 @@ test('tokensFromUsage normalizes Gemini usageMetadata', () => {
     promptTokenCount: 1000,
     cachedContentTokenCount: 400,
     candidatesTokenCount: 250,
+    thoughtsTokenCount: 150,
   });
   assert.equal(t.promptTokens, 1000);
   assert.equal(t.cachedTokens, 400);
-  assert.equal(t.outputTokens, 250);
+  assert.equal(t.outputTokens, 400);
+  assert.equal(t.thoughtsTokens, 150);
+  assert.equal(t.candidatesTokens, 250);
 });
 
 test('estimateCostUsd splits cached vs uncached input', () => {

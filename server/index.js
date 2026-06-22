@@ -765,10 +765,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     );
   }
 
-  // Bootstrap server-wide Gemini context caches for Ori chat (static system prompt).
+  // Bootstrap the server-wide Gemini context cache for Ori chat's static system
+  // prompt. (The Game Plan system prompt is ~500 tokens — far below Gemini's
+  // context-cache minimum — so it is sent inline, not cached.)
   if (chatSet) {
     ensureChatContextCaches()
-      .catch((e) => console.warn('[geminiCache] boot failed:', e.message))
+      .catch((e) => console.warn('[geminiCache] chat boot failed:', e.message))
       .finally(() => startChatContextCacheRefresh());
   }
 
@@ -819,7 +821,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     process.env.SCREENER_INTANGIBLES_ENABLED !== 'false' && isProductionEnv();
   if (trickleEnabled) {
     const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60 * 60 * 1000; // hourly
-    const LEADERS = Number(process.env.SCREENER_INTANGIBLES_LEADERS) || 50;
+    const LEADERS = Number(process.env.SCREENER_INTANGIBLES_LEADERS) || 30;
     const BATCH = Number(process.env.SCREENER_INTANGIBLES_BATCH) || 5; // stale leaders per tick
     const geminiSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
     if (geminiSet) {

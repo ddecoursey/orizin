@@ -379,6 +379,8 @@ try {
     ["plan_prompt_tokens", "INTEGER NOT NULL DEFAULT 0"],
     ["plan_cached_tokens", "INTEGER NOT NULL DEFAULT 0"],
     ["plan_output_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["chat_thoughts_tokens", "INTEGER NOT NULL DEFAULT 0"],
+    ["plan_thoughts_tokens", "INTEGER NOT NULL DEFAULT 0"],
     ["chat_cost_usd_micros", "INTEGER NOT NULL DEFAULT 0"],
     ["plan_cost_usd_micros", "INTEGER NOT NULL DEFAULT 0"],
     ["cost_usd_micros", "INTEGER NOT NULL DEFAULT 0"],
@@ -613,16 +615,17 @@ export function getAllStocks() {
         return null;
       }
     };
-    const ori =
-      parseFresh(row.gameplan_json, row.gameplan_at, gamePlanFrontierTtlMs()) ||
-      parseFresh(row.gameplan_lite_json, row.gameplan_lite_at, gamePlanLiteTtlMs());
+    const frontierOri = parseFresh(row.gameplan_json, row.gameplan_at, gamePlanFrontierTtlMs());
+    const liteOri = parseFresh(row.gameplan_lite_json, row.gameplan_lite_at, gamePlanLiteTtlMs());
+    const ori = frontierOri || liteOri;
+    const oriCachedAt = frontierOri ? row.gameplan_at : liteOri ? row.gameplan_lite_at : null;
     const clean = { ...row };
     delete clean.ratings_json;
     delete clean.gameplan_json;
     delete clean.gameplan_at;
     delete clean.gameplan_lite_json;
     delete clean.gameplan_lite_at;
-    return { ...clean, rating, rating_overall_score: ratingOverallScore, ori };
+    return { ...clean, rating, rating_overall_score: ratingOverallScore, ori, oriCachedAt };
   });
 }
 
@@ -1593,15 +1596,15 @@ const incOriUsageStmt = db.prepare(`
   INSERT INTO ori_usage (
     user_id, day, requests, chat_requests, plan_requests,
     prompt_tokens, cached_tokens, output_tokens,
-    chat_prompt_tokens, chat_cached_tokens, chat_output_tokens,
-    plan_prompt_tokens, plan_cached_tokens, plan_output_tokens,
+    chat_prompt_tokens, chat_cached_tokens, chat_output_tokens, chat_thoughts_tokens,
+    plan_prompt_tokens, plan_cached_tokens, plan_output_tokens, plan_thoughts_tokens,
     chat_cost_usd_micros, plan_cost_usd_micros, cost_usd_micros,
     updated_at
   ) VALUES (
     @user_id, @day, @requests, @chat_requests, @plan_requests,
     @prompt_tokens, @cached_tokens, @output_tokens,
-    @chat_prompt_tokens, @chat_cached_tokens, @chat_output_tokens,
-    @plan_prompt_tokens, @plan_cached_tokens, @plan_output_tokens,
+    @chat_prompt_tokens, @chat_cached_tokens, @chat_output_tokens, @chat_thoughts_tokens,
+    @plan_prompt_tokens, @plan_cached_tokens, @plan_output_tokens, @plan_thoughts_tokens,
     @chat_cost_usd_micros, @plan_cost_usd_micros, @cost_usd_micros,
     @updated_at
   )
@@ -1615,9 +1618,11 @@ const incOriUsageStmt = db.prepare(`
     chat_prompt_tokens = chat_prompt_tokens + excluded.chat_prompt_tokens,
     chat_cached_tokens = chat_cached_tokens + excluded.chat_cached_tokens,
     chat_output_tokens = chat_output_tokens + excluded.chat_output_tokens,
+    chat_thoughts_tokens = chat_thoughts_tokens + excluded.chat_thoughts_tokens,
     plan_prompt_tokens = plan_prompt_tokens + excluded.plan_prompt_tokens,
     plan_cached_tokens = plan_cached_tokens + excluded.plan_cached_tokens,
     plan_output_tokens = plan_output_tokens + excluded.plan_output_tokens,
+    plan_thoughts_tokens = plan_thoughts_tokens + excluded.plan_thoughts_tokens,
     chat_cost_usd_micros = chat_cost_usd_micros + excluded.chat_cost_usd_micros,
     plan_cost_usd_micros = plan_cost_usd_micros + excluded.plan_cost_usd_micros,
     cost_usd_micros = cost_usd_micros + excluded.cost_usd_micros,
@@ -1641,9 +1646,11 @@ export function incrementOriUsage(userId, day, delta = {}) {
     chat_prompt_tokens: delta.chatPromptTokens | 0,
     chat_cached_tokens: delta.chatCachedTokens | 0,
     chat_output_tokens: delta.chatOutputTokens | 0,
+    chat_thoughts_tokens: delta.chatThoughtsTokens | 0,
     plan_prompt_tokens: delta.planPromptTokens | 0,
     plan_cached_tokens: delta.planCachedTokens | 0,
     plan_output_tokens: delta.planOutputTokens | 0,
+    plan_thoughts_tokens: delta.planThoughtsTokens | 0,
     chat_cost_usd_micros: chatCost,
     plan_cost_usd_micros: planCost,
     cost_usd_micros: totalCost,
@@ -1654,8 +1661,8 @@ export function incrementOriUsage(userId, day, delta = {}) {
 const ZERO_USAGE = {
   requests: 0, chat_requests: 0, plan_requests: 0,
   prompt_tokens: 0, cached_tokens: 0, output_tokens: 0,
-  chat_prompt_tokens: 0, chat_cached_tokens: 0, chat_output_tokens: 0,
-  plan_prompt_tokens: 0, plan_cached_tokens: 0, plan_output_tokens: 0,
+  chat_prompt_tokens: 0, chat_cached_tokens: 0, chat_output_tokens: 0, chat_thoughts_tokens: 0,
+  plan_prompt_tokens: 0, plan_cached_tokens: 0, plan_output_tokens: 0, plan_thoughts_tokens: 0,
   chat_cost_usd_micros: 0, plan_cost_usd_micros: 0, cost_usd_micros: 0,
 };
 
@@ -1675,9 +1682,11 @@ const sumOriUsageRangeStmt = db.prepare(`
     COALESCE(SUM(chat_prompt_tokens), 0) AS chat_prompt_tokens,
     COALESCE(SUM(chat_cached_tokens), 0) AS chat_cached_tokens,
     COALESCE(SUM(chat_output_tokens), 0) AS chat_output_tokens,
+    COALESCE(SUM(chat_thoughts_tokens), 0) AS chat_thoughts_tokens,
     COALESCE(SUM(plan_prompt_tokens), 0) AS plan_prompt_tokens,
     COALESCE(SUM(plan_cached_tokens), 0) AS plan_cached_tokens,
     COALESCE(SUM(plan_output_tokens), 0) AS plan_output_tokens,
+    COALESCE(SUM(plan_thoughts_tokens), 0) AS plan_thoughts_tokens,
     COALESCE(SUM(chat_cost_usd_micros), 0) AS chat_cost_usd_micros,
     COALESCE(SUM(plan_cost_usd_micros), 0) AS plan_cost_usd_micros,
     COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros

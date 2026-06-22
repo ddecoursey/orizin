@@ -1,15 +1,20 @@
 // Server-wide explicit Gemini cachedContents for Ori chat. One cache per chat
-// model (value + lite) holds the byte-stable ORI_SYSTEM_STATIC block so every
-// user's personalized suffix is billed at the cached-input rate for that prefix.
+// model + view holds the byte-stable Ori static block so per-request dynamic
+// context is billed at the cached-input rate for that prefix.
 
-import { geminiKeys, valueModel, liteModel } from "./geminiJson.js";
-import { ORI_SYSTEM_STATIC } from "./oriSystemStatic.js";
+import { geminiKeys, valueModel, liteModel, thinkingConfigFor, chatThinkingLevel } from "./geminiJson.js";
+import { oriStaticForView } from "./oriSystemStatic.js";
 
 const CACHE_URL = "https://generativelanguage.googleapis.com/v1beta/cachedContents";
-const CACHE_DISPLAY = "orizen-ori-chat-static-v2";
+const CACHE_DISPLAY = "orizen-ori-chat-static-v3";
 
 /** @type {Map<string, { name: string, expireTime?: string }>} */
 const chatCachesByModel = new Map();
+
+function envInt(name, dflt) {
+  const n = parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
 
 export function chatContextCacheEnabled() {
   return process.env.GEMINI_CONTEXT_CACHE_ENABLED !== "false";
@@ -18,43 +23,53 @@ export function chatContextCacheEnabled() {
 export function cacheTtlSeconds() {
   const hours = Number(process.env.GEMINI_CONTEXT_CACHE_TTL_HOURS);
   if (Number.isFinite(hours) && hours > 0) return Math.round(hours * 3600);
-  return 3600;
+  return 24 * 3600;
 }
 
-/** Cached content resource name for a chat model, or null if unavailable. */
-export function getChatContextCacheName(model) {
+function cacheKey(model, view) {
+  return view === "deep-research" ? `${model}:dr` : model;
+}
+
+/** Cached content resource name for a chat model + view, or null if unavailable. */
+export function getChatContextCacheName(model, view = "screener") {
   if (!chatContextCacheEnabled()) return null;
-  return chatCachesByModel.get(model)?.name || null;
+  return chatCachesByModel.get(cacheKey(model, view))?.name || null;
 }
 
 function chatModels() {
   return [valueModel(), liteModel()];
 }
 
-async function createChatCache(apiKey, model) {
+export function chatMaxOutputTokens(view = "screener") {
+  if (view === "deep-research") return envInt("ORI_CHAT_MAX_OUTPUT_DR", 3000);
+  if (view === "portfolio-goals") return envInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 2000);
+  return envInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 2000);
+}
+
+async function createChatCache(apiKey, model, view) {
   const ttl = `${cacheTtlSeconds()}s`;
+  const staticText = oriStaticForView(view);
   const res = await fetch(`${CACHE_URL}?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: `models/${model}`,
-      displayName: `${CACHE_DISPLAY}-${model}`,
+      displayName: `${CACHE_DISPLAY}-${cacheKey(model, view)}`,
       systemInstruction: {
-        parts: [{ text: ORI_SYSTEM_STATIC }],
+        parts: [{ text: staticText }],
       },
       ttl,
     }),
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`create ${model} failed ${res.status}: ${body.slice(0, 300)}`);
+    throw new Error(`create ${cacheKey(model, view)} failed ${res.status}: ${body.slice(0, 300)}`);
   }
   return res.json();
 }
 
 /**
- * Create (or refresh) explicit context caches for each chat model on the primary key.
- * Safe to call repeatedly — replaces in-memory names on success.
+ * Create (or refresh) explicit context caches for each chat model × view on the primary key.
  */
 export async function ensureChatContextCaches() {
   if (!chatContextCacheEnabled()) return;
@@ -62,20 +77,24 @@ export async function ensureChatContextCaches() {
   if (!keys.length) return;
 
   const apiKey = keys[0];
+  const views = ["screener", "deep-research"];
   for (const model of chatModels()) {
-    try {
-      const data = await createChatCache(apiKey, model);
-      if (data?.name) {
-        chatCachesByModel.set(model, { name: data.name, expireTime: data.expireTime });
-        const tokens = data.usageMetadata?.totalTokenCount;
-        console.log(
-          `[geminiCache] Ori chat context cache ready: ${model}` +
-            (tokens != null ? ` (${tokens} cached tokens)` : "") +
-            `, ttl ${cacheTtlSeconds()}s`,
-        );
+    for (const view of views) {
+      try {
+        const data = await createChatCache(apiKey, model, view);
+        if (data?.name) {
+          const key = cacheKey(model, view);
+          chatCachesByModel.set(key, { name: data.name, expireTime: data.expireTime });
+          const tokens = data.usageMetadata?.totalTokenCount;
+          console.log(
+            `[geminiCache] Ori chat context cache ready: ${key}` +
+              (tokens != null ? ` (${tokens} cached tokens)` : "") +
+              `, ttl ${cacheTtlSeconds()}s`,
+          );
+        }
+      } catch (e) {
+        console.warn(`[geminiCache] ${e.message}`);
       }
-    } catch (e) {
-      console.warn(`[geminiCache] ${e.message}`);
     }
   }
 }
@@ -121,9 +140,14 @@ export function contentsWithDynamicContext(dynamicContext, geminiContents) {
  * Build the Gemini stream body for one chat model. Uses explicit cachedContent when
  * bootstrapped; otherwise falls back to the two-part system_instruction split.
  */
-export function buildChatGeminiBody(model, dynamicContext, geminiContents) {
-  const generationConfig = { maxOutputTokens: 8192 };
-  const cacheName = getChatContextCacheName(model);
+export function buildChatGeminiBody(model, dynamicContext, geminiContents, view = "screener") {
+  const generationConfig = { maxOutputTokens: chatMaxOutputTokens(view) };
+  // Cap reasoning on the chat tier (default low) so thinking tokens don't dominate
+  // the per-turn output bill. Applies to both the cached and fallback bodies below.
+  const tc = thinkingConfigFor(model, chatThinkingLevel());
+  if (tc) Object.assign(generationConfig, tc);
+  const staticText = oriStaticForView(view);
+  const cacheName = getChatContextCacheName(model, view);
   if (cacheName) {
     return {
       cachedContent: cacheName,
@@ -133,7 +157,7 @@ export function buildChatGeminiBody(model, dynamicContext, geminiContents) {
   }
   return {
     system_instruction: {
-      parts: [{ text: ORI_SYSTEM_STATIC }, { text: dynamicContext }],
+      parts: [{ text: staticText }, { text: dynamicContext }],
     },
     contents: geminiContents,
     generationConfig,
@@ -146,6 +170,6 @@ export function _resetChatContextCachesForTests() {
 }
 
 /** Test hook: seed a cache name without calling Gemini. */
-export function _setChatContextCacheForTests(model, name) {
-  chatCachesByModel.set(model, { name });
+export function _setChatContextCacheForTests(model, name, view = "screener") {
+  chatCachesByModel.set(cacheKey(model, view), { name });
 }

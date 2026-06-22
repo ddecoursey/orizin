@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import {
   resolveCachedGamePlan,
   readFreshFrontierGamePlan,
+  shouldRunLiteIntangiblesGeneration,
+  isFreshDetailCache,
   gamePlanFrontierTtlMs,
   gamePlanLiteTtlMs,
+  gamePlanMaxOutputTokens,
 } from '../gamePlanCache.js';
 import sqliteDb, { kvSet, nextIntangiblesBacklog } from '../db.js';
 
@@ -36,6 +39,14 @@ test.after(() => {
   sqliteDb.prepare('DELETE FROM kv_cache WHERE key LIKE ?').run(`gameplan%:${sym2}%`);
 });
 
+test('isFreshDetailCache respects ttl boundary', () => {
+  const ttl = gamePlanFrontierTtlMs();
+  const now = 1_700_000_000_000;
+  assert.equal(isFreshDetailCache(now - ttl + 1, ttl, now), true);
+  assert.equal(isFreshDetailCache(now - ttl, ttl, now), false);
+  assert.equal(isFreshDetailCache(null, ttl, now), false);
+});
+
 test('frontier TTL defaults to one week', () => {
   const prev = process.env.GAME_PLAN_FRONTIER_TTL_DAYS;
   delete process.env.GAME_PLAN_FRONTIER_TTL_DAYS;
@@ -48,6 +59,17 @@ test('lite TTL defaults to 24 hours', () => {
   delete process.env.GAME_PLAN_LITE_TTL_HOURS;
   assert.equal(gamePlanLiteTtlMs(), 24 * 60 * 60 * 1000);
   if (prev !== undefined) process.env.GAME_PLAN_LITE_TTL_HOURS = prev;
+});
+
+test('resolveCachedGamePlan ignores expired lite so DR can generate frontier', () => {
+  const now = Date.now();
+  kvSet(`gameplan-lite:${sym}`, lite);
+  sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(
+    now - 48 * 60 * 60 * 1000,
+    `gameplan-lite:${sym}`,
+  );
+
+  assert.equal(resolveCachedGamePlan(sym, deps()), null);
 });
 
 test('resolveCachedGamePlan prefers frontier over lite from SQLite', () => {
@@ -73,6 +95,15 @@ test('readFreshFrontierGamePlan promotes SQLite entry into memory', () => {
   assert.ok(cache.detailCache.has(`gameplan:${sym}`));
 });
 
+test('shouldRunLiteIntangiblesGeneration is false when frontier is fresh', () => {
+  const now = Date.now();
+  kvSet(`gameplan:${sym2}`, frontier);
+  sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(now, `gameplan:${sym2}`);
+
+  assert.equal(shouldRunLiteIntangiblesGeneration(sym2, deps()), false);
+  assert.equal(shouldRunLiteIntangiblesGeneration(sym2, deps(), { force: true }), true);
+});
+
 test('nextIntangiblesBacklog skips leaders with fresh frontier even when lite is stale', () => {
   const now = Date.now();
   kvSet(`gameplan:${sym2}`, frontier);
@@ -90,4 +121,23 @@ test('nextIntangiblesBacklog skips leaders with fresh frontier even when lite is
 
   const backlog = nextIntangiblesBacklog(now, 500, 20);
   assert.equal(backlog.includes(sym2), false);
+});
+test('gamePlanMaxOutputTokens defaults to 4000 and honors GAME_PLAN_MAX_OUTPUT', () => {
+  const prev = process.env.GAME_PLAN_MAX_OUTPUT;
+  try {
+    delete process.env.GAME_PLAN_MAX_OUTPUT;
+    assert.equal(gamePlanMaxOutputTokens(), 4000);
+
+    process.env.GAME_PLAN_MAX_OUTPUT = '6000';
+    assert.equal(gamePlanMaxOutputTokens(), 6000);
+
+    // Garbage / non-positive falls back to the default rather than truncating to 0.
+    process.env.GAME_PLAN_MAX_OUTPUT = 'nope';
+    assert.equal(gamePlanMaxOutputTokens(), 4000);
+    process.env.GAME_PLAN_MAX_OUTPUT = '0';
+    assert.equal(gamePlanMaxOutputTokens(), 4000);
+  } finally {
+    if (prev == null) delete process.env.GAME_PLAN_MAX_OUTPUT;
+    else process.env.GAME_PLAN_MAX_OUTPUT = prev;
+  }
 });

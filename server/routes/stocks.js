@@ -31,12 +31,24 @@ import { requireAdmin } from "../auth.js";
 import { hasOriAccess } from "../access.js";
 import { enrichmentManager } from "../enrichment.js";
 import { marketSession } from "../marketHours.js";
-import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier } from "../geminiJson.js";
+import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier, gamePlanThinkingLevel, liteThinkingLevel } from "../geminiJson.js";
+import { GAME_PLAN_SYSTEM } from "../gamePlanPromptShared.js";
+import {
+  LITE_TRICKLE_SYSTEM,
+  LITE_TRICKLE_SCHEMA,
+  buildLiteTricklePrompt,
+  stockRowToLiteStats,
+  hasClientGamePlanContext,
+  sanitizeLiteIntangibles,
+} from "../liteIntangibles.js";
 import {
   resolveCachedGamePlan,
   readFreshLiteGamePlan,
+  readFreshFrontierGamePlan,
+  shouldRunLiteIntangiblesGeneration,
   gamePlanFrontierTtlMs,
   gamePlanLiteTtlMs,
+  gamePlanMaxOutputTokens,
 } from "../gamePlanCache.js";
 import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
 import { execCompAllowed } from "../fmpPlanLimits.js";
@@ -1149,21 +1161,6 @@ router.get("/stocks/smart-money/:symbol", aiDetailLimiter, async (req, res) => {
 // INTANGIBLES / future potential (the Tesla/SpaceX factor a spreadsheet misses),
 // macro tail/headwinds, bull & bear cases, and a BOUNDED adjustment to the
 // verdict. Pro-gated, rate-limited, cached 24h (company-level, not personalized).
-const GAME_PLAN_SYSTEM = `You are Ori, the in-house analyst for the Orizin stock app. You produce the "intangibles" layer of a stock's Game Plan — the judgment a spreadsheet can't make.
-
-Your job: weigh what the NUMBERS MISS. Durable moat, brand, founder/management quality, total addressable market, disruption & optionality, regulatory and macro tailwinds/headwinds, and narrative momentum. A company can have weak current fundamentals yet enormous intangible potential (e.g. an early Tesla or a SpaceX) — say so when it's true, and equally call out hype with no substance.
-
-Rules:
-- Be sharp and specific to THIS company, not generic. Use the profile and recent news.
-- Be balanced: always give a real bull case AND a real bear case, plus what would change your mind.
-- xFactors: break the intangible case into the specific "X-factors" that drive it, each rated strong/moderate/weak/none with a one-line, company-specific note. Cover the ones that actually apply: MARKET DOMINANCE / MOAT (e.g. a near-monopoly, network effects, switching costs, irreplaceable IP), TOTAL ADDRESSABLE MARKET & OPTIONALITY, MANAGEMENT / FOUNDER quality, BRAND / PRICING POWER, and REGULATORY / MACRO positioning. Omit a factor entirely rather than padding with filler. The intangiblesScore must be the honest roll-up of these — a genuine monopoly/moat should pull it high; "none" across the board should keep it low.
-- intangiblesScore (0-100): how strong the non-financial / future-potential case is, consistent with your xFactors. High only with a concrete reason.
-- convictionDelta (-20..20): how much you'd nudge the data-driven conviction, and no more. The data is the anchor; you adjust within reason.
-- horizonView / actionView: your view, knowing it may be reconciled toward the data verdict.
-- riskLevel: be honest; story-driven names are usually "high" or "speculative".
-- This is EDUCATIONAL analysis, never personalized financial advice. Do not tell the user to buy/sell with their own money; describe the setup.
-Return ONLY the JSON object matching the schema.`;
-
 const GAME_PLAN_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -1357,6 +1354,9 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
         system: GAME_PLAN_SYSTEM,
         prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
         schema: GAME_PLAN_SCHEMA,
+        // Headroom for thinking + the rich JSON (thinking bills against this cap).
+        maxOutputTokens: gamePlanMaxOutputTokens(),
+        thinkingLevel: gamePlanThinkingLevel(),
         ...ladder,
       });
       genUsage = usage;
@@ -1405,27 +1405,42 @@ function releaseLiteLane() {
 // meter the user (the explicit Game Plan refresh) pass it; the automatic screener
 // sweep and the background trickle pass nothing, so they're never charged.
 export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}, force = false, onUsage } = {}) {
+  const deps = gamePlanCacheDeps();
+  if (!shouldRunLiteIntangiblesGeneration(symbol, deps, { force })) {
+    return readFreshLiteGamePlan(symbol, deps) ?? null;
+  }
   return cachedDetail(`gameplan-lite:${symbol}`, gamePlanLiteTtlMs(), async () => {
     await acquireLiteLane();
     try {
-      const [profile, news] = await Promise.all([
+      const useFullPrompt = hasClientGamePlanContext(stats, verdict);
+      const [profile, news, row, enrichment] = await Promise.all([
         cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
-        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
+        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: useFullPrompt ? 20 : 10 })).catch(() => null),
+        useFullPrompt ? null : getStock(symbol),
+        useFullPrompt ? null : getAiEnrichment(symbol),
       ]);
+      const liteStats = useFullPrompt ? stats : stockRowToLiteStats(row, enrichment);
+      const prompt = useFullPrompt
+        ? buildGamePlanPrompt({ symbol, profile, news, stats, verdict })
+        : buildLiteTricklePrompt({ symbol, profile, news, stats: liteStats });
+      const schema = useFullPrompt ? GAME_PLAN_SCHEMA : LITE_TRICKLE_SCHEMA;
+      const system = useFullPrompt ? GAME_PLAN_SYSTEM : LITE_TRICKLE_SYSTEM;
+      // Full-prompt path emits the same rich 15-field schema, so it gets the same
+      // headroom; the compact trickle schema (minimal thinking) stays small.
+      const maxOutputTokens = useFullPrompt ? gamePlanMaxOutputTokens() : 900;
       const { data: raw, model, usage } = await geminiGenerateJson({
-        system: GAME_PLAN_SYSTEM,
-        prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
-        schema: GAME_PLAN_SCHEMA,
-        // Lite-ONLY: this powers the unmetered background screener trickle and
-        // the on-demand /intangibles endpoint. Leading with flash quietly burned
-        // real money (~3K flash req/day). Lite still gets two attempts (key A,
-        // key B) for resilience; it must never escalate to flash/frontier.
+        system,
+        prompt,
+        schema,
+        maxOutputTokens,
+        thinkingLevel: liteThinkingLevel(),
+        // Lite-ONLY: background screener trickle + explicit refresh. Never flash/frontier.
         models: [liteModel()],
       });
       if (typeof onUsage === "function") {
         try { onUsage(usage, model); } catch { /* accounting must not break generation */ }
       }
-      const sane = sanitizeGamePlan(raw);
+      const sane = useFullPrompt ? sanitizeGamePlan(raw) : sanitizeLiteIntangibles(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
       return sane;
     } finally {
@@ -1434,13 +1449,13 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
   }, force);
 }
 
-// ── POST /api/stocks/intangibles/:symbol ───────────────────────────────────
+// ── GET/POST /api/stocks/intangibles/:symbol ───────────────────────────────
 // CACHE-ONLY. Returns the shared 24h lite review if the background trickle has
 // already produced one, else null. It NEVER generates on demand: the screener
 // used to call this per leader and (via an oriData-driven effect) chained
 // through the whole conviction≥65 universe, running up the bill. The GLOBAL
 // hourly top-LEADERS trickle is the sole generator now. Pro/admin gated.
-router.post("/stocks/intangibles/:symbol", aiDetailLimiter, async (req, res) => {
+async function readIntangiblesCache(req, res) {
   const symbol = req.params.symbol.toUpperCase();
   if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
   if (!hasOriAccess(req.userId)) {
@@ -1448,7 +1463,9 @@ router.post("/stocks/intangibles/:symbol", aiDetailLimiter, async (req, res) => 
   }
   const ori = readFreshLiteGamePlan(symbol, gamePlanCacheDeps()) || null;
   res.json({ symbol, ori });
-});
+}
+router.get("/stocks/intangibles/:symbol", aiDetailLimiter, readIntangiblesCache);
+router.post("/stocks/intangibles/:symbol", aiDetailLimiter, readIntangiblesCache);
 
 // ── GET /api/stocks/earnings/:symbol ───────────────────────────────────────
 // Next earnings date + recent EPS/revenue beat-or-miss history. Cached ~12h.

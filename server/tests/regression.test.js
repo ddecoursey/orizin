@@ -677,9 +677,8 @@ test('screener lite intangibles endpoint is Pro-gated and validates the symbol',
   // the global trickle is the sole generator), so a cache miss returns 200 with
   // ori:null rather than touching the LLM.
   const opened = await fetch(api('/api/stocks/intangibles/AAPL'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', cookie: adminCookie },
-    body: '{}',
+    method: 'GET',
+    headers: { cookie: adminCookie },
   });
   assert.equal(opened.status, 200);
   assert.equal((await json(opened)).ori, null);

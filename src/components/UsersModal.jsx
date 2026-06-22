@@ -794,6 +794,9 @@ export default function UsersModal({
                     <StatTile label="Game plans" value={oriUsage.monthTotals.planRequests} />
                     <StatTile label="Input tokens" value={fmtTokens(oriUsage.monthTotals.promptTokens)} />
                     <StatTile label="Output tokens" value={fmtTokens(oriUsage.monthTotals.outputTokens)} />
+                    {oriUsage.monthTotals.thoughtsTokens > 0 && (
+                      <StatTile label="Thinking tokens" value={fmtTokens(oriUsage.monthTotals.thoughtsTokens)} />
+                    )}
                   </div>
                 </Section>
                 {oriUsage.monthTotals.cachedTokens > 0 && (

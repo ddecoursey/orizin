@@ -47,10 +47,14 @@ export function pricingForModel(model) {
 /** Normalize usageMetadata from generateContent / streamGenerateContent. */
 export function tokensFromUsage(usage) {
   const n = (v) => (Number.isFinite(Number(v)) ? Math.max(0, Math.round(Number(v))) : 0);
+  const candidates = n(usage?.candidatesTokenCount);
+  const thoughts = n(usage?.thoughtsTokenCount);
   return {
     promptTokens: n(usage?.promptTokenCount),
     cachedTokens: n(usage?.cachedContentTokenCount),
-    outputTokens: n(usage?.candidatesTokenCount),
+    outputTokens: candidates + thoughts,
+    candidatesTokens: candidates,
+    thoughtsTokens: thoughts,
   };
 }
 
@@ -78,6 +82,8 @@ export function estimateCostUsd(model, tokens) {
     cachedTokens: cached,
     uncachedTokens: uncached,
     outputTokens: output,
+    thoughtsTokens: Math.max(0, t.thoughtsTokens || 0),
+    candidatesTokens: Math.max(0, t.candidatesTokens || (output - (t.thoughtsTokens || 0))),
     inputCostUsd: inputCost,
     cachedCostUsd: (cached / 1e6) * p.cachedPer1M,
     uncachedCostUsd: (uncached / 1e6) * p.inputPer1M,
@@ -153,7 +159,7 @@ export async function resolveTokenCounts({ usage, model, fallback }) {
     const counted = await countTokensForTurn(model, fallback);
     if (hasTokenCounts(counted)) return { ...counted, source: "countTokens" };
   }
-  return { promptTokens: 0, cachedTokens: 0, outputTokens: 0, source: "none" };
+  return { promptTokens: 0, cachedTokens: 0, outputTokens: 0, thoughtsTokens: 0, candidatesTokens: 0, source: "none" };
 }
 
 export function microsToUsd(micros) {
@@ -175,9 +181,11 @@ export function costBreakdownFromTotals({
   chat_prompt_tokens = 0,
   chat_cached_tokens = 0,
   chat_output_tokens = 0,
+  chat_thoughts_tokens = 0,
   plan_prompt_tokens = 0,
   plan_cached_tokens = 0,
   plan_output_tokens = 0,
+  plan_thoughts_tokens = 0,
   chat_cost_usd_micros = 0,
   plan_cost_usd_micros = 0,
   cost_usd_micros = 0,
@@ -218,11 +226,13 @@ export function costBreakdownFromTotals({
       prompt: chat_prompt_tokens,
       cached: chat_cached_tokens,
       output: chat_output_tokens,
+      thoughts: chat_thoughts_tokens,
     },
     planTokens: {
       prompt: plan_prompt_tokens,
       cached: plan_cached_tokens,
       output: plan_output_tokens,
+      thoughts: plan_thoughts_tokens,
     },
   };
 }

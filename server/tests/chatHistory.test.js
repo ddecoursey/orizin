@@ -5,6 +5,7 @@ import {
   clipMessageContent,
   toGeminiContents,
   historyContextNote,
+  chatHistoryMaxMessagesForView,
 } from "../chatHistory.js";
 
 test("truncateChatHistory keeps full history when under the cap", () => {
@@ -56,4 +57,12 @@ test("toGeminiContents maps assistant to model", () => {
 
 test("historyContextNote is empty when nothing dropped", () => {
   assert.equal(historyContextNote(0), "");
+});
+
+test("chatHistoryMaxMessagesForView uses shorter cap for deep-research", () => {
+  const prev = process.env.ORI_CHAT_HISTORY_MAX_DR;
+  delete process.env.ORI_CHAT_HISTORY_MAX_DR;
+  assert.equal(chatHistoryMaxMessagesForView("deep-research"), 12);
+  assert.equal(chatHistoryMaxMessagesForView("screener"), chatHistoryMaxMessagesForView());
+  if (prev != null) process.env.ORI_CHAT_HISTORY_MAX_DR = prev;
 });

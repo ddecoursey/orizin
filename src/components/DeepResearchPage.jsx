@@ -283,11 +283,13 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
   // Deferred Ori layer (Pro) — frontier take is cached ~1 week per symbol; FMP
   // re-gather refreshes panels but does not re-bill Gemini Pro on every open.
   const oriReady = !!symbol && !deterministic.insufficient;
-  const initialFrontierOri = row?.ori?.modelTier === "frontier" ? row.ori : null;
+  const initialCachedOri =
+    row?.ori?.modelTier === "frontier" || row?.ori?.modelTier === "lite" ? row.ori : null;
   const oriState = useGamePlanOri(symbol, {
     enabled: canUseOri && oriReady,
     payloadRef: oriPayloadRef,
-    initialOri: initialFrontierOri,
+    initialOri: initialCachedOri,
+    initialOriCachedAt: row?.oriCachedAt ?? null,
   });
   // Fold Ori in "within reason" once it arrives; otherwise show the data verdict.
   const verdict = useMemo(

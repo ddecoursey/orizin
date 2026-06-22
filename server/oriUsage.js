@@ -204,17 +204,20 @@ export async function recordOriUsage(userId, { kind, usage, model, fallback } = 
       promptTokens: t.promptTokens,
       cachedTokens: t.cachedTokens,
       outputTokens: t.outputTokens,
+      thoughtsTokens: t.thoughtsTokens || 0,
       costUsdMicros: cost.totalUsdMicros,
     };
     if (isPlan) {
       delta.planPromptTokens = t.promptTokens;
       delta.planCachedTokens = t.cachedTokens;
       delta.planOutputTokens = t.outputTokens;
+      delta.planThoughtsTokens = t.thoughtsTokens || 0;
       delta.planCostUsdMicros = cost.totalUsdMicros;
     } else {
       delta.chatPromptTokens = t.promptTokens;
       delta.chatCachedTokens = t.cachedTokens;
       delta.chatOutputTokens = t.outputTokens;
+      delta.chatThoughtsTokens = t.thoughtsTokens || 0;
       delta.chatCostUsdMicros = cost.totalUsdMicros;
     }
     incrementOriUsage(userId, todayKey(), delta);
@@ -239,6 +242,7 @@ function shapeWindow(row) {
     promptTokens: prompt,
     cachedTokens: cached,
     outputTokens: row.output_tokens || 0,
+    thoughtsTokens: (row.chat_thoughts_tokens || 0) + (row.plan_thoughts_tokens || 0),
     // Share of input tokens the context cache served (0..1). Only meaningful
     // once there's been some input volume.
     cacheHitRate: prompt > 0 ? Math.min(1, cached / prompt) : 0,

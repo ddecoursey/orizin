@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ORI_FRONTIER_TTL_MS, isFreshOriCache } from "../lib/oriCacheTtl.js";
 
 const DEFER_MS = 350;
 const ORI_TIMEOUT_MS = 30_000;
@@ -7,13 +8,25 @@ const ORI_TIMEOUT_MS = 30_000;
 // deterministic Game Plan paints instantly and Ori's take fades in after.
 // Frontier (Pro) is cached ~1 week server-side per symbol (memory + SQLite) and is
 // always served when present. FMP re-gather does not bust it. Explicit "Refresh
-// Ori" re-runs flash/lite only. `initialOri` can show a cached Pro take instantly
-// from the screener row while the server revalidates.
-function cachedFrontierOri(ori) {
-  return ori?.modelTier === "frontier" ? ori : null;
+// Ori" re-runs flash/lite only. `initialOri` can paint a cached take instantly
+// from the screener row. Only a fresh frontier seed skips HTTP — lite still
+// revalidates so an expired lite placeholder can upgrade to a frontier miss.
+function cachedFrontierSeed(ori, cachedAt) {
+  if (ori?.modelTier !== "frontier") return null;
+  if (!isFreshOriCache(cachedAt, ORI_FRONTIER_TTL_MS)) return null;
+  return ori;
 }
 
-export function useGamePlanOri(symbol, { enabled = true, payloadRef, initialOri = null } = {}) {
+function cachedLiteSeed(ori) {
+  return ori?.modelTier === "lite" ? ori : null;
+}
+
+export function useGamePlanOri(symbol, {
+  enabled = true,
+  payloadRef,
+  initialOri = null,
+  initialOriCachedAt = null,
+} = {}) {
   const [state, setState] = useState({
     sym: null,
     ori: null,
@@ -69,15 +82,20 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, initialOri 
     let cancelled = false;
     const requestSym = symbol;
     const liteRefresh = refreshChanged && !symbolChanged;
-    const seedOri = !liteRefresh && !nonceChanged ? cachedFrontierOri(initialOri) : null;
+    const skipFetch = !liteRefresh && !nonceChanged;
+    const frontierSeed = skipFetch ? cachedFrontierSeed(initialOri, initialOriCachedAt) : null;
+    const liteSeed = skipFetch ? cachedLiteSeed(initialOri) : null;
     setState({
       sym: requestSym,
-      ori: seedOri,
+      ori: frontierSeed || liteSeed,
       error: null,
       locked: false,
-      done: false,
+      done: !!frontierSeed,
       cancelled: false,
     });
+    // Weekly frontier cache is authoritative — skip the revalidation round-trip.
+    if (frontierSeed) return;
+
     // Manual retry leads with flash/lite — see the game-plan route.
     const isRetry =
       nonceChanged && !symbolChanged && !justEnabled && !refreshChanged;
@@ -169,7 +187,10 @@ export function useGamePlanOri(symbol, { enabled = true, payloadRef, initialOri 
       controller.abort();
       if (abortRef.current === controller) abortRef.current = null;
     };
-  }, [symbol, enabled, payloadRef, initialOri, retryNonce, refreshNonce]);
+    // initialOri is read when symbol/retry/refresh changes — not a dep, so a
+    // late row.ori update can't abort an in-flight frontier generation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, enabled, payloadRef, retryNonce, refreshNonce]);
 
   const forSym = state.sym === symbol;
   const inFlight = !!symbol && enabled && !(forSym && state.done);

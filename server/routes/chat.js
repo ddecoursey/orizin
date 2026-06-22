@@ -20,6 +20,7 @@ import {
   historyContextNote,
   chatFetchTimeoutMs,
   chatStreamTimeoutMs,
+  chatHistoryMaxMessagesForView,
 } from "../chatHistory.js";
 import { fmt } from "./prompt-helpers.js";
 import { marketStatusLine } from "../marketHours.js";
@@ -90,12 +91,220 @@ function extractRememberTokens(text) {
 // Note: We are using JSON output in the response text instead of native tool calling
 // for better reliability with Gemini.
 
+// Deep Research chat: one stock, no screener table / global news / full portfolio dump.
+function buildDeepResearchPrompt(context, personalization = {}) {
+  const { weights, activeStock, focusStocks, focusSymbols, today, portfolioGoals } = context || {};
+  const { username, memory } = personalization;
+  const sym = activeStock?.symbol;
+
+  let prompt = `Today's date: ${today || "unknown"}.
+Market status: ${marketStatusLine()}.
+CURRENT_VIEW: deep-research
+${sym ? `ACTIVE_SYMBOL: ${sym}${activeStock.name ? ` (${activeStock.name})` : ""}` : "ACTIVE_SYMBOL: (none — user on Deep Research without a symbol loaded)"}
+${username && username !== "default" ? `Talking to **${username}**.` : ""}`;
+
+  if (memory?.length) {
+    prompt += `
+
+=== WHAT YOU REMEMBER ABOUT THIS USER ===
+${memory.map((f, i) => `${i + 1}. ${f.text || f}`).join("\n")}`;
+  }
+
+  prompt += `
+User Q/V/G weights: Q=${weights?.q ?? 35} V=${weights?.v ?? 35} G=${weights?.g ?? 30}.`;
+
+  if (activeStock) {
+    prompt += "\n\n" + buildDeepResearchStockSection(activeStock);
+  }
+
+  const portfolioBlock = buildPortfolioContextForSymbol(portfolioGoals, sym);
+  if (portfolioBlock) prompt += portfolioBlock;
+
+  if (focusStocks?.length) {
+    for (const fs of focusStocks) {
+      if (activeStock && fs.symbol === activeStock.symbol) continue;
+      prompt += `\n\n=== ALSO ASKED ABOUT: ${fs.symbol} (${fs.name || ""}) ===\n`;
+      prompt += buildDeepResearchStockSection(fs);
+    }
+  } else if (focusSymbols?.length && activeStock && focusSymbols.includes(activeStock.symbol)) {
+    prompt += `\nLatest user message targets ${activeStock.symbol}.`;
+  }
+
+  return prompt;
+}
+
+// Portfolio slice for DR: position in ACTIVE_SYMBOL + goals/theses only (not full book).
+function buildPortfolioContextForSymbol(pg, symbol) {
+  if (!pg) return "";
+  const sym = String(symbol || "").toUpperCase();
+  if (!sym) return "";
+
+  const parts = [];
+
+  // Slim client payload: { holdsSymbol, position, goals, theses }
+  if (pg.holdsSymbol != null || pg.position != null) {
+    if (pg.holdsSymbol && pg.position) {
+      const pct = pg.position.percent;
+      const dol = pg.position.dollars;
+      parts.push(
+        `Holds ${sym}: ${pct != null ? `${Number(pct).toFixed(1)}%` : "—"} of portfolio${dol != null ? ` ($${Math.round(dol).toLocaleString()})` : ""}. Frame sizing, trim/add, and concentration risk.`
+      );
+    } else {
+      parts.push(`Does not hold ${sym} in tracked portfolios — frame as a prospective buy vs their book.`);
+    }
+    const goals = (pg.goals || []).filter((g) => g && String(g).trim()).slice(0, 5);
+    if (goals.length) parts.push(`Goals: ${goals.map((g, i) => `${i + 1}. ${String(g).trim()}`).join(" ")}`);
+    const theses = (pg.theses || []).filter((t) => t && String(t).trim()).slice(0, 4);
+    if (theses.length) {
+      parts.push(`Theses: ${theses.map((t, i) => `${i + 1}. ${String(t).trim()}`).join(" ")}`);
+    }
+  } else {
+    let alloc = null;
+    if (pg.overallAllocations?.length) {
+      alloc = pg.overallAllocations.find((a) => String(a.ticker || "").toUpperCase() === sym);
+    }
+    if (!alloc && pg.portfolios?.length) {
+      for (const p of pg.portfolios) {
+        const h = (p.holdings || []).find((x) => String(x.ticker || "").toUpperCase() === sym);
+        if (h) {
+          alloc = { overallPercent: h.percent, dollars: h.dollars, portfolio: p.name };
+          break;
+        }
+      }
+    }
+    if (alloc) {
+      parts.push(
+        `Holds ${sym}: ${alloc.overallPercent != null ? `${Number(alloc.overallPercent).toFixed(1)}%` : "—"} of portfolio${alloc.dollars != null ? ` ($${Math.round(alloc.dollars).toLocaleString()})` : ""}${alloc.portfolio ? ` in "${alloc.portfolio}"` : ""}.`
+      );
+    } else {
+      parts.push(`Does not hold ${sym} in tracked portfolios — frame as a prospective buy vs their book.`);
+    }
+    const goals = (pg.goals || []).filter((g) => g && String(g).trim()).slice(0, 5);
+    if (goals.length) parts.push(`Goals: ${goals.map((g, i) => `${i + 1}. ${String(g).trim()}`).join(" ")}`);
+    const relevantTheses = (pg.theses || [])
+      .filter((t) => t && String(t).trim() && String(t).toUpperCase().includes(sym))
+      .slice(0, 4);
+    if (relevantTheses.length) {
+      parts.push(`Theses mentioning ${sym}: ${relevantTheses.map((t, i) => `${i + 1}. ${String(t).trim()}`).join(" ")}`);
+    }
+  }
+
+  if (!parts.length) return "";
+  return `\n\n=== USER CONTEXT (${sym}) ===\n${parts.join("\n")}\n`;
+}
+
+// Compact single-stock block for Deep Research chat (dense facts, minimal prose).
+function buildDeepResearchStockSection(s) {
+  if (!s) return "";
+  const sym = s.symbol || "—";
+  const rsiNote =
+    s.latestRsi == null
+      ? "—"
+      : `${s.latestRsi.toFixed(1)}${s.latestRsi >= 70 ? " OB" : s.latestRsi <= 30 ? " OS" : ""}`;
+
+  let out = `=== ${sym} (${s.name || ""}) ===
+${s.sector || "—"} / ${s.industry || "—"} · ${fmt(s.mcap, "money")} · ${fmt(s.price, "price")} · β ${s.beta != null ? s.beta.toFixed(2) : "—"}
+Conv ${s.verdict?.conviction ?? s.conviction ?? "—"}/100 · Score ${s.score != null ? Math.round(s.score * 100) : "—"} (Q${s.qScore != null ? Math.round(s.qScore * 100) : "—"} V${s.vScore != null ? Math.round(s.vScore * 100) : "—"} G${s.gScore != null ? Math.round(s.gScore * 100) : "—"})${s.dataCoverage != null ? ` · cov ${Math.round(s.dataCoverage * 100)}%` : ""}
+Val: P/E ${fmt(s.pe, "x")} P/B ${fmt(s.pb, "x")} EV/EB ${fmt(s.ev_ebitda, "x")} FCF ${fmt(s.fcf_yield, "pct")} | Qual: ROIC ${fmt(s.roic, "pct")} ROE ${fmt(s.roe, "pct")} op ${fmt(s.op_margin, "pct")} ND/EB ${fmt(s.net_debt_ebitda, "r")} | Gr: rev ${fmt(s.revenue_growth, "pct")} EPS ${fmt(s.eps_growth, "pct")} div ${fmt(s.div_yield, "pct")}
+RSI(10) ${rsiNote}`;
+
+  if (s.verdict) {
+    const v = s.verdict;
+    out += `\nPlan: ${v.horizon || "—"}${v.horizonSub ? ` (${v.horizonSub})` : ""} · ${v.action || "—"}${v.actionLine ? ` — ${v.actionLine}` : ""}. ${v.headline || ""}`;
+    if (v.reasons?.length) out += `\nDrivers: ${v.reasons.slice(0, 4).join("; ")}`;
+    if (v.pillars?.length) {
+      out += `\nPillars: ${v.pillars.map((p) => `${p.id}=${p.score ?? "—"}`).join(" ")}`;
+    }
+  }
+
+  if (s.performance) {
+    const p = s.performance;
+    out += `\nPerf: 1mo ${fmt(p.m1, "pct")} 3mo ${fmt(p.m3, "pct")} 6mo ${fmt(p.m6, "pct")} 1yr ${fmt(p.y1, "pct")}`;
+  }
+
+  if (s.dcf != null || s.targetConsensus != null) {
+    const mos = s.dcf != null && s.price ? ((s.dcf - s.price) / s.dcf) * 100 : null;
+    const upside = s.targetConsensus != null && s.price ? ((s.targetConsensus - s.price) / s.price) * 100 : null;
+    const bits = [];
+    if (s.dcf != null) bits.push(`DCF ${fmt(s.dcf, "price")}${mos != null ? ` (${mos >= 0 ? "+" : ""}${mos.toFixed(0)}% MoS)` : ""}`);
+    if (s.targetConsensus != null) {
+      bits.push(`target ${fmt(s.targetConsensus, "price")}${upside != null ? ` (${upside >= 0 ? "+" : ""}${upside.toFixed(0)}%)` : ""}`);
+    }
+    if (bits.length) out += `\n${bits.join(" · ")}`;
+  }
+
+  if (s.profile?.description) {
+    out += `\nBiz: ${String(s.profile.description).slice(0, 400)}`;
+  }
+
+  if (s.ratings?.rating) {
+    const r = s.ratings;
+    out += `\nFMP: ${r.rating} ${r.overall_score ?? "—"}/5`;
+  }
+
+  if (s.grades?.length) {
+    out += `\nGrades: ${s.grades
+      .slice(0, 3)
+      .map((x) => `${x.date || ""} ${x.action || ""}${x.new_grade ? `→${x.new_grade}` : ""}`.trim())
+      .join("; ")}`;
+  }
+
+  if (s.insider?.length) {
+    const recent = s.insider
+      .slice(0, 3)
+      .map((t) => `${t.date || ""} ${t.type === "A" ? "B" : t.type === "D" ? "S" : ""} ${t.shares != null ? Math.abs(t.shares).toLocaleString() : ""}sh`.trim())
+      .join("; ");
+    out += `\nInsider: ${recent}`;
+  }
+
+  if (s.news?.length) {
+    out += `\nNews: ${s.news
+      .slice(0, 4)
+      .map((n) => `${n.date ? String(n.date).slice(0, 10) + " " : ""}${n.title || ""}`.trim())
+      .join(" | ")}`;
+  }
+
+  if (s.technicals) {
+    const t = s.technicals;
+    out += `\nTech: SMA50 ${fmt(t.sma50, "price")} SMA200 ${fmt(t.sma200, "price")} RSI14 ${t.rsi14 != null ? t.rsi14.toFixed(0) : "—"} ADX ${t.adx != null ? t.adx.toFixed(0) : "—"}`;
+  }
+
+  if (s.earnings?.next || s.earnings?.recent?.length) {
+    if (s.earnings.next) out += `\nEarnings: next ${s.earnings.next.date}`;
+    if (s.earnings.recent?.length) {
+      out += ` · recent ${s.earnings.recent
+        .slice(0, 2)
+        .map((q) => `${q.date} ${q.epsActual ?? "—"} vs ${q.epsEstimated ?? "—"}`)
+        .join("; ")}`;
+    }
+  }
+
+  if (s.smartMoney?.signal) {
+    const sm = s.smartMoney;
+    const bits = [`signal ${sm.signal}`];
+    if (sm.congress?.total) bits.push(`Congress ${sm.congress.buyers}B/${sm.congress.sellers}S`);
+    if (sm.insider) bits.push(`insiders ${sm.insider.buyers}B/${sm.insider.sellers}S`);
+    out += `\nSmart$: ${bits.join(" · ")}`;
+  }
+
+  if (s.fit?.score != null) {
+    out += `\nFit: ${s.fit.score}/100 — ${(s.fit.reasons || []).slice(0, 2).join("; ")}`;
+  }
+
+  return out;
+}
+
 function buildSystemPrompt(context, personalization = {}) {
   const {
+    view,
+    chatIntent,
     filters, weights, stocks, focusSymbols, availableSectors, availableIndustries,
     activeStock, focusStocks, today, totalFiltered, activeScreener, pinnedStocks, news,
-    view,
   } = context || {};
+  const intent = chatIntent || "general";
+  if ((view || "screener") === "deep-research") {
+    return buildDeepResearchPrompt(context, personalization);
+  }
   const { username, memory } = personalization;
 
   const shown = stocks?.length || 0;
@@ -155,15 +364,31 @@ Available Industries: ${JSON.stringify(availableIndustries || [])}
     if (pinnedStocks.length > 30) prompt += `(…and ${pinnedStocks.length - 30} more pinned)\n`;
   }
 
-  if (news?.length) {
+  if (news?.length && intent !== "filter") {
+    const newsCap = intent === "analyze" ? 4 : 6;
     prompt += `\nLATEST MARKET NEWS (most recent headlines — use for macro/sentiment context; cite the source if you reference one):\n`;
-    for (const a of news.slice(0, 10)) {
+    for (const a of news.slice(0, newsCap)) {
       prompt += `- ${a.symbol ? `[${a.symbol}] ` : ""}${a.title}${a.source ? ` (${a.source})` : ""}\n`;
     }
   }
 
+  if (intent === "filter") {
+    prompt += `\nCHAT INTENT: filter — keep prose brief (1–2 paragraphs); end with recommendFilters JSON if proposing filter changes.\n`;
+  } else if (intent === "analyze") {
+    prompt += `\nCHAT INTENT: analyze — focus on named/focus symbols; be concise unless depth is requested.\n`;
+  } else if (intent === "portfolio") {
+    prompt += `\nCHAT INTENT: portfolio — center on holdings, goals, theses, and overlap; stock table is secondary.\n`;
+  }
+
   if (activeStock) {
-    prompt += "\n" + buildActiveStockSection(activeStock) + "\n";
+    const inTable = stocks?.some((s) => s.symbol === activeStock.symbol);
+    if (view === "screener" && inTable && intent !== "analyze") {
+      prompt += `\nOPEN IN PANEL: ${activeStock.symbol} — fundamentals are in STOCK DATA; use table metrics unless user asks for insiders/technicals/news depth.\n`;
+    } else if (view === "screener" && intent === "analyze") {
+      prompt += "\n" + buildDeepResearchStockSection(activeStock) + "\n";
+    } else {
+      prompt += "\n" + buildActiveStockSection(activeStock) + "\n";
+    }
   }
 
   if (focusSymbols?.length) {
@@ -555,14 +780,15 @@ router.post("/chat", chatLimiter, async (req, res) => {
     messages.push({ role: "user", content: userMessage });
 
     // Full history is kept in SQLite; only the recent window is sent to Gemini.
-    const { messages: historyForGemini, truncated, dropped } = truncateChatHistory(messages);
+    const historyCap = chatHistoryMaxMessagesForView(context?.view);
+    const { messages: historyForGemini, truncated, dropped } = truncateChatHistory(messages, historyCap);
     if (truncated) dynamicContext += historyContextNote(dropped);
     const geminiContents = toGeminiContents(historyForGemini);
 
     const { res: geminiRes, model: usedModel, friendly, timedOut, status, body: errBody } =
       await fetchGeminiWithRetry({
         keys,
-        buildBody: (model) => buildChatGeminiBody(model, dynamicContext, geminiContents),
+        buildBody: (model) => buildChatGeminiBody(model, dynamicContext, geminiContents, context?.view),
         send,
       });
 
@@ -641,7 +867,7 @@ router.post("/chat", chatLimiter, async (req, res) => {
     // for the usage panel). A turn that produced a real answer always cost tokens;
     // record even if usageMetadata was missing so the request count stays honest.
     if (fullResponse || usageMeta) {
-      const chatBody = buildChatGeminiBody(usedModel, dynamicContext, geminiContents);
+      const chatBody = buildChatGeminiBody(usedModel, dynamicContext, geminiContents, context?.view);
       const fallback = usageMeta?.promptTokenCount == null && usageMeta?.candidatesTokenCount == null
         ? {
             contents: chatBody.contents,
@@ -752,5 +978,13 @@ router.delete("/chat/memory", (req, res) => {
 router.get("/ori/usage", (req, res) => {
   res.json(getOriUsageSummary(req.userId));
 });
+
+export {
+  buildSystemPrompt,
+  buildDeepResearchPrompt,
+  buildDeepResearchStockSection,
+  buildActiveStockSection,
+  buildPortfolioContextForSymbol,
+};
 
 export default router;
