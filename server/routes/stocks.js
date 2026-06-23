@@ -47,7 +47,7 @@ import {
   readFreshFrontierGamePlan,
   shouldRunLiteIntangiblesGeneration,
   gamePlanFrontierTtlMs,
-  gamePlanLiteTtlMs,
+  screenerLiteTtlMs,
   gamePlanMaxOutputTokens,
 } from "../gamePlanCache.js";
 import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
@@ -1259,9 +1259,10 @@ function sanitizeGamePlan(o) {
   const str = (v, max = 600) => (typeof v === "string" ? v.slice(0, max) : "");
   const arr = (v, max = 6) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, max) : []);
   const STRENGTH = ["strong", "moderate", "weak", "none"];
-  // X-factors: structured breakdown of the intangible case (moat/monopoly, TAM,
-  // management, brand, regulatory). Drop "none"/blank rows so the UI only shows
-  // factors that actually apply, and cap the list.
+  // X-factors: structured breakdown of the intangible case across the 7 rated
+  // factors (future growth/importance, moat, platform potential, management,
+  // ecosystem lock-in, innovation velocity). Drop "none"/blank rows so the UI
+  // only shows factors that actually apply, and cap the list at the 7 categories.
   const xFactors = (Array.isArray(o.xFactors) ? o.xFactors : [])
     .map((x) => ({
       factor: str(x?.factor, 60),
@@ -1269,7 +1270,7 @@ function sanitizeGamePlan(o) {
       note: str(x?.note, 160),
     }))
     .filter((x) => x.factor && x.strength !== "none")
-    .slice(0, 6);
+    .slice(0, 7);
   const RISK = ["low", "moderate", "high", "speculative"];
   const HOR = ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"];
   return {
@@ -1415,7 +1416,7 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
   if (!shouldRunLiteIntangiblesGeneration(symbol, deps, { force })) {
     return readFreshLiteGamePlan(symbol, deps) ?? null;
   }
-  return cachedDetail(`gameplan-lite:${symbol}`, gamePlanLiteTtlMs(), async () => {
+  return cachedDetail(`gameplan-lite:${symbol}`, screenerLiteTtlMs(), async () => {
     await acquireLiteLane();
     try {
       const useFullPrompt = hasClientGamePlanContext(stats, verdict);
@@ -1467,7 +1468,9 @@ async function readIntangiblesCache(req, res) {
   if (!hasOriAccess(req.userId)) {
     return res.status(402).json({ error: "Ori intangibles is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
   }
-  const ori = readFreshLiteGamePlan(symbol, gamePlanCacheDeps()) || null;
+  // Screener serving uses the long TTL so a background-trickled name keeps its
+  // nudge for weeks (matches db.getAllStocks), not just the 24h DR window.
+  const ori = readFreshLiteGamePlan(symbol, gamePlanCacheDeps(), screenerLiteTtlMs()) || null;
   res.json({ symbol, ori });
 }
 router.get("/stocks/intangibles/:symbol", aiDetailLimiter, readIntangiblesCache);

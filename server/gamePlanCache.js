@@ -41,6 +41,35 @@ export function gamePlanLiteTtlMs() {
   return envHours("GAME_PLAN_LITE_TTL_HOURS", 24) * HOUR_MS;
 }
 
+/**
+ * Lifetime of a BACKGROUND screener intangibles (lite) review — deliberately LONG
+ * (default 30 days) and separate from gamePlanLiteTtlMs(). The hourly trickle sweeps
+ * the WHOLE universe top-down by market cap, skipping any name that already carries a
+ * review, so once a stock is scored its nudge should persist (kept on the row AND
+ * skipped by the trickle) for weeks rather than expiring in a day and forcing a
+ * re-spend before the trickle has even reached the rest of the universe. Intangibles
+ * (moat / TAM / management / brand / sentiment) are slow-moving, so a multi-week read
+ * is fine. Tune via SCREENER_INTANGIBLES_TTL_DAYS. NOTE: gamePlanLiteTtlMs() (24h) is
+ * still used for the frontier self-heal window in readFreshFrontierGamePlan — don't
+ * conflate the two.
+ */
+export function screenerLiteTtlMs() {
+  return envDays("SCREENER_INTANGIBLES_TTL_DAYS", 30) * DAY_MS;
+}
+
+/**
+ * Market-cap floor for the background intangibles trickle (default $10B). The job
+ * only ever spends a lite call on names AT/ABOVE this cap — so the swept set is
+ * small, bounded and made of the large-caps users actually screen, instead of
+ * grinding through ~10k micro-caps. Below the floor, a stock only gets an Ori read
+ * if a user opens Deep Research on it (user-initiated, metered). Tune via
+ * SCREENER_INTANGIBLES_MIN_MCAP (raw dollars, e.g. 10000000000).
+ */
+export function screenerMinMcap() {
+  const n = Number(process.env.SCREENER_INTANGIBLES_MIN_MCAP);
+  return Number.isFinite(n) && n >= 0 ? n : 10e9;
+}
+
 export function isFrontierGamePlan(ori) {
   return ori?.modelTier === "frontier" || ori?.model === "gemini-3.1-pro-preview";
 }
@@ -82,6 +111,11 @@ export function readFreshFrontierGamePlan(symbol, deps, ttlMs) {
   return readFreshDetail(key, gamePlanLiteTtlMs(), deps);
 }
 
+// Default lite TTL stays the SHORT window (24h): resolveCachedGamePlan uses this to
+// decide DR's lite fallback, and a stale lite there must NOT block frontier (Pro)
+// generation — otherwise Deep Research would keep serving the cheap trickle take.
+// SCREENER serving (db.getAllStocks, the intangibles GET) passes the long
+// screenerLiteTtlMs explicitly so trickled names stay covered for weeks.
 export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs()) {
   return readFreshDetail(`gameplan-lite:${symbol}`, ttlMs, deps);
 }

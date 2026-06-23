@@ -24,6 +24,56 @@ const clamp01 = (v) => Math.max(0, Math.min(1, v));
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 const pct = (v) => (isNum(v) ? `${(v * 100).toFixed(0)}%` : "—");
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVICTION_CONFIG — the single place a developer tunes WHAT feeds Conviction
+// and how heavily. Everything below reads from here, so you never have to hunt
+// through the functions to change a weight or threshold. (The intangibles pillar
+// has its OWN internal 7-category questions + weights — those live server-side in
+// liteIntangibles.js / gamePlanPromptShared.js since Ori scores them.)
+//
+//   • pillarWeights        the 7 Conviction pillars (FALLBACK only; the app passes
+//                          persona-resolved weights from lib/personas.js). Sum ~1.
+//   • intangiblesProxyConfidence  how much the Intangibles pillar counts BEFORE a
+//                          real Ori review exists (it uses the durability proxy
+//                          until then) — a fraction of its pillar weight.
+//   • riskTilt             speculative names lose (speculationScore × N) conviction
+//                          points, by the user's risk tolerance.
+//   • durability           sub-score blend that drives the HOLD HORIZON.
+//   • horizonThresholds    durability cutoffs for the 1yr / 3yr / 5yr / 10yr buckets.
+//   • ramps                per-metric [lo, hi] anchors mapped to 0..1 inside each
+//                          pillar's sub-scores (higher = better unless the metric
+//                          is graded "lower is better", e.g. P/E, leverage).
+// ─────────────────────────────────────────────────────────────────────────────
+export const CONVICTION_CONFIG = {
+  // 7-pillar fallback weights = the "Balanced Growth" persona (personas.js).
+  pillarWeights: { fundamentals: 0.25, valuation: 0.10, technicals: 0.05, smartMoney: 0.07, analyst: 0.05, fit: 0.15, intangibles: 0.33 },
+
+  // Intangibles pillar weight multiplier while only the deterministic proxy exists.
+  intangiblesProxyConfidence: 0.4,
+
+  // Risk-tolerance tilt — conviction points removed = speculationScore × this.
+  riskTilt: { conservative: 42, balanced: 16, aggressive: 5 },
+
+  // Durability (→ horizon) sub-score weights. Missing inputs drop out and the rest
+  // renormalize. Growth is folded in mildly so a steady low-growth compounder still
+  // rates long-term.
+  durability: { profit: 0.34, safety: 0.26, beatRate: 0.1, size: 0.12, beta: 0.08, growth: 0.1 },
+
+  // Durability cutoffs for the hold-horizon bucket (below oneYr ⇒ ~1yr, etc.).
+  horizonThresholds: { oneYr: 0.42, threeYr: 0.6, fiveYr: 0.8 },
+
+  // Per-metric ramp anchors [lo, hi] → 0..1. These are the calibration dials for
+  // each pillar's sub-scores; edit here rather than inline in the functions.
+  ramps: {
+    profit: { roic: [0.05, 0.2], roe: [0.08, 0.22], net_margin: [0.0, 0.18], op_margin: [0.03, 0.22], fcf_margin: [0.0, 0.15] },
+    safety: { debt_equity: [0.5, 2.5], net_debt_ebitda: [1.0, 4.5], current_ratio: [1.0, 2.0] },
+    growth: { revenue_growth: [0.0, 0.2], eps_growth: [0.0, 0.2], fcf_growth: [0.0, 0.2] },
+    size: [3e8, 5e10], // $300M..$50B → micro..large
+    beta: [1.0, 2.2],
+    valuation: { fcf_yield: [0.0, 0.08], pe: [12, 40], pegPe: [1.0, 3.5], ev_ebitda: [8, 25] },
+  },
+};
+
 // A persisted ~45-day price RETURN → 0..1 momentum proxy (down ~25% → 0, flat →
 // 0.5, up ~25% → 1). Lets the SCREENER carry a technicals signal (so falling
 // "value traps" don't rank like winners) without per-symbol indicator fetches;
@@ -237,26 +287,39 @@ function valuationScore(r, aiData) {
   const target = isNum(aiData?.target_consensus) ? aiData.target_consensus : isNum(r.target_consensus) ? r.target_consensus : isNum(r.targetConsensus) ? r.targetConsensus : null;
   const mos = isNum(dcf) && isNum(price) && dcf > 0 && price > 0 ? (dcf - price) / dcf : null;
   const upsideAnalyst = isNum(target) && isNum(price) && price > 0 ? (target - price) / price : null;
+  const VR = CONVICTION_CONFIG.ramps.valuation;
   let peTerm = null;
   if (r.pe != null) {
     if (r.pe <= 0) peTerm = 0.12;
-    else if (r.eps_growth != null && r.eps_growth > 0.03) peTerm = down(r.pe / (r.eps_growth * 100), 1.0, 3.5);
-    else peTerm = down(r.pe, 12, 40);
+    else if (r.eps_growth != null && r.eps_growth > 0.03) peTerm = down(r.pe / (r.eps_growth * 100), ...VR.pegPe);
+    else peTerm = down(r.pe, ...VR.pe);
   }
   const score = avgDefined([
     mos != null ? clamp01(mos + 0.5) : null,
     upsideAnalyst != null ? clamp01(upsideAnalyst * 1.5 + 0.4) : null,
-    up(r.fcf_yield, 0.0, 0.08),
+    up(r.fcf_yield, ...VR.fcf_yield),
     peTerm,
-    r.ev_ebitda != null ? (r.ev_ebitda < 0 ? 0.2 : down(r.ev_ebitda, 8, 25)) : null,
+    r.ev_ebitda != null ? (r.ev_ebitda < 0 ? 0.2 : down(r.ev_ebitda, ...VR.ev_ebitda)) : null,
     isNum(r.vScore) ? r.vScore : null,
   ]);
   return { score, mos, upsideAnalyst, dcf, target };
 }
 
-// Weights for the unified conviction blend. Intangibles only counts once Ori
-// fills it in (see mergeOriIntoVerdict).
-const PILLAR_WEIGHTS = { fundamentals: 0.3, valuation: 0.18, technicals: 0.12, smartMoney: 0.1, analyst: 0.12, fit: 0.18, intangibles: 0.14 };
+// Default weights for the unified conviction blend = the "Balanced Growth" persona
+// (lib/personas.js PERSONAS.balanced_growth, as fractions). This is only the
+// FALLBACK: the app passes resolvePillarWeights({persona,risk,horizon,goal}) into
+// quickConviction / computeVerdict, so the live blend follows the user's investor
+// persona. Keep these 7 keys in lockstep with personas.js CATEGORIES.
+const PILLAR_WEIGHTS = CONVICTION_CONFIG.pillarWeights;
+
+// The Intangibles pillar uses a cached Ori review when one exists, else a rough
+// deterministic durability proxy. Until a real review exists we down-weight it to
+// this fraction of its persona weight, so an un-reviewed stock stays driven by the
+// hard-data pillars; a cached/live Ori review restores its FULL weight.
+const INTANGIBLES_PROXY_CONFIDENCE = CONVICTION_CONFIG.intangiblesProxyConfidence;
+const intangiblesReviewed = (row) => isNum(row?.ori?.intangiblesScore);
+const intangiblesWeightFor = (row, weights) =>
+  (weights.intangibles ?? 0) * (intangiblesReviewed(row) ? 1 : INTANGIBLES_PROXY_CONFIDENCE);
 
 // ── Risk tolerance ───────────────────────────────────────────────────────────
 // Raw conviction is blind to how SPECULATIVE a name is, so cheap, high-rank
@@ -286,9 +349,10 @@ function speculationScore(r) {
 function riskDelta(r, risk) {
   const spec = speculationScore(r);
   const s = spec == null ? 0.4 : spec;
-  if (risk === "conservative") return -Math.round(s * 42); // retiree: speculative names sink hard
-  if (risk === "aggressive") return -Math.round(s * 5); // risk-taker: barely penalized
-  return -Math.round(s * 16); // balanced — a mild built-in guard
+  const tilt = CONVICTION_CONFIG.riskTilt;
+  if (risk === "conservative") return -Math.round(s * tilt.conservative); // retiree: speculative names sink hard
+  if (risk === "aggressive") return -Math.round(s * tilt.aggressive); // risk-taker: barely penalized
+  return -Math.round(s * tilt.balanced); // balanced — a mild built-in guard
 }
 const applyRisk = (conviction, delta) => (conviction == null ? conviction : Math.max(0, Math.min(100, conviction + delta)));
 
@@ -299,7 +363,7 @@ const applyRisk = (conviction, delta) => (conviction == null ? conviction : Math
  * weights renormalize. Equals computeVerdict().conviction for a row with no
  * detail loaded, so the number stays consistent as it refines on Deep Research.
  */
-export function quickConviction(row, fit = null, risk = DEFAULT_RISK) {
+export function quickConviction(row, fit = null, risk = DEFAULT_RISK, weights = PILLAR_WEIGHTS) {
   if (!row) return null;
   const fund = isNum(row.score) ? row.score : null;
   const price = isNum(row.price) ? row.price : null;
@@ -314,12 +378,12 @@ export function quickConviction(row, fit = null, risk = DEFAULT_RISK) {
   // deterministic baseline (cached Ori review, else durabilityProxy) + any cached
   // Ori delta, so good-but-quiet names aren't stuck low until Deep Research.
   const base = convictionFromPillars([
-    { score: fund, weight: PILLAR_WEIGHTS.fundamentals },
-    { score: val, weight: PILLAR_WEIGHTS.valuation },
-    { score: tech, weight: PILLAR_WEIGHTS.technicals },
-    { score: analyst, weight: PILLAR_WEIGHTS.analyst },
-    { score: fitS, weight: PILLAR_WEIGHTS.fit },
-    { score: intangiblesBaseline(row), weight: PILLAR_WEIGHTS.intangibles },
+    { score: fund, weight: weights.fundamentals },
+    { score: val, weight: weights.valuation },
+    { score: tech, weight: weights.technicals },
+    { score: analyst, weight: weights.analyst },
+    { score: fitS, weight: weights.fit },
+    { score: intangiblesBaseline(row), weight: intangiblesWeightFor(row, weights) },
   ]);
   return applyRisk(applyRisk(base, riskDelta(row, risk)), oriDelta(row));
 }
@@ -340,29 +404,31 @@ const HORIZON = {
 export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
   const r = row || {};
   const risk = opts.risk || DEFAULT_RISK;
+  const weights = opts.weights || PILLAR_WEIGHTS;
   const tech = detail.technicals || null;
   const aiData = detail.aiData || null;
   const price = isNum(r.price) ? r.price : null;
 
   // ── Sub-scores (each 0..1, absolute) ──────────────────────────────────────
+  const RP = CONVICTION_CONFIG.ramps;
   const profit = avgDefined([
-    up(r.roic, 0.05, 0.2),
-    up(r.roe, 0.08, 0.22),
-    up(r.net_margin, 0.0, 0.18),
-    up(r.op_margin, 0.03, 0.22),
-    up(r.fcf_margin, 0.0, 0.15),
+    up(r.roic, ...RP.profit.roic),
+    up(r.roe, ...RP.profit.roe),
+    up(r.net_margin, ...RP.profit.net_margin),
+    up(r.op_margin, ...RP.profit.op_margin),
+    up(r.fcf_margin, ...RP.profit.fcf_margin),
   ]);
 
   const safety = avgDefined([
-    r.debt_equity != null ? (r.debt_equity < 0 ? 0 : down(r.debt_equity, 0.5, 2.5)) : null,
-    down(r.net_debt_ebitda, 1.0, 4.5), // negative (net cash) ramps to 1 = good
-    up(r.current_ratio, 1.0, 2.0),
+    r.debt_equity != null ? (r.debt_equity < 0 ? 0 : down(r.debt_equity, ...RP.safety.debt_equity)) : null,
+    down(r.net_debt_ebitda, ...RP.safety.net_debt_ebitda), // negative (net cash) ramps to 1 = good
+    up(r.current_ratio, ...RP.safety.current_ratio),
   ]);
 
   const growth = avgDefined([
-    up(r.revenue_growth, 0.0, 0.2),
-    up(r.eps_growth, 0.0, 0.2),
-    up(r.fcf_growth, 0.0, 0.2),
+    up(r.revenue_growth, ...RP.growth.revenue_growth),
+    up(r.eps_growth, ...RP.growth.eps_growth),
+    up(r.fcf_growth, ...RP.growth.fcf_growth),
   ]);
   const declining =
     (r.revenue_growth != null && r.revenue_growth < -0.02) ||
@@ -375,19 +441,20 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
     if (judged.length >= 2) beatRate = judged.filter((e) => e.epsActual >= e.epsEstimated).length / judged.length;
   }
 
-  const sizeScore = up(r.mcap, 3e8, 5e10); // $300M..$50B → micro..large
-  const betaScore = r.beta != null ? down(Math.abs(r.beta), 1.0, 2.2) : null;
+  const sizeScore = up(r.mcap, ...RP.size); // $300M..$50B → micro..large
+  const betaScore = r.beta != null ? down(Math.abs(r.beta), ...RP.beta) : null;
 
   // ── Durability (drives the HORIZON). Growth is folded in only mildly so a
   // steady, low-growth compounder (e.g. a consumer staple) still rates as a
   // long-term hold. ──────────────────────────────────────────────────────────
+  const DW = CONVICTION_CONFIG.durability;
   const durability = weightedAvg([
-    [profit, 0.34],
-    [safety, 0.26],
-    [beatRate, 0.1],
-    [sizeScore, 0.12],
-    [betaScore, 0.08],
-    [growth != null ? clamp01(growth * 0.6 + 0.4) : null, 0.1],
+    [profit, DW.profit],
+    [safety, DW.safety],
+    [beatRate, DW.beatRate],
+    [sizeScore, DW.size],
+    [betaScore, DW.beta],
+    [growth != null ? clamp01(growth * 0.6 + 0.4) : null, DW.growth],
   ]);
 
   // Hard guardrails — these cap the horizon no matter how the averages land.
@@ -414,11 +481,12 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
   const dur = durability ?? 0.4;
 
   // ── HORIZON bucket ─────────────────────────────────────────────────────────
+  const HT = CONVICTION_CONFIG.horizonThresholds;
   let hk;
   if (distress || (unprofitable && (burningCash || dur < 0.3))) hk = "trade";
-  else if (unprofitable || dur < 0.42) hk = "oneYr";
-  else if (dur < 0.6) hk = "threeYr";
-  else if (dur < 0.8 || declining) hk = "fiveYr";
+  else if (unprofitable || dur < HT.oneYr) hk = "oneYr";
+  else if (dur < HT.threeYr) hk = "threeYr";
+  else if (dur < HT.fiveYr || declining) hk = "fiveYr";
   else hk = "tenYr";
   if (speculative && hk === "tenYr") hk = "fiveYr";
   const horizon = HORIZON[hk];
@@ -507,16 +575,19 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
   // as its own pillar; Intangibles is left empty for Ori to fill (mergeOri…).
   const fund = isNum(r.score) ? r.score : dur;
   const pillars = [
-    pillar("fundamentals", "Fundamentals", fund, PILLAR_WEIGHTS.fundamentals, unprofitable ? "bad" : undefined),
-    pillar("valuation", "Valuation", valuation, PILLAR_WEIGHTS.valuation),
-    pillar("technicals", "Technicals", momentum, PILLAR_WEIGHTS.technicals),
-    pillar("smartMoney", "Insiders", smartMoneyScore(detail.smartMoney), PILLAR_WEIGHTS.smartMoney),
-    pillar("analyst", "Analyst", analystScore(r, detail, aiData, price), PILLAR_WEIGHTS.analyst),
-    { ...pillar("fit", "Fit for you", fit && !fit.needsContext && isNum(fit.score) ? clamp01(fit.score / 100) : null, PILLAR_WEIGHTS.fit), reasons: fit && !fit.needsContext ? fit.reasons : null },
+    pillar("fundamentals", "Fundamentals", fund, weights.fundamentals, unprofitable ? "bad" : undefined),
+    pillar("valuation", "Valuation", valuation, weights.valuation),
+    pillar("technicals", "Technicals", momentum, weights.technicals),
+    pillar("smartMoney", "Insiders", smartMoneyScore(detail.smartMoney), weights.smartMoney),
+    pillar("analyst", "Analyst", analystScore(r, detail, aiData, price), weights.analyst),
+    // Fit is null until the user has a portfolio/goals/theses context. Carry the
+    // reasons either way so the pillar tooltip can explain the empty state ("Add
+    // goals, theses, or a portfolio…") instead of just showing a blank bar.
+    { ...pillar("fit", "Fit for you", fit && !fit.needsContext && isNum(fit.score) ? clamp01(fit.score / 100) : null, weights.fit), reasons: fit ? fit.reasons : null },
     // Deterministic Intangibles baseline (cached Ori review, else durabilityProxy)
-    // so the pillar isn't empty pre-Ori; the live Ori take overrides it in
-    // mergeOriIntoVerdict on Deep Research.
-    pillar("intangibles", "Intangibles", intangiblesBaseline(r), PILLAR_WEIGHTS.intangibles, undefined, true),
+    // so the pillar isn't empty pre-Ori — down-weighted while it's only the proxy;
+    // the live Ori take overrides it (at full weight) in mergeOriIntoVerdict on DR.
+    pillar("intangibles", "Intangibles", intangiblesBaseline(r), intangiblesWeightFor(r, weights), undefined, true),
   ];
   // Risk-tolerance tilt (stored so mergeOriIntoVerdict can re-apply it after it
   // recomputes conviction with Ori's intangibles pillar) + any cached Ori nudge.
@@ -527,6 +598,7 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
     horizon,
     conviction,
     riskDelta: rDelta,
+    weights,
     pillars,
     action: { label: action, tone: actionTone, line: timingLine },
     headline,
@@ -561,8 +633,11 @@ export function mergeOriIntoVerdict(det, ori) {
   if (!det || det.insufficient || !ori) return det;
 
   const intang = isNum(ori.intangiblesScore) ? clamp01(ori.intangiblesScore / 100) : null;
+  // A live Ori review fills Intangibles → it now earns its FULL persona weight
+  // (computeVerdict had down-weighted the proxy-only baseline).
+  const fullIntangWeight = (det.weights || PILLAR_WEIGHTS).intangibles;
   const pillars = det.pillars.map((p) =>
-    p.id === "intangibles" ? { ...p, score: intang, tone: intang == null ? "neutral" : toneOf(intang) } : p,
+    p.id === "intangibles" ? { ...p, score: intang, weight: fullIntangWeight, tone: intang == null ? "neutral" : toneOf(intang) } : p,
   );
 
   // Conviction now includes the real intangibles score, the risk-tolerance tilt

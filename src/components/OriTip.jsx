@@ -1,6 +1,8 @@
 // Compact ✧ tooltip body for screener rows (table + scorecards). Mirrors Ori's Take:
 // intangibles score, model tier, top X-factors with strength dots, conviction delta.
 
+import { prettyFactorLabel } from "../lib/intangibleFactors.js";
+
 const XF = {
   strong: { n: 3, dot: "bg-emerald-400", text: "text-emerald-300" },
   moderate: { n: 2, dot: "bg-amber-400", text: "text-amber-300" },
@@ -32,7 +34,7 @@ export default function OriTip({ ori }) {
         return (
           <div key={i} className="flex items-center gap-1.5">
             <XFDots strength={x.strength} />
-            <span className={`truncate ${s.text}`}>{x.factor}</span>
+            <span className={`truncate ${s.text}`}>{prettyFactorLabel(x.factor)}</span>
           </div>
         );
       })}

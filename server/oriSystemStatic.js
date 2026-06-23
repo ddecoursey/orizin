@@ -5,11 +5,11 @@
 export const ORI_SCORECARD_DEFINITION = {
   description:
     "Conviction (0-100) is the unified, user-facing headline score. The 'Orizin Score' is the background fundamentals ENGINE that feeds Conviction's Fundamentals pillar — a weighted average of three pillars (Q/V/G). All inputs are tie-aware 0-1 percentile ranks within the current filtered set. On the screener, Conviction = Fundamentals (Orizin) + Valuation; on Deep Research it also folds in technicals, insiders (U.S. Congress + corporate insiders), analysts, personal Fit, and Ori's intangibles.",
-  Q: "Quality — average rank of: ROIC, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
-  V: "Value — average rank of: EV/GP, EV/EBITDA, P/E (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
+  Q: "Quality — average rank of: ROIC, ROA, ROE, Gross margin, Op margin, FCF margin, Current ratio (higher better, capped at 3x), Net Debt/EBITDA & Debt/Equity (lower better)",
+  V: "Value — average rank of: EV/GP, EV/EBITDA, P/E, P/B, P/S (lower better), FCF Yield (higher better), DCF Margin of Safety (higher better)",
   G: "Growth — average rank of: Revenue growth (TTM), EPS growth (TTM), FCF growth (TTM)",
   note:
-    "Junk guards: negative P/E and negative D/E rank WORST (not best); ROE on negative equity is voided. Missing inputs are imputed at rank 0.45 instead of ignored, and stocks with <3 of 16 real inputs are unscored — so sparse data can't inflate a score. dataCoverage = fraction of the 16 inputs with real data; treat low-coverage scores skeptically.",
+    "Junk guards: negative P/E, P/B and D/E rank WORST (not best); ROE on negative equity is voided. Missing inputs are imputed at rank 0.45 instead of ignored, and stocks with <3 of 19 real inputs are unscored — so sparse data can't inflate a score. dataCoverage = fraction of the 19 inputs with real data; treat low-coverage scores skeptically.",
 };
 
 const SCORECARD_SECTION = `=== ORIZEN SCORE & CONVICTION METHODOLOGY ===
@@ -222,11 +222,11 @@ The Orizin Score is built from three pillars whose influence is controlled by th
 
 Critical mechanics Ori must understand:
 - All inputs are converted to **tie-aware 0–1 percentile ranks within the currently filtered set** (not absolute numbers).
-- **Junk-value guards** (protect against artificially inflated scores): negative P/E ranks WORST (loss-makers are not "cheap"); negative Debt/Equity (negative shareholder equity) ranks WORST and voids ROE; negative EV/EBITDA only counts as cheap when EBITDA is actually positive; ND/EBITDA is ignored when EBITDA is negative.
+- **Junk-value guards** (protect against artificially inflated scores): negative P/E and negative P/B rank WORST (loss-makers / negative book equity are not "cheap"); negative Debt/Equity (negative shareholder equity) ranks WORST and voids ROE; negative EV/EBITDA only counts as cheap when EBITDA is actually positive; ND/EBITDA is ignored when EBITDA is negative.
 - **Missing data is imputed, not ignored**: a missing input counts as rank 0.45 (slightly below the median stock). A stock with only a few good metrics can NOT ace a pillar anymore, and a stock with no growth data can NOT outscore an identical one with mediocre growth.
-- Stocks with fewer than 3 of the 16 inputs are not scored at all.
+- Stocks with fewer than 3 of the 19 inputs are not scored at all.
 - Final score = the user's slider weights applied to the three pillars (no weight redistribution).
-- Each stock carries a **Cov (data coverage)** value = fraction of the 16 inputs with real data. Treat low-coverage scores (< ~60%) with explicit skepticism and SAY SO when recommending such stocks — their score leans on neutral imputation, not evidence.
+- Each stock carries a **Cov (data coverage)** value = fraction of the 19 inputs with real data. Treat low-coverage scores (< ~60%) with explicit skepticism and SAY SO when recommending such stocks — their score leans on neutral imputation, not evidence.
 
 Current slider values are provided in the context as Q / V / G.
 

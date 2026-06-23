@@ -1,16 +1,38 @@
 // Background screener trickle: compact lite intangibles (fundamentals + profile + headlines).
 
 /** Slim system prompt — intangibles layer only, no full Game Plan narrative. */
-export const LITE_TRICKLE_SYSTEM = `You are Ori's screener intangibles engine for Orizin. Judge non-financial / future-potential factors for ONE stock so the screener can nudge Conviction.
+export const LITE_TRICKLE_SYSTEM = `You are Ori's screener intangibles engine for Orizin. Critically judge 7 non-financial future-potential factors for ONE stock so the screener can nudge Conviction.
+
+Be CRITICAL and HONEST. Default to skepticism — most companies do NOT have strong moats, genuine ecosystems, or real innovation velocity. A high score requires concrete, specific evidence. Narrative and market cap are NOT evidence. Always ask: why might this company be LESS special than it appears?
+
+Rate all 7 categories. For each: score 0–100, rating (strong/moderate/weak/none), one specific note:
+
+1. future_growth_potential (weight 20%): Can revenue, cash flow, and influence realistically grow faster than the market for the next decade? Look at current trajectory, TAM headroom, and unit economics — not narrative.
+2. future_importance (weight 20%): Will this company be MORE important in 10 years? Or could it be disrupted, commoditized, or sidelined?
+3. moat_strength (weight 15%): Are competitive advantages (network effects, switching costs, IP, scale) actually STRENGTHENING — or eroding?
+4. platform_infrastructure_potential (weight 15%): Could it become a dominant platform or critical infrastructure — or is it a product in a competitive market?
+5. management_execution (weight 10%): Can leadership actually deliver — not just vision, but capital allocation, operational follow-through, and trustworthiness?
+6. ecosystem_dependence (weight 10%): Are customers, developers, or partners becoming MORE locked in and dependent — or are alternatives gaining ground?
+7. innovation_velocity (weight 10%): Is the company genuinely innovating faster than competitors — or coasting on existing assets?
 
 Rules:
-- Be specific to THIS company using the profile and headlines provided.
-- xFactors: only factors that apply (moat, TAM/optionality, management, brand, regulatory/macro). Rate strong/moderate/weak/none with a one-line note. Omit irrelevant factors.
-- intangiblesScore (0-100): honest roll-up of xFactors — high only with concrete reason.
-- convictionDelta (-20..20): small nudge vs the fundamentals snapshot; data is the anchor.
-- bottomLine: one sentence plain-English takeaway for the screener tooltip.
+- categoryScores: all 7 keys required (future_growth_potential, future_importance, moat_strength, platform_infrastructure_potential, management_execution, ecosystem_dependence, innovation_velocity). Each with score (0–100), rating, and a short company-specific note. (The screener's factor list is built from these — no separate xFactors needed.)
+- intangiblesScore (0–100): compute as weighted sum of category scores using the weights above. Most stocks should score 30–55. Only genuine category leaders deserve 70+. Be conservative.
+- convictionDelta (-20..20): small nudge; data is the anchor. Negative delta is valid when intangibles are weak.
+- bottomLine: one sentence, plain English, specific to this company. Name a concrete strength OR a concrete concern.
 - Educational analysis only — not financial advice.
-Return ONLY JSON matching the schema. Keep string fields short.`;
+Return ONLY JSON matching the schema. Keep all string fields short.`;
+
+const CATEGORY_SCORE_ITEM = {
+  type: "OBJECT",
+  properties: {
+    score: { type: "INTEGER" },
+    rating: { type: "STRING", enum: ["strong", "moderate", "weak", "none"] },
+    note: { type: "STRING" },
+  },
+  required: ["score", "rating"],
+  propertyOrdering: ["score", "rating", "note"],
+};
 
 export const LITE_TRICKLE_SCHEMA = {
   type: "OBJECT",
@@ -18,25 +40,29 @@ export const LITE_TRICKLE_SCHEMA = {
     bottomLine: { type: "STRING" },
     intangiblesScore: { type: "INTEGER" },
     intangiblesRationale: { type: "STRING" },
-    xFactors: {
-      type: "ARRAY",
-      items: {
-        type: "OBJECT",
-        properties: {
-          factor: { type: "STRING" },
-          strength: { type: "STRING", enum: ["strong", "moderate", "weak", "none"] },
-          note: { type: "STRING" },
-        },
-        required: ["factor", "strength"],
-        propertyOrdering: ["factor", "strength", "note"],
+    categoryScores: {
+      type: "OBJECT",
+      properties: {
+        future_growth_potential: CATEGORY_SCORE_ITEM,
+        future_importance: CATEGORY_SCORE_ITEM,
+        moat_strength: CATEGORY_SCORE_ITEM,
+        platform_infrastructure_potential: CATEGORY_SCORE_ITEM,
+        management_execution: CATEGORY_SCORE_ITEM,
+        ecosystem_dependence: CATEGORY_SCORE_ITEM,
+        innovation_velocity: CATEGORY_SCORE_ITEM,
       },
+      required: ["future_growth_potential", "future_importance", "moat_strength", "platform_infrastructure_potential", "management_execution", "ecosystem_dependence", "innovation_velocity"],
+      propertyOrdering: ["future_growth_potential", "future_importance", "moat_strength", "platform_infrastructure_potential", "management_execution", "ecosystem_dependence", "innovation_velocity"],
     },
     convictionDelta: { type: "INTEGER" },
     horizonView: { type: "STRING", enum: ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"] },
     actionView: { type: "STRING" },
   },
-  required: ["bottomLine", "intangiblesScore", "intangiblesRationale", "xFactors", "convictionDelta"],
-  propertyOrdering: ["bottomLine", "intangiblesScore", "intangiblesRationale", "xFactors", "convictionDelta", "horizonView", "actionView"],
+  // NOTE: no xFactors here — the UI's xFactors array is DERIVED from categoryScores
+  // in sanitizeLiteIntangibles (one source of truth, fewer output tokens, and the
+  // displayed factors can never disagree with the scored categories).
+  required: ["bottomLine", "intangiblesScore", "intangiblesRationale", "categoryScores", "convictionDelta"],
+  propertyOrdering: ["bottomLine", "intangiblesScore", "intangiblesRationale", "categoryScores", "convictionDelta", "horizonView", "actionView"],
 };
 
 export function hasClientGamePlanContext(stats, verdict) {
@@ -115,6 +141,26 @@ ${headlines || "(none)"}
 Fill the JSON schema with a compact intangibles read for the screener.`;
 }
 
+const INTANGIBLES_CATEGORY_KEYS = [
+  "future_growth_potential",
+  "future_importance",
+  "moat_strength",
+  "platform_infrastructure_potential",
+  "management_execution",
+  "ecosystem_dependence",
+  "innovation_velocity",
+];
+
+const INTANGIBLES_WEIGHTS = {
+  future_growth_potential: 0.20,
+  future_importance: 0.20,
+  moat_strength: 0.15,
+  platform_infrastructure_potential: 0.15,
+  management_execution: 0.10,
+  ecosystem_dependence: 0.10,
+  innovation_velocity: 0.10,
+};
+
 export function sanitizeLiteIntangibles(o) {
   if (!o || typeof o !== "object") return null;
   const clampInt = (v, lo, hi, dflt) => {
@@ -123,19 +169,41 @@ export function sanitizeLiteIntangibles(o) {
   };
   const str = (v, max = 280) => (typeof v === "string" ? v.slice(0, max) : "");
   const STRENGTH = ["strong", "moderate", "weak", "none"];
-  const xFactors = (Array.isArray(o.xFactors) ? o.xFactors : [])
-    .map((x) => ({
-      factor: str(x?.factor, 48),
-      strength: STRENGTH.includes(x?.strength) ? x.strength : "moderate",
-      note: str(x?.note, 100),
-    }))
-    .filter((x) => x.factor && x.strength !== "none")
-    .slice(0, 5);
+
+  // Sanitize categoryScores (7 structured categories).
+  const rawCat = o.categoryScores && typeof o.categoryScores === "object" ? o.categoryScores : {};
+  const categoryScores = {};
+  for (const k of INTANGIBLES_CATEGORY_KEYS) {
+    const c = rawCat[k] && typeof rawCat[k] === "object" ? rawCat[k] : {};
+    categoryScores[k] = {
+      score: clampInt(c.score, 0, 100, 40),
+      rating: STRENGTH.includes(c.rating) ? c.rating : "moderate",
+      note: str(c.note, 100),
+    };
+  }
+
+  // If intangiblesScore is absent/invalid, derive it from categoryScores.
+  let intangiblesScore = clampInt(o.intangiblesScore, 0, 100, -1);
+  if (intangiblesScore < 0) {
+    intangiblesScore = Math.round(
+      INTANGIBLES_CATEGORY_KEYS.reduce((sum, k) => sum + categoryScores[k].score * INTANGIBLES_WEIGHTS[k], 0)
+    );
+  }
+
+  // xFactors (the UI display list) is DERIVED from categoryScores — single source
+  // of truth, so what the screener shows always matches the scored categories.
+  // Strongest categories first so OriTip's "top 3" surfaces the best of them.
+  const xFactors = INTANGIBLES_CATEGORY_KEYS
+    .map((k) => ({ factor: k, strength: categoryScores[k].rating, note: categoryScores[k].note, _score: categoryScores[k].score }))
+    .filter((x) => x.strength !== "none")
+    .sort((a, b) => b._score - a._score)
+    .map(({ _score, ...x }) => x);
   const HOR = ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"];
   return {
     bottomLine: str(o.bottomLine, 200),
-    intangiblesScore: clampInt(o.intangiblesScore, 0, 100, 50),
+    intangiblesScore,
     intangiblesRationale: str(o.intangiblesRationale, 320),
+    categoryScores,
     xFactors,
     convictionDelta: clampInt(o.convictionDelta, -20, 20, 0),
     horizonView: HOR.includes(o.horizonView) ? o.horizonView : null,

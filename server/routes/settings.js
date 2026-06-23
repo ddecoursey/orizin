@@ -4,11 +4,12 @@ import { refreshQuotesForSymbols } from "../watchlistQuotes.js";
 import { normalizeWatchlists } from "../../src/lib/watchlistNormalize.js";
 import { sanitizeWatchlistAlerts } from "../../src/lib/watchlistAlertsConfig.js";
 import { invalidateWatchlistUnionCache } from "../watchlistSymbols.js";
+import { PERSONA_KEYS, HORIZONS, GOALS } from "../../src/lib/personas.js";
 
 const router = Router();
 
 const ALLOWED_KEYS = new Set([
-  "tabs", "activeTab", "weights", "risk", "sort", "theme", "sidebarCollapsed",
+  "tabs", "activeTab", "weights", "risk", "persona", "horizon", "goal", "sort", "theme", "sidebarCollapsed",
   "portfolios", "goals", "theses", "oriMemory", "watchlists", "activeWatchlistId",
   "watchlistAlerts", "nickname",
 ]);
@@ -72,6 +73,18 @@ function sanitizeSettings(partial) {
     }
     if (k === "risk" && ["conservative", "balanced", "aggressive"].includes(v)) {
       out.risk = v;
+      continue;
+    }
+    if (k === "persona" && PERSONA_KEYS.includes(v)) {
+      out.persona = v;
+      continue;
+    }
+    if (k === "horizon" && HORIZONS.includes(v)) {
+      out.horizon = v;
+      continue;
+    }
+    if (k === "goal" && GOALS.includes(v)) {
+      out.goal = v;
       continue;
     }
     if (k === "sort" && v && typeof v === "object") {

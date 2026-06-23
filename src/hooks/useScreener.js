@@ -3,6 +3,11 @@ import { computeRankedRows, applyWeights } from "../lib/scoring.js";
 import { quickConviction } from "../lib/verdict.js";
 import { buildFitContext, computeFit } from "../lib/fitScore.js";
 import { fetchUserSettings, patchUserSettings, flushUserSettings } from "../lib/userStore.js";
+import {
+  resolvePillarWeights,
+  sanitizePersona, sanitizeHorizon, sanitizeGoal,
+  DEFAULT_PERSONA, DEFAULT_HORIZON, DEFAULT_GOAL,
+} from "../lib/personas.js";
 
 // localStorage keys are namespaced per logged-in user so two people sharing
 // the same browser (or admins switching accounts) don't see each other's
@@ -102,6 +107,22 @@ function loadRisk(user) {
   } catch {
     return DEFAULT_RISK;
   }
+}
+
+// Investor persona + horizon + goal — the personalization levers that (with risk)
+// resolve the 7-category conviction weights (lib/personas.js). Persisted per-user
+// like risk: localStorage mirror now, server settings once hydrated.
+function personaKey(user) { return `screener_persona_v1:${user}`; }
+function horizonKey(user) { return `screener_horizon_v1:${user}`; }
+function goalKey(user) { return `screener_goal_v1:${user}`; }
+function loadPersona(user) {
+  try { return sanitizePersona(localStorage.getItem(personaKey(user))); } catch { return DEFAULT_PERSONA; }
+}
+function loadHorizon(user) {
+  try { return sanitizeHorizon(localStorage.getItem(horizonKey(user))); } catch { return DEFAULT_HORIZON; }
+}
+function loadGoal(user) {
+  try { return sanitizeGoal(localStorage.getItem(goalKey(user))); } catch { return DEFAULT_GOAL; }
 }
 
 // One-time migration: copy pre-multiuser keys to the current user's
@@ -419,6 +440,9 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   const [filters, setFiltersRaw] = useState({ ...DEFAULT_FILTERS });
   const [weights, setWeightsRaw] = useState(() => loadWeights(user));
   const [risk, setRiskRaw] = useState(() => loadRisk(user));
+  const [persona, setPersonaRaw] = useState(() => loadPersona(user));
+  const [horizon, setHorizonRaw] = useState(() => loadHorizon(user));
+  const [goal, setGoalRaw] = useState(() => loadGoal(user));
   const [tabs, setTabsState] = useState(() => loadTabs(user));
   const [activeTab, setActiveTabState] = useState(
     () => localStorage.getItem(activeKey(user)) || "default",
@@ -460,6 +484,26 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     if (hydratedRef.current) patchUserSettings({ risk: next });
   }
 
+  // Persona / horizon / goal setters — same persistence pattern as risk.
+  function setPersona(value) {
+    const next = sanitizePersona(value);
+    setPersonaRaw(next);
+    try { localStorage.setItem(personaKey(user), next); } catch {}
+    if (hydratedRef.current) patchUserSettings({ persona: next });
+  }
+  function setHorizon(value) {
+    const next = sanitizeHorizon(value);
+    setHorizonRaw(next);
+    try { localStorage.setItem(horizonKey(user), next); } catch {}
+    if (hydratedRef.current) patchUserSettings({ horizon: next });
+  }
+  function setGoal(value) {
+    const next = sanitizeGoal(value);
+    setGoalRaw(next);
+    try { localStorage.setItem(goalKey(user), next); } catch {}
+    if (hydratedRef.current) patchUserSettings({ goal: next });
+  }
+
   function setTableSort(key, dir) {
     const next = sanitizeSort({ key, dir });
     setTableSortKey(next.key);
@@ -489,9 +533,20 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   // sharper number back onto the screener row for the rest of the session
   // (resets on reload — not persisted).
   const [convictionOverrides, setConvictionOverrides] = useState({});
-  function setConvictionOverride(symbol, conviction) {
-    if (!symbol || !Number.isFinite(conviction)) return;
-    setConvictionOverrides((prev) => (prev[symbol] === conviction ? prev : { ...prev, [symbol]: conviction }));
+  // Lift a Deep-Research result back onto the screener: the refined Conviction
+  // (exact, session-only) AND the Ori review object. Attaching the review to
+  // `oriData` is what makes the ✧ "Ori-rated" emblem show on the row — and it
+  // keeps the row Ori-influenced even if the exact override is later dropped
+  // (e.g. on a persona/goal change), since withOri re-folds the cached review.
+  function setConvictionOverride(symbol, conviction, ori = null) {
+    if (!symbol) return;
+    if (Number.isFinite(conviction)) {
+      setConvictionOverrides((prev) => (prev[symbol] === conviction ? prev : { ...prev, [symbol]: conviction }));
+    }
+    if (ori) {
+      // DR's frontier review supersedes any lite trickle entry; same ref → no-op.
+      setOriData((prev) => (prev[symbol] === ori ? prev : { ...prev, [symbol]: ori }));
+    }
   }
 
   const [loadProgress, setLoadProg] = useState(null);
@@ -547,18 +602,26 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     return m;
   }, [stocks, fitCtx, hasFitContext]);
 
+  // The 7-category conviction weights resolved from the user's investor persona +
+  // risk + horizon + goal. Drives the whole-app Conviction blend; Q/V/G stays the
+  // (fixed) lens for the Fundamentals sub-score only.
+  const pillarWeights = useMemo(
+    () => resolvePillarWeights({ persona, risk, horizon, goal }),
+    [persona, risk, horizon, goal],
+  );
+
   const filteredWeighted = useMemo(
-    () => applyWeights(rankedData, weights, risk, fitMap),
-    [rankedData, weights, risk, fitMap]
+    () => applyWeights(rankedData, weights, risk, fitMap, pillarWeights),
+    [rankedData, weights, risk, fitMap, pillarWeights]
   );
 
   // Deep Research overrides are computed under the current personalization lens.
-  // If the user changes Q/V/G weights, risk tolerance, or portfolio/goals Fit,
-  // those lifted convictions become stale; drop them so the screener reflects
-  // the freshly personalized lean conviction again.
+  // If the user changes their persona/risk/horizon/goal (→ pillarWeights) or
+  // portfolio/goals Fit, those lifted convictions become stale; drop them so the
+  // screener reflects the freshly personalized lean conviction again.
   useEffect(() => {
     setConvictionOverrides({});
-  }, [weights, risk, fitMap]);
+  }, [pillarWeights, fitMap]);
 
   // Apply any session Conviction overrides from Deep Research. Returns the same
   // reference when there are none, so the common case adds zero churn.
@@ -651,12 +714,12 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       if (!o) return r;
       if (convictionOverrides[r.symbol] != null) return { ...r, ori: r.ori || o };
       const fit = fitMap ? fitMap[r.symbol] || null : null;
-      const lean = quickConviction({ ...r, ori: o }, fit, risk);
+      const lean = quickConviction({ ...r, ori: o }, fit, risk, pillarWeights);
       if (lean == null) return { ...r, ori: o };
       const adj = Math.max(0, lean - (r.dataCoveragePenalty || 0));
       return { ...r, conviction: adj, ori: o };
     });
-  }, [filtered, oriData, convictionOverrides, fitMap, risk]);
+  }, [filtered, oriData, convictionOverrides, fitMap, risk, pillarWeights]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
@@ -892,7 +955,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       if (cancelled) return;
 
       const hasServerState =
-        server && (Array.isArray(server.tabs) || server.weights || server.activeTab || server.risk || server.sort);
+        server && (Array.isArray(server.tabs) || server.weights || server.activeTab || server.risk || server.sort || server.persona || server.horizon || server.goal);
 
       if (hasServerState) {
         let nextTabs = tabs;
@@ -917,6 +980,21 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
           setRiskRaw(cleanRisk);
           try { localStorage.setItem(riskKey(user), cleanRisk); } catch {}
         }
+        if (server.persona) {
+          const p = sanitizePersona(server.persona);
+          setPersonaRaw(p);
+          try { localStorage.setItem(personaKey(user), p); } catch {}
+        }
+        if (server.horizon) {
+          const h = sanitizeHorizon(server.horizon);
+          setHorizonRaw(h);
+          try { localStorage.setItem(horizonKey(user), h); } catch {}
+        }
+        if (server.goal) {
+          const g = sanitizeGoal(server.goal);
+          setGoalRaw(g);
+          try { localStorage.setItem(goalKey(user), g); } catch {}
+        }
         // Local sort wins on this device — it's updated synchronously on every
         // column click, while the server copy may still be the default from an
         // earlier migrate-up. Only adopt server sort when we have no local copy.
@@ -936,7 +1014,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
         const tp = at?.state?.pins;
         setPins(Array.isArray(tp) ? new Set(tp) : new Set());
       } else {
-        patchUserSettings({ tabs, activeTab, weights, risk, sort: { key: tableSortKey, dir: tableSortDir } });
+        patchUserSettings({ tabs, activeTab, weights, risk, persona, horizon, goal, sort: { key: tableSortKey, dir: tableSortDir } });
       }
 
       hydratedRef.current = true;
@@ -1289,6 +1367,13 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     setWeights,
     risk,
     setRisk,
+    persona,
+    setPersona,
+    horizon,
+    setHorizon,
+    goal,
+    setGoal,
+    pillarWeights,
     tableSortKey,
     tableSortDir,
     setTableSort,

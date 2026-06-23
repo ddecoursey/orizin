@@ -13,6 +13,7 @@ import { usePortfolioGoals } from "./hooks/usePortfolioGoals.js";
 import Header from "./components/Header.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import TabsBar from "./components/TabsBar.jsx";
+import ScreenerLens from "./components/ScreenerLens.jsx";
 import StockTable from "./components/StockTable.jsx";
 import ScorecardGrid from "./components/ScorecardGrid.jsx";
 import ProgressBar from "./components/ProgressBar.jsx";
@@ -413,9 +414,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     setFilters,
     applyFiltersFromAI,
     weights,
-    setWeights,
     risk,
     setRisk,
+    persona,
+    setPersona,
+    horizon,
+    setHorizon,
+    goal,
+    setGoal,
+    pillarWeights,
     tableSortKey,
     tableSortDir,
     setTableSort,
@@ -661,7 +668,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: detail.earnings,
         smartMoney: detail.smartMoney,
         fit: detailFit,
-        verdict: computeVerdict(detailRow, detail, detailFit, { risk }),
+        verdict: computeVerdict(detailRow, detail, detailFit, { risk, weights: pillarWeights }),
       }
     : null;
 
@@ -684,7 +691,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: researchDetail.earnings,
         smartMoney: researchDetail.smartMoney,
         fit: researchFit,
-        verdict: computeVerdict(researchRow, researchDetail, researchFit, { risk }),
+        verdict: computeVerdict(researchRow, researchDetail, researchFit, { risk, weights: pillarWeights }),
       }
     : null;
 
@@ -717,7 +724,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: chatFocusDetail1.earnings,
         smartMoney: chatFocusDetail1.smartMoney,
         fit: focus1Fit,
-        verdict: computeVerdict(focusRow1, chatFocusDetail1, focus1Fit, { risk }),
+        verdict: computeVerdict(focusRow1, chatFocusDetail1, focus1Fit, { risk, weights: pillarWeights }),
       }
     : null;
 
@@ -741,7 +748,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         earnings: chatFocusDetail2.earnings,
         smartMoney: chatFocusDetail2.smartMoney,
         fit: focus2Fit,
-        verdict: computeVerdict(focusRow2, chatFocusDetail2, focus2Fit, { risk }),
+        verdict: computeVerdict(focusRow2, chatFocusDetail2, focus2Fit, { risk, weights: pillarWeights }),
       }
     : null;
 
@@ -905,7 +912,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           {currentView === 'deep-research' ? (
             <DeepResearchPage
               fitCtx={fitCtx}
-              risk={risk}
+              risk={risk} setRisk={setRisk}
+              persona={persona} setPersona={setPersona}
+              horizon={horizon} setHorizon={setHorizon}
+              goal={goal} setGoal={setGoal}
+              pillarWeights={pillarWeights}
               isAdmin={isAdmin}
               canUseOri={canUseOri}
               onToggleWatchlist={watchlists.toggleSymbol}
@@ -947,8 +958,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               theme={theme}
               onSelectStock={handleSelectStock}
               detailStock={detailStock}
-              weights={weights}
-              setWeights={setWeights}
+              persona={persona}
+              setPersona={setPersona}
+              horizon={horizon}
+              setHorizon={setHorizon}
+              goal={goal}
+              setGoal={setGoal}
+              pillarWeights={pillarWeights}
               risk={risk}
               setRisk={setRisk}
             />
@@ -994,6 +1010,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
                 </button>
 
+                <ScreenerLens
+                  persona={persona} setPersona={setPersona}
+                  risk={risk} setRisk={setRisk}
+                  horizon={horizon} setHorizon={setHorizon}
+                  goal={goal} setGoal={setGoal}
+                />
+
                 <div className="flex shrink-0 border border-gray-700 rounded-md overflow-hidden ml-auto">
                   {[
                     ["table", "▦ Table"],
@@ -1028,6 +1051,16 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                     autoCapitalize="off"
                     spellCheck={false}
                     className="flex-1 bg-transparent text-sm text-gray-200 outline-none placeholder-gray-600"
+                  />
+                </div>
+
+                <div className="-mx-1 px-1 overflow-x-auto">
+                  <ScreenerLens
+                    persona={persona} setPersona={setPersona}
+                    risk={risk} setRisk={setRisk}
+                    horizon={horizon} setHorizon={setHorizon}
+                    goal={goal} setGoal={setGoal}
+                    showHorizon={false}
                   />
                 </div>
 

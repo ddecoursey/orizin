@@ -807,29 +807,32 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     try { db.pruneLoginEvents(Date.now() - 90 * 24 * 60 * 60 * 1000); } catch (e) { console.error('[auth] login-event prune failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
 
-  // Shared "leaders" baseline for screener intangibles: an HOURLY, lite-only
-  // trickle that keeps a fresh lite cache warm for the top SCREENER_INTANGIBLES_
-  // LEADERS market-cap names, so the screener serves them from cache without
-  // anyone opening Deep Research. It is CACHE-AWARE — each tick only regenerates
-  // leaders whose lite cache expired and who lack a fresh frontier Pro cache
-  // (≈LEADERS lite gens / 24h, not a
-  // continuous run) and stops doing anything once they're all warm. Serialized
-  // by the lite lane so it never starves chat or DR.
+  // Shared baseline for screener intangibles: a deliberately SLOW, CHEAP, lite-only
+  // trickle. Each hourly tick generates a lite review for just the next
+  // SCREENER_INTANGIBLES_BATCH (default 1) large-cap name that doesn't already
+  // have one — working down from the biggest above the $10B floor
+  // (SCREENER_INTANGIBLES_MIN_MCAP, stocks only, no ETFs). It is CACHE-AWARE: a name
+  // is skipped while it holds a lite review inside the long screener TTL (≈30d) or a
+  // fresh frontier Pro cache, so the job advances to the next uncovered name, covers
+  // the bounded large-cap set, then idles — only re-spending as ≈30d reviews age
+  // out. NO bursting: the calls run one at a time through the cap-1 lite lane (never
+  // starves chat/DR), and geminiGenerateJson backs off rather than hammering on a
+  // "too busy". Coverage ≈ BATCH × (24 / TICK_hours) names/day (default ≈24/day);
+  // bump BATCH only if you want the first sweep to finish sooner.
   //
   // Production-only: dev/staging must never spend on this background job.
   const trickleEnabled =
     process.env.SCREENER_INTANGIBLES_ENABLED !== 'false' && isProductionEnv();
   if (trickleEnabled) {
     const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60 * 60 * 1000; // hourly
-    const LEADERS = Number(process.env.SCREENER_INTANGIBLES_LEADERS) || 30;
-    const BATCH = Number(process.env.SCREENER_INTANGIBLES_BATCH) || 5; // stale leaders per tick
+    const BATCH = Number(process.env.SCREENER_INTANGIBLES_BATCH) || 1; // names generated per tick
     const geminiSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
     if (geminiSet) {
       setInterval(async () => {
         try {
-          const stale = db.nextIntangiblesBacklog(Date.now(), LEADERS, BATCH);
-          for (const sym of stale) {
-            await generateLiteIntangibles(sym, {}); // lite-only, cached 24h
+          const backlog = db.nextIntangiblesBacklog(Date.now(), BATCH);
+          for (const sym of backlog) {
+            await generateLiteIntangibles(sym, {}); // lite-only, long-cached, one at a time
           }
         } catch (e) {
           console.error('[intangibles] baseline trickle failed:', e.message);

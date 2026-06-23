@@ -6,6 +6,7 @@ import { IconResearch, IconRefresh, IconWatchlist } from "./icons.jsx";
 import OriEmblem from "./OriEmblem.jsx";
 import Tooltip from "./Tooltip.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
+import ScreenerLens from "./ScreenerLens.jsx";
 import { PriceChart, StockNewsList, GradesList } from "./StockDetailModal.jsx";
 import { useDeepResearch } from "../hooks/useDeepResearch.js";
 import { computeFit } from "../lib/fitScore.js";
@@ -239,7 +240,7 @@ function smLabel(signal) {
   return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgradeToPro, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgradeToPro, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", setRisk, persona = "balanced_growth", setPersona, horizon = "medium", setHorizon, goal = "grow", setGoal, pillarWeights = undefined, onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
   const isLight = useIsLightTheme();
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
@@ -248,8 +249,8 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
   // Deterministic core (instant): folds the Orizin Score + Fit + technicals +
   // valuation + smart money + analysts into one conviction / horizon / action.
   const deterministic = useMemo(
-    () => computeVerdict(row || { symbol }, detail, fit, { risk }),
-    [row, symbol, detail, fit, risk],
+    () => computeVerdict(row || { symbol }, detail, fit, { risk, weights: pillarWeights }),
+    [row, symbol, detail, fit, risk, pillarWeights],
   );
   // Compact payload Ori's intelligence layer needs (POSTed to the server).
   const oriPayload = useMemo(() => {
@@ -301,7 +302,9 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
   useEffect(() => {
     if (!canUseOri) return;
     if (symbol && verdict && !verdict.insufficient && Number.isFinite(verdict.conviction)) {
-      onConvictionChange?.(symbol, verdict.conviction);
+      // Pass Ori's review too so the screener row shows the ✧ "Ori-rated" emblem
+      // (and stays Ori-influenced) — not just the refined number.
+      onConvictionChange?.(symbol, verdict.conviction, verdict.ori || null);
     }
   }, [canUseOri, symbol, verdict, onConvictionChange]);
   // `detail` is owned by App (one useStockDetail instance shared with Ori's context)
@@ -426,6 +429,19 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             </Tooltip>
           </div>
 
+          {/* Personalization lens — inline on the identity row on wide screens; a
+              compact fallback bar appears below the header on narrower screens. */}
+          {(setPersona || setRisk || setGoal) && (
+            <div className="hidden lg:flex shrink-0">
+              <ScreenerLens
+                persona={persona} setPersona={setPersona ?? (() => {})}
+                risk={risk} setRisk={setRisk ?? (() => {})}
+                horizon={horizon} setHorizon={setHorizon ?? (() => {})}
+                goal={goal} setGoal={setGoal ?? (() => {})}
+              />
+            </div>
+          )}
+
           <div className="shrink-0 text-right">
             <div className="text-sm sm:text-lg font-bold font-mono text-gray-100 leading-tight">
               {fmt(row?.price, "price") ?? "—"}
@@ -486,6 +502,18 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
       </div>
 
       <div className="p-4 sm:p-6 space-y-6">
+        {/* Lens fallback bar — only below lg, where the inline header lens is hidden. */}
+        {(setPersona || setRisk || setGoal) && (
+          <div className="lg:hidden flex items-center gap-2 bg-gray-900/60 border border-gray-800 rounded-lg px-3 py-2 overflow-x-auto">
+            <ScreenerLens
+              persona={persona} setPersona={setPersona ?? (() => {})}
+              risk={risk} setRisk={setRisk ?? (() => {})}
+              horizon={horizon} setHorizon={setHorizon ?? (() => {})}
+              goal={goal} setGoal={setGoal ?? (() => {})}
+            />
+          </div>
+        )}
+
         {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
         <div className="oz-fade-rise">
           {overlapNote && (
@@ -494,7 +522,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             </div>
           )}
           {canUseOri ? (
-            <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} canUseOri={canUseOri} />
+            <GamePlan verdict={verdict} oriState={oriState} isAdmin={isAdmin} oriReady={oriReady} canUseOri={canUseOri} profile={{ persona, risk, horizon, goal }} />
           ) : (
             <GamePlanProGate onUpgrade={onUpgradeToPro} />
           )}

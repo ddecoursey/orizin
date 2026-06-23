@@ -33,7 +33,7 @@ const WORST = 1e15;
 // Rank assigned to missing inputs: slightly below the median stock.
 const IMPUTED_RANK = 0.45;
 
-// Minimum number of real (non-imputed) inputs, across all 16, to get a score.
+// Minimum number of real (non-imputed) inputs, across all 19, to get a score.
 const MIN_COMPONENTS = 3;
 
 // Tie-aware percentile rank: 1 = best, 0 = worst, equal values share the same
@@ -77,10 +77,15 @@ export function scoringInputs(r) {
   const evEb = num(r.ev_ebitda);
   const cr = num(r.current_ratio);
   const nd = num(r.net_debt_ebitda);
+  const pb = num(r.pb);
+  const ps = num(r.ps);
 
   return {
     // Quality
     roic: num(r.roic),
+    // ROA — like ROIC, higher is better; a loss-maker's negative ROA ranks low
+    // naturally (descending), so no special guard is needed.
+    roa: num(r.roa),
     // ROE computed against negative equity is meaningless (often a huge
     // positive for money-losing companies) — drop it.
     roe: negEquity ? null : num(r.roe),
@@ -105,6 +110,11 @@ export function scoringInputs(r) {
         : evEb,
     // Negative P/E = negative earnings; "cheapest" is the opposite of true.
     pe: pe !== null && pe <= 0 ? WORST : pe,
+    // Negative P/B = negative book equity (distress), not "cheap" → ranks worst.
+    pb: pb !== null && pb <= 0 ? WORST : pb,
+    // P/S is non-negative for real companies; a non-positive value is a data
+    // glitch, so drop it rather than letting it rank as "cheapest".
+    ps: ps !== null && ps <= 0 ? null : ps,
     fcf_yield: num(r.fcf_yield),
 
     // Growth
@@ -151,6 +161,7 @@ export function computeRankedRows(rows) {
     ranks: {
       q: [
         rankVals(col('roic'), false),
+        rankVals(col('roa'), false),
         rankVals(col('roe'), false),
         rankVals(col('gross_margin'), false),
         rankVals(col('op_margin'), false),
@@ -163,6 +174,8 @@ export function computeRankedRows(rows) {
         rankVals(col('ev_gp'), true),
         rankVals(col('ev_ebitda'), true),
         rankVals(col('pe'), true),
+        rankVals(col('pb'), true),
+        rankVals(col('ps'), true),
         rankVals(col('fcf_yield'), false),
         rows.map((r) => dcfMarginOfSafety(r.price, r.dcf)),
       ],
@@ -222,7 +235,7 @@ function coveragePenalty({ qCoverage, vCoverage, gCoverage }, weights, denom) {
  * Lightweight: applies the Q/V/G slider weights to already-ranked data.
  * Cheap enough to run on every slider change.
  */
-export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced", fitMap = null) {
+export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced", fitMap = null, pillarWeights = undefined) {
   const { rows, ranks } = ranked;
   if (!rows.length) return rows;
 
@@ -269,6 +282,9 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
           // the screener and DR conviction stay consistent.
           fitMap ? fitMap[r.symbol] || null : null,
           risk,
+          // Persona-resolved 7-category weights (undefined → quickConviction's
+          // Balanced-Growth default), so the screener blend follows the persona.
+          pillarWeights,
         )
       : null;
 
@@ -286,7 +302,7 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
       conviction: baseConviction == null ? null : Math.max(0, baseConviction - dataCoveragePenalty),
       baseConviction,
       dataCoveragePenalty,
-      // Fraction of the 16 scorecard inputs with real data — surfaced in the
+      // Fraction of the 19 scorecard inputs with real data — surfaced in the
       // UI and to Ori so low-coverage scores are visibly less trustworthy.
       dataCoverage: coverage,
       pillarCoverage: {
@@ -311,9 +327,9 @@ export function applyWeights(ranked, weights = DEFAULT_WEIGHTS, risk = "balanced
 }
 
 /** Legacy API - kept for compatibility */
-export function computeScores(rows, weights = DEFAULT_WEIGHTS, risk = "balanced") {
+export function computeScores(rows, weights = DEFAULT_WEIGHTS, risk = "balanced", pillarWeights = undefined) {
   const ranked = computeRankedRows(rows);
-  return applyWeights(ranked, weights, risk);
+  return applyWeights(ranked, weights, risk, null, pillarWeights);
 }
 
 // Cheap, always-available proxy for the kinds of "intangibles" Ori reviews

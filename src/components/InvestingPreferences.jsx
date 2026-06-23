@@ -1,83 +1,124 @@
-import { useState, useEffect, useRef } from "react";
+import {
+  PERSONAS, PERSONA_KEYS,
+  RISKS, RISK_LABELS,
+  HORIZONS,
+  GOALS,
+  CATEGORIES, CATEGORY_LABELS, CATEGORY_TOOLTIPS,
+  resolvePillarPercents,
+} from "../lib/personas.js";
+import Tooltip from "./Tooltip.jsx";
 
-// Personal investing preferences — Risk Tolerance + the Q/V/G fundamentals lens.
-// These shape the unified Conviction across the whole app (screener, cards, Deep
-// Research), so they live on the Portfolio page as a saved per-account setting.
+// Personal investing profile — Investor Persona + Risk + Horizon + Goal. Together
+// these resolve the 7-category weights that shape the unified Conviction across the
+// whole app (screener, cards, Deep Research), so they live on the Portfolio page as
+// a saved per-account setting. (Replaced the old Risk + Q/V/G sliders; the Q/V/G
+// fundamentals lens is now fixed internally and folds into the Fundamentals pillar.)
 
-const RISK_OPTIONS = [
-  { value: "conservative", label: "Conservative", emoji: "🛡", blurb: "Lower risk. Favors larger, profitable, low-debt, steady names and pushes speculative micro-caps / high-beta / unprofitable names well down the list." },
-  { value: "balanced", label: "Balanced", emoji: "⚖", blurb: "A sensible middle ground with a mild guard against the most speculative names. Good default for most investors." },
-  { value: "aggressive", label: "Aggressive", emoji: "🚀", blurb: "Higher risk tolerance. Comfortable holding smaller, faster-growing, more volatile names — barely penalizes speculation." },
-];
+const HORIZON_SHORT = { short: "Short", medium: "Medium", long: "Long" };
+const GOAL_SHORT = { preserve: "Preserve", grow: "Grow", maximize: "Maximize", income: "Income" };
 
-function WeightSlider({ label, value, onChange }) {
-  const [local, setLocal] = useState(value);
-  const t = useRef(null);
-  useEffect(() => setLocal(value), [value]);
-  const handle = (e) => {
-    const v = Number(e.target.value);
-    setLocal(v);
-    if (t.current) clearTimeout(t.current);
-    t.current = setTimeout(() => onChange(v), 120);
-  };
+function Segmented({ label, options, value, onChange }) {
   return (
     <div>
-      <div className="flex justify-between text-xs text-gray-300 mb-1">
-        <span>{label}</span>
-        <span className="font-mono text-gray-400">{local}</span>
+      <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2">{label}</div>
+      <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}>
+        {options.map((o) => {
+          const active = value === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => onChange(o.value)}
+              aria-pressed={active}
+              className={`rounded-lg border px-2 py-2 text-center text-xs font-semibold transition-colors cursor-pointer ${
+                active ? "border-blue-500 bg-blue-950/40 text-gray-100" : "border-gray-700 bg-gray-950/40 text-gray-400 hover:bg-gray-800"
+              }`}
+            >
+              {o.label}
+            </button>
+          );
+        })}
       </div>
-      <input type="range" min="0" max="100" value={local} onChange={handle} className="w-full accent-blue-500 h-2" />
     </div>
   );
 }
 
-export default function InvestingPreferences({ weights, setWeights, risk, setRisk }) {
-  const current = risk || "balanced";
+export default function InvestingPreferences({ persona, setPersona, horizon, setHorizon, goal, setGoal, risk, setRisk }) {
+  const activePersona = PERSONAS[persona] ? persona : "balanced_growth";
+  const percents = resolvePillarPercents({ persona: activePersona, risk, horizon, goal });
+  const maxPct = Math.max(...CATEGORIES.map((k) => percents[k]), 1);
+
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 sm:p-5 space-y-5">
       <div>
-        <h3 className="text-sm font-bold text-gray-200 flex items-center gap-2">Investing preferences</h3>
+        <h3 className="text-sm font-bold text-gray-200">Investing profile</h3>
         <p className="text-xs text-gray-500 mt-0.5">
-          Personalize how <span className="text-gray-300 font-medium">Conviction</span> is scored across the whole app. Saved to your account.
+          Pick the <span className="text-gray-300 font-medium">investor persona</span> and lenses that shape how <span className="text-gray-300 font-medium">Conviction</span> is weighted across the whole app. Saved to your account.
         </p>
       </div>
 
-      {/* Risk tolerance — the genuinely personal dimension */}
+      {/* Investor persona */}
       <div>
-        <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2">Risk tolerance</div>
+        <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2">Investor persona</div>
         <div className="grid grid-cols-3 gap-2">
-          {RISK_OPTIONS.map((o) => {
-            const active = current === o.value;
+          {PERSONA_KEYS.map((key) => {
+            const p = PERSONAS[key];
+            const active = activePersona === key;
             return (
-              <button
-                key={o.value}
-                onClick={() => setRisk(o.value)}
-                aria-pressed={active}
-                className={`rounded-lg border px-2 py-2.5 text-center transition-colors cursor-pointer ${
-                  active
-                    ? "border-blue-500 bg-blue-950/40 text-gray-100"
-                    : "border-gray-700 bg-gray-950/40 text-gray-400 hover:bg-gray-800"
-                }`}
-              >
-                <div className="text-lg leading-none">{o.emoji}</div>
-                <div className="text-xs font-semibold mt-1">{o.label}</div>
-              </button>
+              <Tooltip key={key} content={p.blurb} side="top" maxWidth={200}>
+                <button
+                  type="button"
+                  onClick={() => setPersona(key)}
+                  aria-pressed={active}
+                  className={`w-full rounded-lg border px-2 py-2 text-center transition-colors cursor-pointer ${
+                    active ? "border-blue-500 bg-blue-950/40" : "border-gray-700 bg-gray-950/40 hover:bg-gray-800"
+                  }`}
+                >
+                  <div className="text-base leading-none mb-0.5">{p.emoji}</div>
+                  <div className={`text-[11px] font-bold leading-tight ${active ? "text-gray-100" : "text-gray-300"}`}>{p.label}</div>
+                </button>
+              </Tooltip>
             );
           })}
         </div>
-        <p className="text-[11px] text-gray-500 mt-2">{RISK_OPTIONS.find((o) => o.value === current)?.blurb}</p>
       </div>
 
-      {/* Q/V/G fundamentals lens */}
+      <div className="space-y-4">
+        <Segmented label="Risk tolerance" value={risk || "balanced"} onChange={setRisk}
+          options={RISKS.map((v) => ({ value: v, label: RISK_LABELS[v] }))} />
+        <Segmented label="Investment horizon" value={horizon || "medium"} onChange={setHorizon}
+          options={HORIZONS.map((v) => ({ value: v, label: HORIZON_SHORT[v] }))} />
+        <Segmented label="Portfolio goal" value={goal || "grow"} onChange={setGoal}
+          options={GOALS.map((v) => ({ value: v, label: GOAL_SHORT[v] }))} />
+      </div>
+
+      {/* Live resolved weight breakdown */}
       <div>
-        <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2">Fundamentals lens (Quality / Value / Growth)</div>
-        <div className="space-y-3">
-          <WeightSlider label="Quality" value={weights.q} onChange={(v) => setWeights((w) => ({ ...w, q: v }))} />
-          <WeightSlider label="Value" value={weights.v} onChange={(v) => setWeights((w) => ({ ...w, v: v }))} />
-          <WeightSlider label="Growth" value={weights.g} onChange={(v) => setWeights((w) => ({ ...w, g: v }))} />
+        <div className="text-[11px] uppercase tracking-wider text-gray-500 mb-2">Resulting category weights</div>
+        <div className="space-y-1.5">
+          {CATEGORIES.map((k) => {
+            const isOri = k === "intangibles";
+            return (
+              <div key={k} className="flex items-center gap-2">
+                <Tooltip content={CATEGORY_TOOLTIPS[k]} side="right" maxWidth={220}>
+                  <div className={`w-28 shrink-0 text-[11px] flex items-center gap-1 cursor-help ${isOri ? "text-violet-300" : "text-gray-400"}`}>
+                    {isOri && <span className="text-[9px] text-violet-400">✧</span>}
+                    {CATEGORY_LABELS[k]}
+                  </div>
+                </Tooltip>
+                <div className="flex-1 h-2 rounded-full bg-gray-800 overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${isOri ? "bg-violet-500/70" : "bg-blue-600/70"}`}
+                    style={{ width: `${(percents[k] / maxPct) * 100}%` }}
+                  />
+                </div>
+                <div className={`w-9 shrink-0 text-right text-[11px] font-mono ${isOri ? "text-violet-300" : "text-gray-300"}`}>{percents[k]}%</div>
+              </div>
+            );
+          })}
         </div>
         <p className="text-[11px] text-gray-500 mt-2">
-          How the Orizin fundamentals engine weights its three pillars. Most investors want all three — leave it balanced unless you have a strong tilt.
+          Persona sets the base; risk, horizon and goal adjust it. Weights renormalize to 100%.
         </p>
       </div>
     </div>

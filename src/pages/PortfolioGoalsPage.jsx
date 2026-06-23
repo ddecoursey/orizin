@@ -69,8 +69,12 @@ export default function PortfolioGoalsPage({
   theme = 'dark',
   onSelectStock,
   detailStock,
-  weights,
-  setWeights,
+  persona,
+  setPersona,
+  horizon,
+  setHorizon,
+  goal,
+  setGoal,
   risk,
   setRisk,
 }) {
@@ -261,9 +265,18 @@ export default function PortfolioGoalsPage({
               <p className="text-[10px] text-gray-500 mt-1 leading-snug">Sent to Ori automatically for context.</p>
             </div>
             <div className="flex-1 overflow-auto p-5 space-y-6">
-              {/* Personal investing preferences — risk tolerance + Q/V/G lens */}
-              {weights && setWeights && setRisk && (
-                <InvestingPreferences weights={weights} setWeights={setWeights} risk={risk} setRisk={setRisk} />
+              {/* Personal investing profile — investor persona + risk + horizon + goal */}
+              {setPersona && setRisk && (
+                <InvestingPreferences
+                  persona={persona}
+                  setPersona={setPersona}
+                  horizon={horizon}
+                  setHorizon={setHorizon}
+                  goal={goal}
+                  setGoal={setGoal}
+                  risk={risk}
+                  setRisk={setRisk}
+                />
               )}
 
               {/* Investment Goals */}

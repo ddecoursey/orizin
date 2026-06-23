@@ -3,6 +3,8 @@ import Tooltip from "./Tooltip.jsx";
 import { IconRefresh } from "./icons.jsx";
 import { PRO_PRICE_LABEL } from "../lib/billing.js";
 import { upgradeCta } from "../lib/ranks.js";
+import { explainPersonaFit, topStrengthsRisks } from "../lib/personas.js";
+import { prettyFactorLabel } from "../lib/intangibleFactors.js";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
 // Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
@@ -45,7 +47,7 @@ function XFactor({ x }) {
         ))}
       </span>
       <span className="min-w-0">
-        <span className={`text-[11.5px] font-semibold ${s.text}`}>{x.factor}</span>
+        <span className={`text-[11.5px] font-semibold ${s.text}`}>{prettyFactorLabel(x.factor)}</span>
         {x.note && <span className="text-[11px] text-gray-400"> — {x.note}</span>}
       </span>
     </div>
@@ -66,15 +68,19 @@ function Pillar({ p, oriState }) {
           {p.label}
           {isOri && <span className="ml-0.5 text-violet-400">✦</span>}
         </span>
-        <span className={`text-[10px] font-bold shrink-0 ${locked ? "text-violet-300" : loading ? "text-gray-500" : t.text}`}>
-          {locked ? "Pro" : loading ? "…" : pct != null ? GAUGE_LABEL[p.tone] : "—"}
+        <span className={`text-[10px] font-bold shrink-0 tabular-nums ${locked ? "text-violet-300" : loading ? "text-gray-500" : pct == null ? "text-gray-600" : t.text}`}>
+          {locked ? "Pro" : loading ? "…" : pct != null ? (
+            <>{pct}<span className="ml-0.5 font-semibold text-gray-500">{GAUGE_LABEL[p.tone]}</span></>
+          ) : "—"}
         </span>
       </div>
       <div className="game-plan-pillar-track h-1.5 rounded-full bg-gray-800 overflow-hidden">
         {loading ? (
           <div className="h-full w-1/3 bg-violet-700/60 game-plan-pillar-loading animate-pulse" />
         ) : (
-          <div className={`h-full rounded-full ${t.bar} transition-all`} style={{ width: `${pct ?? 5}%` }} />
+          // No score (e.g. Fit before a portfolio/goals/theses context exists) →
+          // leave the track empty so it reads as "no data", not a stunted low score.
+          <div className={`h-full rounded-full ${t.bar} transition-all`} style={{ width: `${pct ?? 0}%` }} />
         )}
       </div>
     </div>
@@ -109,7 +115,60 @@ export function GamePlanProGate({ onUpgrade }) {
   );
 }
 
-export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false, canUseOri = true }) {
+// Deterministic persona read: how the stock's (persona-invariant) category scores
+// line up with the lens this investor persona emphasizes, plus its strongest and
+// weakest categories. No LLM — Ori's shared analysis is untouched by persona.
+const FIT_TONE = {
+  good: { border: "border-emerald-800/50", bg: "bg-emerald-950/20", text: "text-emerald-200" },
+  mixed: { border: "border-amber-800/50", bg: "bg-amber-950/20", text: "text-amber-200" },
+  weak: { border: "border-red-800/50", bg: "bg-red-950/20", text: "text-red-200" },
+};
+
+function PersonaInsight({ verdict, profile }) {
+  if (!verdict || verdict.insufficient) return null;
+  const fit = explainPersonaFit(verdict, profile || {});
+  const { strengths, risks } = topStrengthsRisks(verdict);
+  if (!fit && !strengths.length && !risks.length) return null;
+  const toneKey = !fit ? "mixed" : fit.fitScore >= 62 ? "good" : fit.fitScore >= 45 ? "mixed" : "weak";
+  const t = FIT_TONE[toneKey];
+
+  return (
+    <div className="mt-4 space-y-2.5">
+      {fit && (
+        <div className={`rounded-lg border ${t.border} ${t.bg} px-3 py-2`}>
+          <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-0.5">Persona fit · {fit.label}</div>
+          <p className={`text-[12px] leading-relaxed ${t.text}`}>{fit.text}</p>
+        </div>
+      )}
+      {(strengths.length > 0 || risks.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {strengths.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-emerald-400/90 font-bold mb-1">Top strengths</div>
+              <div className="flex flex-wrap gap-1.5">
+                {strengths.map((s) => (
+                  <span key={s.id} className="text-[10.5px] px-2 py-0.5 rounded-full bg-emerald-900/30 text-emerald-200 border border-emerald-800/40">{s.label} {s.pct}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {risks.length > 0 && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-red-400/90 font-bold mb-1">Top risks</div>
+              <div className="flex flex-wrap gap-1.5">
+                {risks.map((s) => (
+                  <span key={s.id} className="text-[10.5px] px-2 py-0.5 rounded-full bg-red-900/30 text-red-200 border border-red-800/40">{s.label} {s.pct}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false, canUseOri = true, profile = null }) {
   if (!verdict) return null;
 
   if (verdict.insufficient) {
@@ -165,6 +224,9 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
           <Pillar key={p.id} p={p} oriState={oriState} />
         ))}
       </div>
+
+      {/* Persona fit + top strengths/risks (deterministic — persona changes the lens, not the scores) */}
+      <PersonaInsight verdict={verdict} profile={profile} />
 
       {/* Narrative-driven caution */}
       {verdict.narrativeDriven && (
@@ -261,7 +323,7 @@ function OriTake({ ori, oriState, canUseOri = false, oriReady = false }) {
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1 flex items-center gap-1.5">
                 X-Factors
-                <InfoHint text="Moat, TAM, management, brand, regulation. Dots = strength. Feeds Intangibles pillar." />
+                <InfoHint text="Future growth & importance, moat strength, platform potential, management execution, ecosystem lock-in, innovation velocity. Dots = strength. Feeds Intangibles pillar." />
               </div>
               <div>
                 {ori.xFactors.map((x, i) => (

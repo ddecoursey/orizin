@@ -10,9 +10,9 @@ import { computeScores, scoringInputs, DEFAULT_WEIGHTS } from '../../src/lib/sco
 
 // Complete, middle-of-the-road baseline row. Margins/growth are fractional.
 const BASE = {
-  roic: 0.10, roe: 0.12, gross_margin: 0.40, op_margin: 0.15, fcf_margin: 0.10,
+  roic: 0.10, roa: 0.06, roe: 0.12, gross_margin: 0.40, op_margin: 0.15, fcf_margin: 0.10,
   current_ratio: 1.5, net_debt_ebitda: 1.0, debt_equity: 0.5,
-  ev_gp: 8, ev_ebitda: 12, pe: 20, fcf_yield: 0.04,
+  ev_gp: 8, ev_ebitda: 12, pe: 20, pb: 3, ps: 2, fcf_yield: 0.04,
   revenue_growth: 0.08, eps_growth: 0.08, fcf_growth: 0.08,
   ebitda_margin: 0.20, dcf: null, price: 100,
 };
@@ -26,9 +26,9 @@ function fillers(n = 4) {
   return Array.from({ length: n }, (_, i) => {
     const f = 0.6 + i * 0.2; // 0.6, 0.8, 1.0, 1.2 multipliers
     return mk(`F${i}`, {
-      roic: 0.06 * f, roe: 0.08 * f, gross_margin: 0.30 * f, op_margin: 0.10 * f,
+      roic: 0.06 * f, roa: 0.04 * f, roe: 0.08 * f, gross_margin: 0.30 * f, op_margin: 0.10 * f,
       fcf_margin: 0.06 * f, current_ratio: 1.2 * f, net_debt_ebitda: 2.5 / f,
-      debt_equity: 1.2 / f, ev_gp: 12 / f, ev_ebitda: 16 / f, pe: 28 / f,
+      debt_equity: 1.2 / f, ev_gp: 12 / f, ev_ebitda: 16 / f, pe: 28 / f, pb: 4 / f, ps: 3 / f,
       fcf_yield: 0.02 * f, revenue_growth: 0.04 * f, eps_growth: 0.04 * f,
       fcf_growth: 0.04 * f,
     });
@@ -147,8 +147,8 @@ test('identical rows tie exactly (tie-aware ranks)', () => {
 test('dataCoverage reflects real inputs and effective weights match the sliders', () => {
   const rows = [...fillers(), mk('FULL'), mk('NOG', { revenue_growth: null, eps_growth: null, fcf_growth: null })];
   const scored = bySym(computeScores(rows, { q: 50, v: 30, g: 20 }));
-  assert.equal(scored.FULL.dataCoverage, 15 / 16); // dcf is null in BASE
-  assert.equal(scored.NOG.dataCoverage, 12 / 16);
+  assert.equal(scored.FULL.dataCoverage, 18 / 19); // dcf is null in BASE
+  assert.equal(scored.NOG.dataCoverage, 15 / 19);
   assert.deepEqual(scored.FULL.effectiveWeights, { q: 0.5, v: 0.3, g: 0.2 });
   // No redistribution for the growth-less stock either:
   assert.deepEqual(scored.NOG.effectiveWeights, { q: 0.5, v: 0.3, g: 0.2 });
