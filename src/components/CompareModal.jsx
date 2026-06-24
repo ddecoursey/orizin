@@ -4,10 +4,7 @@ import { IconCompare } from "./icons.jsx";
 
 // Metric, how to format it, and which direction is "better" (for highlighting).
 const METRICS = [
-  { label: "Score", key: "score", kind: "score", better: "high" },
-  { label: "Quality", key: "qScore", kind: "score", better: "high" },
-  { label: "Value", key: "vScore", kind: "score", better: "high" },
-  { label: "Growth", key: "gScore", kind: "score", better: "high" },
+  { label: "Conviction", key: "conviction", kind: "int", better: "high" },
   { label: "Mkt Cap", key: "mcap", kind: "money", better: null },
   { label: "Price", key: "price", kind: "price", better: null },
   { label: "P/E", key: "pe", kind: "x", better: "low" },
@@ -30,12 +27,13 @@ const METRICS = [
 function display(v, kind) {
   if (v == null) return "—";
   if (kind === "score") return Math.round(v * 100);
+  if (kind === "int") return Math.round(v);
   return fmt(v, kind) ?? "—";
 }
 
 export default function CompareModal({ rows = [], universe = [], pins = [], initialA, initialB, onClose, onAskOri }) {
   const byScore = useMemo(
-    () => [...rows].sort((a, b) => (b.score || 0) - (a.score || 0)),
+    () => [...rows].sort((a, b) => (b.conviction || 0) - (a.conviction || 0)),
     [rows],
   );
   const symbols = useMemo(() => {

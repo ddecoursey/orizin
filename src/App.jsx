@@ -47,7 +47,6 @@ export default function App() {
   // Deployment environment ('production' | 'qa' | 'development') from the server,
   // so QA (sandbox) and prod (live) are visibly distinct when both are running.
   const [appEnv, setAppEnv] = useState("production");
-  const [inactivityMinutes, setInactivityMinutes] = useState(60);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -61,7 +60,6 @@ export default function App() {
         setIsAdmin(!!data.isAdmin);
         setPlan(parseSessionPlan(data.plan));
         setAppEnv(data.env || "production");
-        if (data.inactivityMinutes) setInactivityMinutes(data.inactivityMinutes);
         setAuthState("authed");
       })
       .catch(() => setAuthState("login"));
@@ -133,7 +131,6 @@ export default function App() {
   useInactivityLogout({
     enabled: authState === "authed",
     onLogout: handleLogout,
-    inactivityMinutes,
   });
 
   // The marketing/landing page is designed for dark mode only. Strip the global
@@ -308,10 +305,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     );
   };
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    // Mobile/tablet: the filter panel is an overlay, so start it OPEN — filters
-    // dominate the small screen and are the first thing users want. The saved
-    // preference governs only the desktop column.
-    if (typeof window !== "undefined" && window.innerWidth < 1024) return false;
+    // Mobile/tablet (< lg): the filter panel is a full-screen overlay, so start it
+    // HIDDEN — the stock list should be the first thing users see; they open
+    // filters on demand via the toolbar button. The saved preference governs only
+    // the desktop column.
+    if (typeof window !== "undefined" && window.innerWidth < 1024) return true;
     const explicit = localStorage.getItem(sidebarKey);
     if (explicit != null) return explicit === "1";
     const legacy = localStorage.getItem("sidebarCollapsed");
@@ -335,12 +333,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       if (typeof server.theme === "string") setTheme(server.theme);
       else patch.theme = theme;
       if (typeof server.sidebarCollapsed === "boolean") {
-        // Don't let the saved (desktop) preference auto-collapse the mobile
-        // overlay — mobile always starts with filters open.
+        // The saved preference governs the DESKTOP column only — on mobile/tablet
+        // the filter panel is a full-screen overlay that always starts hidden,
+        // so never let a server pref auto-open it on a small screen.
         if (typeof window !== "undefined" && window.innerWidth >= 1024) {
           setSidebarCollapsed(server.sidebarCollapsed);
         }
-      } else {
+      } else if (typeof window === "undefined" || window.innerWidth >= 1024) {
+        // Only migrate the collapse pref up from a desktop session — never seed
+        // the account with the mobile overlay's always-hidden state.
         patch.sidebarCollapsed = sidebarCollapsed;
       }
       if (Object.keys(patch).length) patchUserSettings(patch);
@@ -353,6 +354,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   }, []);
 
   useEffect(() => {
+    // The collapse state is a saved preference for the DESKTOP column only. On
+    // mobile/tablet it's an ephemeral full-screen overlay (always starts hidden),
+    // so don't persist it — otherwise opening/closing filters on a phone would
+    // overwrite the desktop column's saved preference.
+    if (typeof window !== "undefined" && window.innerWidth < 1024) return;
     localStorage.setItem(sidebarKey, sidebarCollapsed ? "1" : "0");
     if (settingsHydrated.current) patchUserSettings({ sidebarCollapsed });
   }, [sidebarCollapsed, sidebarKey]);
@@ -413,7 +419,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     filters,
     setFilters,
     applyFiltersFromAI,
-    weights,
     risk,
     setRisk,
     persona,
@@ -562,7 +567,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   }, []);
 
   const applyRecommendation = (rec) => {
-    // Ori no longer recommends weight changes — user controls the Q/V/G sliders directly.
+    // Ori no longer recommends weight changes — Conviction's pillar weights come from the user's persona.
     const filtersToApply = rec.filters || rec.recommendFilters || rec.applyFilters;
 
     if (filtersToApply) {
@@ -574,9 +579,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     // weights from recommendations are ignored by design
   };
 
-  // Resolve the open detail stock against the live `filtered` set so its score
-  // (and pillar scores) re-compute as the Q/V/G weights change. Falls back to
-  // the clicked snapshot if filters now exclude it.
+  // Resolve the open detail stock against the live `filtered` set so its
+  // Conviction re-computes as the persona lens changes. Falls back to the
+  // clicked snapshot if filters now exclude it.
   const detailRow = detailStock
     ? filtered.find((r) => r.symbol === detailStock.symbol) || detailStock
     : null;
@@ -752,7 +757,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
       }
     : null;
 
-  const chat = useChat(filtered, filters, weights, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
+  const chat = useChat(filtered, filters, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
     // Which main view the user is on ('screener' | 'portfolio-goals') so Ori can
     // shift its focus: portfolio analysis vs. screener recommendations.
     view: currentView,
@@ -816,7 +821,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const [copiedTickers, setCopiedTickers] = useState(false);
   const copyTickers = async () => {
     const syms = [...filtered]
-      .sort((a, b) => (b.score || 0) - (a.score || 0))
+      .sort((a, b) => (b.conviction || 0) - (a.conviction || 0))
       .slice(0, 100)
       .map((r) => r.symbol);
     if (!syms.length) return;
@@ -1054,13 +1059,12 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   />
                 </div>
 
-                <div className="-mx-1 px-1 overflow-x-auto">
+                <div className="flex justify-end">
                   <ScreenerLens
                     persona={persona} setPersona={setPersona}
                     risk={risk} setRisk={setRisk}
                     horizon={horizon} setHorizon={setHorizon}
                     goal={goal} setGoal={setGoal}
-                    showHorizon={false}
                   />
                 </div>
 
@@ -1384,7 +1388,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             setShowCompare(false);
             chat.setIsOpen(true);
             chat.sendMessage(
-              `Compare ${a} and ${b} head-to-head given my current Q/V/G weights — valuation, quality, growth, balance sheet, and which is the better buy right now and why.`,
+              `Compare ${a} and ${b} head-to-head on Conviction — valuation, quality, growth, balance sheet, and which is the better buy right now and why.`,
             );
           }}
         />

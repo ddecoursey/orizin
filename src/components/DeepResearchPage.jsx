@@ -246,7 +246,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
   const fit = computeFit(row || { symbol }, fitCtx);
 
   // ── Unified Game Plan ──────────────────────────────────────────────────────
-  // Deterministic core (instant): folds the Orizin Score + Fit + technicals +
+  // Deterministic core (instant): folds fundamentals + Fit + technicals +
   // valuation + smart money + analysts into one conviction / horizon / action.
   const deterministic = useMemo(
     () => computeVerdict(row || { symbol }, detail, fit, { risk, weights: pillarWeights }),
@@ -264,7 +264,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
         revenue_growth: r.revenue_growth, eps_growth: r.eps_growth,
         debt_equity: r.debt_equity, net_debt_ebitda: r.net_debt_ebitda,
         dcf: detail.aiData?.dcf ?? null, target: detail.aiData?.target_consensus ?? null,
-        orizinScore: r.score != null ? Math.round(r.score * 100) : null,
+        conviction: deterministic.conviction ?? null,
       },
       verdict: {
         horizon: deterministic.horizon?.label,
@@ -368,10 +368,9 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
 
   const sec = sectorChipColors(row?.sector, isLight);
   // Header shows the unified Conviction (from the Game Plan verdict), falling
-  // back to the row's lean conviction / Orizin score for arbitrary symbols.
-  const sc = canUseOri
-    ? (verdict?.conviction ?? row?.conviction ?? (row?.score != null ? Math.round(row.score * 100) : null))
-    : (row?.score != null ? Math.round(row.score * 100) : null);
+  // back to the row's lean conviction for arbitrary symbols. Same number for all
+  // tiers — free users see the lean (no-Ori) Conviction, Pro sees the refined one.
+  const sc = verdict?.conviction ?? row?.conviction ?? null;
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   // DCF margin of safety vs current price (when both present).
@@ -429,17 +428,14 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             </Tooltip>
           </div>
 
-          {/* Personalization lens — inline on the identity row on wide screens; a
-              compact fallback bar appears below the header on narrower screens. */}
+          {/* Personalization lens — single compact button on the identity row. */}
           {(setPersona || setRisk || setGoal) && (
-            <div className="hidden lg:flex shrink-0">
-              <ScreenerLens
-                persona={persona} setPersona={setPersona ?? (() => {})}
-                risk={risk} setRisk={setRisk ?? (() => {})}
-                horizon={horizon} setHorizon={setHorizon ?? (() => {})}
-                goal={goal} setGoal={setGoal ?? (() => {})}
-              />
-            </div>
+            <ScreenerLens
+              persona={persona} setPersona={setPersona ?? (() => {})}
+              risk={risk} setRisk={setRisk ?? (() => {})}
+              horizon={horizon} setHorizon={setHorizon ?? (() => {})}
+              goal={goal} setGoal={setGoal ?? (() => {})}
+            />
           )}
 
           <div className="shrink-0 text-right">
@@ -448,7 +444,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             </div>
             {sc != null && (
               <div className="text-[10px] sm:text-xs font-semibold" style={{ color: scoreColor }}>
-                {canUseOri ? `Conviction ${sc}` : `Orizin ${sc}`}
+                {`Conviction ${sc}`}
               </div>
             )}
           </div>
@@ -502,18 +498,6 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
       </div>
 
       <div className="p-4 sm:p-6 space-y-6">
-        {/* Lens fallback bar — only below lg, where the inline header lens is hidden. */}
-        {(setPersona || setRisk || setGoal) && (
-          <div className="lg:hidden flex items-center gap-2 bg-gray-900/60 border border-gray-800 rounded-lg px-3 py-2 overflow-x-auto">
-            <ScreenerLens
-              persona={persona} setPersona={setPersona ?? (() => {})}
-              risk={risk} setRisk={setRisk ?? (() => {})}
-              horizon={horizon} setHorizon={setHorizon ?? (() => {})}
-              goal={goal} setGoal={setGoal ?? (() => {})}
-            />
-          </div>
-        )}
-
         {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
         <div className="oz-fade-rise">
           {overlapNote && (

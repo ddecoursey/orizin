@@ -432,7 +432,9 @@ app.get('/api/auth/me', (req, res) => {
   if (!session.ok) {
     return res.status(session.status).json({ authenticated: false, authEnabled: true, ...session.body });
   }
-  touchUserActivity(payload.user);
+  // The client polls this endpoint + hits it on tab focus; roll the cookie here
+  // too so a tab that's only polling (no other API calls) still stays signed in.
+  if (touchUserActivity(payload.user)) refreshSessionCookie(res, req, session.user);
 
   // Admin flag is always reconciled from the DB so demotions take effect
   // immediately. Legacy env-password mode (no DB users) is the only case where
@@ -544,7 +546,11 @@ app.use('/api', (req, res, next) => {
   if (!payload) return res.status(401).json({ error: 'Unauthorized', code: 'unauthorized' });
   const session = validateSessionPayload(payload);
   if (!session.ok) return res.status(session.status).json(session.body);
-  touchUserActivity(payload.user);
+  // Rolling session: when activity advances (throttled to ~2 min), re-issue the
+  // cookie with a fresh 30-day window so an actively-used session never expires
+  // mid-use. Idle/abandoned sessions still lapse after inactivityMs, and explicit
+  // revokes (epoch bump) still apply on the next request.
+  if (touchUserActivity(payload.user)) refreshSessionCookie(res, req, session.user);
   req.userId = payload.user;
   next();
 });

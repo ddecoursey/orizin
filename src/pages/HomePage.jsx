@@ -67,7 +67,7 @@ const FEATURES = [
   {
     icon: I.filter,
     title: "Quant screener with a Conviction score",
-    body: "Rank 8,000+ stocks by Conviction — a 16-metric Quality/Value/Growth scorecard blended with valuation — with your own weights, junk-data guards, and 30+ fundamental filters.",
+    body: "Rank 8,000+ stocks by Conviction — one absolute 0–100 score blending fundamentals, valuation, technicals, insiders, analysts, portfolio fit and Ori's intangibles — tuned to your investor persona, with 30+ fundamental filters.",
   },
   {
     icon: I.spark,
@@ -98,7 +98,7 @@ const FEATURES = [
 ];
 
 const STEPS = [
-  { n: "01", title: "Screen", body: "Filter the universe and rank it with your Q/V/G weights." },
+  { n: "01", title: "Screen", body: "Filter the universe and rank it by Conviction, tuned to your investor persona." },
   { n: "02", title: "Research", body: "Open Deep Research and pressure-test the story behind the score." },
   { n: "03", title: "Decide", body: "Ask Ori how it fits your portfolio, goals and theses — then act." },
 ];
@@ -307,7 +307,7 @@ export default function HomePage({ onAuthed }) {
               </m.h1>
 
               <m.p variants={fadeUp} className="text-base sm:text-lg text-gray-400 leading-relaxed max-w-xl mb-8">
-                Orizin ranks the market on a 16-metric Quality · Value · Growth scorecard,
+                Orizin ranks the market on a single absolute Conviction score,
                 guards against junk data, and pairs it with Ori — an AI analyst that knows
                 your portfolio, your goals, and your theses.
               </m.p>
@@ -342,12 +342,12 @@ export default function HomePage({ onAuthed }) {
                     <span className="text-xs text-gray-500 ml-2">Orizin Screener</span>
                   </div>
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-800 text-gray-400">
-                    Q 35 · V 35 · G 30
+                    🌱 Balanced Growth
                   </span>
                 </div>
                 <div className="px-4 py-2">
                   <div className="grid grid-cols-[64px_1fr_88px_96px] items-center gap-3 py-1.5 text-[10px] uppercase tracking-wider text-gray-600">
-                    <span>Symbol</span><span>Trend</span><span className="text-right">Coverage</span><span className="text-right">Score</span>
+                    <span>Symbol</span><span>Trend</span><span className="text-right">Coverage</span><span className="text-right">Conviction</span>
                   </div>
                   {MOCK_ROWS.map((r, i) => (
                     <m.div
@@ -404,7 +404,7 @@ export default function HomePage({ onAuthed }) {
           >
             {[
               ["8,000+", "stocks & ETFs ranked"],
-              ["16", "metrics per scorecard"],
+              ["7", "conviction pillars per stock"],
               ["~30 min", "quote freshness, market hours"],
               ["1", "AI analyst on your side"],
             ].map(([big, small]) => (

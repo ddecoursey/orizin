@@ -140,28 +140,7 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
       </div>
 
       <div className="flex gap-1.5 flex-wrap">
-        <SubChip
-          label="Q"
-          value={r.qScore}
-          colors={pillarChipColors('q', isLight)}
-          lowCov={r.pillarCoverage && r.pillarCoverage.q < 0.5}
-          title={`Quality: ROIC, margins, balance sheet. ${r.pillarCoverage ? Math.round(r.pillarCoverage.q * 100) : '—'}% data.`}
-        />
-        <SubChip
-          label="V"
-          value={r.vScore}
-          colors={pillarChipColors('v', isLight)}
-          lowCov={r.pillarCoverage && r.pillarCoverage.v < 0.5}
-          title={`Value: multiples + margin of safety. ${r.pillarCoverage ? Math.round(r.pillarCoverage.v * 100) : '—'}% data.`}
-        />
-        <SubChip
-          label="G"
-          value={r.gScore}
-          colors={pillarChipColors('g', isLight)}
-          lowCov={r.pillarCoverage && r.pillarCoverage.g < 0.5}
-          title={`Growth: rev/EPS/FCF (TTM). ${r.pillarCoverage ? Math.round(r.pillarCoverage.g * 100) : '—'}% data.`}
-        />
-        {r.dataCoverage != null && r.score != null && (
+        {r.dataCoverage != null && r.conviction != null && (
           <SubChip
             label="Data"
             value={r.dataCoverage}
@@ -172,8 +151,8 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
             }
             title={
               (r.dataCoveragePenalty && r.dataCoveragePenalty > 0)
-                ? `Coverage ${Math.round(r.dataCoverage * 100)}%. −${r.dataCoveragePenalty} for sparse weighted pillars.`
-                : "Share of scorecard with real data. Low = less confidence."
+                ? `Coverage ${Math.round(r.dataCoverage * 100)}%. −${r.dataCoveragePenalty} for sparse data.`
+                : "Share of the key fundamentals with real data. Low = less confidence."
             }
           />
         )}
@@ -192,22 +171,6 @@ function Scorecard({ r, rank, onSelectStock, pinned, onTogglePin, canUseOri = fa
           β {r.beta != null ? r.beta.toFixed(1) : '—'}
         </span>
       </div>
-
-      {/* Effective weights */}
-      {r.effectiveWeights && (
-        <div className="mt-1.5 flex items-center gap-x-2 text-[9px] text-gray-500 font-medium tracking-tight">
-          <span className="text-gray-600">Effective:</span>
-          <span className={r.effectiveWeights.q > 0 ? "" : "text-gray-700/60"}>
-            Q {Math.round(r.effectiveWeights.q * 100)}%
-          </span>
-          <span className={r.effectiveWeights.v > 0 ? "" : "text-gray-700/60"}>
-            V {Math.round(r.effectiveWeights.v * 100)}%
-          </span>
-          <span className={r.effectiveWeights.g > 0 ? "" : "text-gray-700/60"}>
-            G {Math.round(r.effectiveWeights.g * 100)}%
-          </span>
-        </div>
-      )}
     </div>
   );
 }

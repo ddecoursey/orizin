@@ -1,244 +1,80 @@
-// Unit tests for the Orizin scoring engine (src/lib/scoring.js).
-// These encode the anti-inflation guarantees: junk values (negative P/E,
-// negative equity, negative EBITDA) can't rank as "best", and missing data
-// can't lift a stock above better-evidenced peers.
+// Unit tests for the screener scoring layer (src/lib/scoring.js) after the
+// Orizin Score → single absolute Conviction migration. The percentile-rank
+// engine is gone; the Fundamentals pillar is now an absolute profit+growth+
+// safety blend (src/lib/verdict.js fundamentalsScore).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { computeScores, scoringInputs, DEFAULT_WEIGHTS } from '../../src/lib/scoring.js';
+import { scoreRows, ruleOf40, computeDurabilityProxy } from '../../src/lib/scoring.js';
+import { fundamentalsScore, quickConviction, computeVerdict } from '../../src/lib/verdict.js';
 
-// Complete, middle-of-the-road baseline row. Margins/growth are fractional.
-const BASE = {
-  roic: 0.10, roa: 0.06, roe: 0.12, gross_margin: 0.40, op_margin: 0.15, fcf_margin: 0.10,
-  current_ratio: 1.5, net_debt_ebitda: 1.0, debt_equity: 0.5,
-  ev_gp: 8, ev_ebitda: 12, pe: 20, pb: 3, ps: 2, fcf_yield: 0.04,
-  revenue_growth: 0.08, eps_growth: 0.08, fcf_growth: 0.08,
-  ebitda_margin: 0.20, dcf: null, price: 100,
+// A complete, high-quality, growing, reasonably-priced large cap.
+const STRONG = {
+  symbol: 'STRONG', price: 100, mcap: 5e10, beta: 1.0,
+  roic: 0.25, roa: 0.15, roe: 0.30, net_margin: 0.25, op_margin: 0.30, fcf_margin: 0.22,
+  debt_equity: 0.3, net_debt_ebitda: 0.5, current_ratio: 2.5,
+  revenue_growth: 0.20, eps_growth: 0.25, fcf_growth: 0.22,
+  pe: 18, fcf_yield: 0.05, ev_ebitda: 12, dcf: 130, target_consensus: 125,
+};
+// A loss-making, shrinking, leveraged microcap.
+const WEAK = {
+  symbol: 'WEAK', price: 5, mcap: 2e8, beta: 2.4,
+  roic: -0.10, roa: -0.08, roe: -0.20, net_margin: -0.15, op_margin: -0.10, fcf_margin: -0.12,
+  debt_equity: 3.5, net_debt_ebitda: 8, current_ratio: 0.8,
+  revenue_growth: -0.10, eps_growth: -0.30, fcf_growth: -0.20,
+  pe: -5, fcf_yield: -0.03, ev_ebitda: -2,
 };
 
-function mk(symbol, overrides = {}) {
-  return { symbol, ...BASE, ...overrides };
-}
-
-// Spread of complete-data filler stocks so percentile ranks are meaningful.
-function fillers(n = 4) {
-  return Array.from({ length: n }, (_, i) => {
-    const f = 0.6 + i * 0.2; // 0.6, 0.8, 1.0, 1.2 multipliers
-    return mk(`F${i}`, {
-      roic: 0.06 * f, roa: 0.04 * f, roe: 0.08 * f, gross_margin: 0.30 * f, op_margin: 0.10 * f,
-      fcf_margin: 0.06 * f, current_ratio: 1.2 * f, net_debt_ebitda: 2.5 / f,
-      debt_equity: 1.2 / f, ev_gp: 12 / f, ev_ebitda: 16 / f, pe: 28 / f, pb: 4 / f, ps: 3 / f,
-      fcf_yield: 0.02 * f, revenue_growth: 0.04 * f, eps_growth: 0.04 * f,
-      fcf_growth: 0.04 * f,
-    });
-  });
-}
-
-const bySym = (rows) => Object.fromEntries(rows.map((r) => [r.symbol, r]));
-
-test('a complete solid stock outscores a sparse stock with a few stellar metrics', () => {
-  const rows = [
-    ...fillers(),
-    mk('SOLID', {
-      roic: 0.22, roe: 0.25, gross_margin: 0.60, op_margin: 0.28, fcf_margin: 0.20,
-      current_ratio: 2.2, net_debt_ebitda: 0.2, debt_equity: 0.2,
-      ev_gp: 5, ev_ebitda: 9, pe: 14, fcf_yield: 0.07,
-      revenue_growth: 0.18, eps_growth: 0.2, fcf_growth: 0.19,
-    }),
-    // Only 3 real inputs, all best-in-class. Under the old scoring this stock
-    // hit ~100 (perfect pillar averages + missing-pillar weight redistribution).
-    {
-      symbol: 'SPARSE', roe: 0.50, gross_margin: 0.90, pe: 6,
-      price: 100, dcf: null,
-    },
-  ];
-  const scored = bySym(computeScores(rows));
-  assert.ok(scored.SPARSE.score != null, 'sparse stock clears the 3-input gate');
-  assert.ok(
-    scored.SOLID.score > scored.SPARSE.score + 0.2,
-    `complete stock must clearly win (SOLID=${scored.SOLID.score?.toFixed(3)} vs SPARSE=${scored.SPARSE.score?.toFixed(3)})`,
-  );
+test('fundamentalsScore is absolute: strong company high, loss-maker low', () => {
+  assert.ok(fundamentalsScore(STRONG) > 0.7, `strong should score high, got ${fundamentalsScore(STRONG)}`);
+  assert.ok(fundamentalsScore(WEAK) < 0.3, `weak should score low, got ${fundamentalsScore(WEAK)}`);
 });
 
-test('stocks below the 3-input coverage gate are not scored', () => {
-  const rows = [...fillers(), { symbol: 'TWO', roe: 0.5, pe: 5, price: 100 }];
-  const scored = bySym(computeScores(rows));
-  assert.equal(scored.TWO.score, null);
-  assert.equal(scored.TWO.qScore, null);
-  assert.deepEqual(scored.TWO.effectiveWeights, { q: 0, v: 0, g: 0 });
+test('fundamentalsScore: missing inputs drop out (not imputed); null when none', () => {
+  assert.equal(fundamentalsScore({ symbol: 'BARE' }), null);
+  // Only profitability present → still scores high on profit alone (no penalty
+  // for the absent growth/safety pillars — they simply fall out).
+  assert.ok(fundamentalsScore({ roic: 0.25, op_margin: 0.30, net_margin: 0.25 }) > 0.6);
 });
 
-test('negative P/E (loss-maker) ranks worst on value, not best', () => {
-  const rows = [
-    mk('NEGPE', { pe: -5 }),
-    mk('CHEAP', { pe: 8 }),
-    mk('DEAR', { pe: 40 }),
-  ];
-  const scored = bySym(computeScores(rows));
-  assert.ok(scored.CHEAP.vScore > scored.DEAR.vScore, 'positive low P/E beats high P/E');
-  assert.ok(scored.DEAR.vScore > scored.NEGPE.vScore, 'even an expensive P/E beats a negative one');
+test('scoreRows attaches Conviction; strong clearly outranks weak', () => {
+  const [s, w] = scoreRows([STRONG, WEAK]);
+  assert.ok(Number.isFinite(s.conviction), 'strong gets a numeric conviction');
+  assert.ok(Number.isFinite(w.conviction), 'weak gets a numeric conviction');
+  assert.ok(s.conviction > w.conviction + 20, `strong must beat weak (${s.conviction} vs ${w.conviction})`);
 });
 
-test('negative equity is treated as distress: D/E ranks worst and ROE is voided', () => {
-  const s = scoringInputs({ debt_equity: -0.4, roe: 4.2 });
-  assert.equal(s.roe, null, 'ROE on negative equity is meaningless');
-  assert.ok(s.debt_equity > 1e9, 'negative D/E ranks as the worst leverage');
-
-  const rows = [
-    mk('NEGEQ', { debt_equity: -0.4, roe: 4.2 }), // junk "400% ROE"
-    mk('CLEAN', { debt_equity: 0.2, roe: 0.20 }),
-    mk('LEVERED', { debt_equity: 2.5, roe: 0.10 }),
-  ];
-  const scored = bySym(computeScores(rows));
-  assert.ok(
-    scored.CLEAN.qScore > scored.NEGEQ.qScore,
-    'a clean balance sheet must beat negative equity on quality',
-  );
+test('scoreRows leaves sparse rows unscored (conviction null)', () => {
+  const [row] = scoreRows([{ symbol: 'THIN', price: 10, pe: 12 }]); // <3 fundamentals inputs
+  assert.equal(row.conviction, null);
+  assert.equal(row.durabilityProxy, null);
 });
 
-test('missing growth data can no longer beat real mediocre growth', () => {
-  const noGrowth = mk('NOG', { revenue_growth: null, eps_growth: null, fcf_growth: null });
-  const midGrowth = mk('MIDG', {}); // BASE growth = median of the filler spread
-  const rows = [...fillers(), noGrowth, midGrowth];
-  const scored = bySym(computeScores(rows));
-  assert.ok(
-    scored.MIDG.score > scored.NOG.score,
-    `real median growth must beat unknown growth (MIDG=${scored.MIDG.score?.toFixed(3)} vs NOG=${scored.NOG.score?.toFixed(3)})`,
-  );
+test('scoreRows dataCoverage reflects how many key fundamentals are present', () => {
+  const [s] = scoreRows([STRONG]);
+  assert.ok(s.dataCoverage > 0.8, `near-complete row should be high coverage, got ${s.dataCoverage}`);
+  const [thin] = scoreRows([{ symbol: 'T', roic: 0.2, op_margin: 0.2, pe: 15 }]);
+  assert.ok(thin.dataCoverage < 0.4);
 });
 
-test('conviction penalizes missing data in heavily weighted pillars', () => {
-  const noGrowth = mk('NOG', { revenue_growth: null, eps_growth: null, fcf_growth: null });
-  const full = mk('FULL');
-  const rows = [...fillers(), noGrowth, full];
-  const scored = bySym(computeScores(rows, { q: 49, v: 17, g: 60 }, 'aggressive'));
-
-  assert.ok(scored.NOG.dataCoveragePenalty > 0, 'missing the heavily weighted Growth pillar should reduce Conviction');
-  assert.equal(scored.FULL.dataCoveragePenalty, 0, 'complete growth data should not receive the missing-pillar penalty');
-  assert.equal(
-    scored.NOG.conviction,
-    scored.NOG.baseConviction - scored.NOG.dataCoveragePenalty,
-    'headline Conviction should reflect the data-coverage penalty',
-  );
+test('screener quickConviction equals Deep Research computeVerdict for a no-detail row', () => {
+  // The consistency guarantee: the lean screener number must not jump when the
+  // user opens Deep Research on a symbol with no extra detail loaded yet.
+  const qc = quickConviction(STRONG);
+  const dr = computeVerdict(STRONG, {}, null, {}).conviction;
+  assert.equal(qc, dr);
 });
 
-test('negative EV/EBITDA: cheap only when EBITDA is positive', () => {
-  const netCash = scoringInputs({ ev_ebitda: -2, ebitda_margin: 0.2 });
-  assert.equal(netCash.ev_ebitda, -2, 'negative EV with positive EBITDA stays (genuinely cheap)');
-
-  const junk = scoringInputs({ ev_ebitda: -3, ebitda_margin: -0.1 });
-  assert.ok(junk.ev_ebitda > 1e9, 'negative EBITDA makes the multiple junk → worst');
+test('ruleOf40 passes high growth+margin, fails low', () => {
+  assert.equal(ruleOf40({ revenue_growth: 0.25, ebitda_margin: 0.25 }).passes, true);
+  assert.equal(ruleOf40({ revenue_growth: 0.05, ebitda_margin: 0.10 }).passes, false);
+  assert.deepEqual(ruleOf40({}), { score: null, passes: false });
 });
 
-test('ND/EBITDA is ignored when EBITDA is negative; current ratio capped at 3', () => {
-  assert.equal(scoringInputs({ net_debt_ebitda: -4, ebitda_margin: -0.2 }).net_debt_ebitda, null);
-  assert.equal(scoringInputs({ net_debt_ebitda: 1.5, ebitda_margin: 0.2 }).net_debt_ebitda, 1.5);
-  assert.equal(scoringInputs({ current_ratio: 25 }).current_ratio, 3);
-});
-
-test('identical rows tie exactly (tie-aware ranks)', () => {
-  const rows = [mk('T1'), mk('T2'), mk('OTHER', { roic: 0.2, pe: 10 })];
-  const scored = bySym(computeScores(rows));
-  assert.equal(scored.T1.score, scored.T2.score);
-  assert.equal(scored.T1.qScore, scored.T2.qScore);
-});
-
-test('dataCoverage reflects real inputs and effective weights match the sliders', () => {
-  const rows = [...fillers(), mk('FULL'), mk('NOG', { revenue_growth: null, eps_growth: null, fcf_growth: null })];
-  const scored = bySym(computeScores(rows, { q: 50, v: 30, g: 20 }));
-  assert.equal(scored.FULL.dataCoverage, 18 / 19); // dcf is null in BASE
-  assert.equal(scored.NOG.dataCoverage, 15 / 19);
-  assert.deepEqual(scored.FULL.effectiveWeights, { q: 0.5, v: 0.3, g: 0.2 });
-  // No redistribution for the growth-less stock either:
-  assert.deepEqual(scored.NOG.effectiveWeights, { q: 0.5, v: 0.3, g: 0.2 });
-});
-
-test('zero weights produce no score; defaults are 35/35/30', () => {
-  const rows = [...fillers(), mk('X')];
-  const scored = bySym(computeScores(rows, { q: 0, v: 0, g: 0 }));
-  assert.equal(scored.X.score, null);
-  assert.deepEqual(DEFAULT_WEIGHTS, { q: 30, v: 30, g: 40 });
-});
-
-test('rule of 40 is preserved on scored rows', () => {
-  const rows = [...fillers(), mk('R40', { revenue_growth: 0.30, ebitda_margin: 0.20 })];
-  const scored = bySym(computeScores(rows));
-  assert.equal(Math.round(scored.R40.rule_of_40), 50);
-  assert.equal(scored.R40.passes_rule_of_40, true);
-});
-
-/**
- * New regression / behavioral test for the conviction + data-coverage penalty.
- * We simulate the real-world situation that triggered the original bug report:
- * some stocks have excellent Quality + Value numbers (and high FCF yield etc.)
- * but *zero* growth data (rev/eps/fcf), while others have solid but real growth.
- * Under the (now default) 30/30/40 weights + balanced risk, the headline Conviction
- * used for screener ranking must apply a meaningful penalty to the no-evidence
- * names and must result in growth-evidenced names dominating the very top.
- */
-test('default lens (30/30/40 + balanced) applies a real data-coverage penalty to a missing Growth pillar', () => {
-  // "Miner-like" strong no-growth names (high margins, cheap multiples, good ROIC/ROE, high FCFY, realistic size).
-  const strongNoG1 = mk('NOGMINER1', {
-    revenue_growth: null, eps_growth: null, fcf_growth: null,
-    pe: 11, ev_ebitda: 5.5, fcf_yield: 0.09, op_margin: 0.48, fcf_margin: 0.32,
-    roic: 0.16, roe: 0.24, mcap: 60e9, beta: 1.1, net_margin: 0.22,
-    price: 50, dcf: null, target_consensus: 70,
-  });
-  const strongNoG2 = mk('NOGMINER2', {
-    revenue_growth: null, eps_growth: null, fcf_growth: null,
-    pe: 9, ev_ebitda: 4.2, fcf_yield: 0.12, op_margin: 0.51, fcf_margin: 0.35,
-    roic: 0.18, roe: 0.27, mcap: 40e9, beta: 1.3, net_margin: 0.25,
-    price: 80, dcf: null, target_consensus: 110,
-  });
-
-  // Solid names *with* real growth (slightly less extreme V/Q but evidenced growth).
-  const goodGrowth1 = mk('GROW1', {
-    revenue_growth: 0.12, eps_growth: 0.15, fcf_growth: 0.18,
-    pe: 18, ev_ebitda: 10, fcf_yield: 0.06, op_margin: 0.22, fcf_margin: 0.18,
-    roic: 0.14, roe: 0.19, mcap: 25e9, beta: 1.0, net_margin: 0.12,
-    price: 40, dcf: 55, target_consensus: 48,
-  });
-  const goodGrowth2 = mk('GROW2', {
-    revenue_growth: 0.22, eps_growth: 0.28, fcf_growth: 0.25,
-    pe: 14, ev_ebitda: 8, fcf_yield: 0.07, op_margin: 0.26, fcf_margin: 0.21,
-    roic: 0.19, roe: 0.23, mcap: 8e9, beta: 1.2, net_margin: 0.15,
-    price: 25, dcf: null, target_consensus: 32,
-  });
-
-  const rows = [...fillers(6), strongNoG1, strongNoG2, goodGrowth1, goodGrowth2];
-  const scored = bySym(computeScores(rows, DEFAULT_WEIGHTS, 'balanced'));
-
-  // The no-growth miners must receive a non-trivial penalty under the default 40% G weight.
-  assert.ok(
-    scored.NOGMINER1.dataCoveragePenalty >= 5,
-    `strong no-growth name must receive meaningful default-lens penalty (got ${scored.NOGMINER1.dataCoveragePenalty})`
-  );
-  assert.ok(
-    scored.NOGMINER2.dataCoveragePenalty >= 5,
-    `strong no-growth name must receive meaningful default-lens penalty (got ${scored.NOGMINER2.dataCoveragePenalty})`
-  );
-  assert.equal(scored.GROW1.dataCoveragePenalty, 0, 'growth-evidenced name gets zero missing-pillar penalty');
-  assert.equal(scored.GROW2.dataCoveragePenalty, 0, 'growth-evidenced name gets zero missing-pillar penalty');
-
-  // Headline conviction must be exactly base minus penalty.
-  assert.equal(
-    scored.NOGMINER1.conviction,
-    scored.NOGMINER1.baseConviction - scored.NOGMINER1.dataCoveragePenalty
-  );
-
-  // The coverage penalty must have real teeth: each no-growth name's final
-  // conviction sits a meaningful amount below its own base. We no longer assert
-  // that growth-evidenced names dominate the very top — the deterministic
-  // Intangibles baseline (durabilityProxy / cached Ori) intentionally lets
-  // proven-quality businesses surface even when growth DATA isn't populated;
-  // Ori still refines on Deep Research.
-  assert.ok(
-    scored.NOGMINER1.baseConviction - scored.NOGMINER1.conviction >= 5,
-    `coverage penalty must measurably lower a no-growth name (got ${scored.NOGMINER1.baseConviction - scored.NOGMINER1.conviction})`
-  );
-  assert.ok(
-    scored.NOGMINER2.baseConviction - scored.NOGMINER2.conviction >= 5,
-    `coverage penalty must measurably lower a no-growth name (got ${scored.NOGMINER2.baseConviction - scored.NOGMINER2.conviction})`
-  );
+test('computeDurabilityProxy is 0..100 and rewards quality', () => {
+  const s = computeDurabilityProxy(STRONG);
+  const w = computeDurabilityProxy(WEAK);
+  assert.ok(s >= 0 && s <= 100);
+  assert.ok(s > w, `durable business should beat the junky one (${s} vs ${w})`);
 });

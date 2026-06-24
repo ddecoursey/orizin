@@ -3,8 +3,8 @@ import Tooltip from "./Tooltip.jsx";
 // Small "i" info icon that reveals an explanation on hover/focus (focus also
 // covers tap on mobile). Now backed by the shared portal <Tooltip> — instant and
 // never clipped by an overflow container — so it matches every tooltip
-// project-wide. Used to explain Orizin's custom computed scores (Orizin Score,
-// Fit, Smart Money, intangibles, …).
+// project-wide. Used to explain Orizin's custom computed scores (Conviction,
+// Fit, Insiders, intangibles, …).
 export default function InfoHint({ text, className = "", side = "top" }) {
   return (
     <Tooltip content={text} side={side} maxWidth={200} className={`align-middle ${className}`}>

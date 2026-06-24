@@ -7,7 +7,13 @@ export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 export function inactivityMs() {
   const n = parseInt(process.env.SESSION_INACTIVITY_MS ?? "", 10);
-  return Number.isFinite(n) && n > 0 ? n : 60 * 60 * 1000; // 1 hour
+  // Default 30 days — matches the cookie max-age. Combined with rolling re-issue
+  // on activity (see the auth middleware), this is a "stay signed in" session:
+  // you're only signed out after 30 days of TRUE inactivity, or an explicit
+  // revoke (sign out / sign out all devices / password change). The old 1-hour
+  // window logged active-but-quiet users out constantly (a backgrounded tab's
+  // keep-alive poll is throttled by the browser, so last-seen went stale).
+  return Number.isFinite(n) && n > 0 ? n : 30 * 24 * 60 * 60 * 1000;
 }
 
 export function clientIp(req) {

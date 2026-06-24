@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { computeRankedRows, applyWeights } from "../lib/scoring.js";
+import { scoreRows } from "../lib/scoring.js";
 import { quickConviction } from "../lib/verdict.js";
 import { buildFitContext, computeFit } from "../lib/fitScore.js";
 import { fetchUserSettings, patchUserSettings, flushUserSettings } from "../lib/userStore.js";
@@ -21,44 +21,8 @@ function tabsKey(user) {
 function activeKey(user) {
   return `screener_active_tab_v2:${user}`;
 }
-function weightsKey(user) {
-  return `screener_weights_v1:${user}`;
-}
 function sortStorageKey(user) {
   return `screener_sort_v1:${user}`;
-}
-
-// Keep in sync with DEFAULT_WEIGHTS in lib/scoring.js — the old local default
-// ({ q:25, v:25, b:15, d:20, g:15 }) carried dead b/d pillars from a previous
-// scoring model and silently gave new users a different Q/V/G mix than the
-// scoring engine (and Ori's prompt) document.
-const DEFAULT_WEIGHTS = { q: 35, v: 35, g: 30 };
-
-// Only the three live pillars; strips legacy b/d keys from old saved blobs.
-function sanitizeWeights(w) {
-  const out = { ...DEFAULT_WEIGHTS };
-  if (w && typeof w === "object") {
-    for (const k of ["q", "v", "g"]) {
-      const n = Number(w[k]);
-      if (Number.isFinite(n)) out[k] = Math.max(0, Math.min(100, n));
-    }
-  }
-  return out;
-}
-
-function loadWeights(user) {
-  try {
-    const raw = localStorage.getItem(weightsKey(user));
-    if (!raw) return { ...DEFAULT_WEIGHTS };
-    return sanitizeWeights(JSON.parse(raw));
-  } catch {
-    return { ...DEFAULT_WEIGHTS };
-  }
-}
-function saveWeights(user, weights) {
-  try {
-    localStorage.setItem(weightsKey(user), JSON.stringify(weights));
-  } catch {}
 }
 
 // Table column sort — global per user (not per screener tab). Persisted like weights.
@@ -194,6 +158,9 @@ export const DEFAULT_FILTERS = {
   // Manual Add Ticker works for anything.
   universe: "global",
   includeEtfs: false,  // ETFs/funds hidden by default; toggle on in the filter pane (universe refresh still loads the full list)
+  // Conviction (0-100) — the headline score. Applied AFTER scoring (it's computed
+  // per-row post-filter), not in applyFilters. See convictionFiltered below.
+  convictionMin: "",
   mcapMin: "",
   mcapMax: "",
   volMin: "",
@@ -249,6 +216,40 @@ function condNum(v) {
   if (v === null || v === undefined || v === "") return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+// Conviction (0-100) is computed AFTER the metric filters (it needs the scored
+// rows), so its filter runs as a final pass. Mirrors numericMatch's operator
+// semantics. An explicit Conviction filter excludes unscored rows (no number to
+// judge). Returns true when no Conviction filter is set.
+export function convictionPasses(conviction, cond) {
+  if (cond == null || cond === "") return true;
+  const c = typeof cond === "object" ? cond : { op: ">=", value: cond };
+  const op = c.op || ">=";
+  const num = (v) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  if (op === "between" || op === "range") {
+    const min = num(c.min);
+    const max = num(c.max);
+    if (min == null && max == null) return true; // empty between → no filter
+    if (conviction == null || !Number.isFinite(conviction)) return false;
+    if (min != null && conviction < min) return false;
+    if (max != null && conviction > max) return false;
+    return true;
+  }
+  const value = num(c.value);
+  if (value == null) return true; // cleared input → filter off
+  if (conviction == null || !Number.isFinite(conviction)) return false;
+  switch (op) {
+    case ">":  return conviction > value;
+    case ">=": return conviction >= value;
+    case "<":  return conviction < value;
+    case "<=": return conviction <= value;
+    case "=":
+    case "==": return conviction == value;
+    case "!=":
+    case "<>": return conviction != value;
+    default:   return true;
+  }
 }
 
 export function applyFilters(all, f, pins) {
@@ -438,7 +439,6 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   const [status, setStatus] = useState({ type: "loading", msg: "Connecting…" });
   const [lastFetch, setLastFetch] = useState(null);
   const [filters, setFiltersRaw] = useState({ ...DEFAULT_FILTERS });
-  const [weights, setWeightsRaw] = useState(() => loadWeights(user));
   const [risk, setRiskRaw] = useState(() => loadRisk(user));
   const [persona, setPersonaRaw] = useState(() => loadPersona(user));
   const [horizon, setHorizonRaw] = useState(() => loadHorizon(user));
@@ -465,16 +465,6 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   // settings that exist server-side before hydration finishes.
   const hydratedRef = useRef(false);
 
-  // Weights setter that mirrors to localStorage (instant on reload) and, once
-  // hydrated, syncs to the server so the user's lens follows their account.
-  function setWeights(updater) {
-    setWeightsRaw((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      saveWeights(user, next);
-      if (hydratedRef.current) patchUserSettings({ weights: next });
-      return next;
-    });
-  }
 
   // Risk-tolerance setter — mirrors weights (localStorage now, server once hydrated).
   function setRisk(value) {
@@ -575,11 +565,6 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     [filteredRows, canUseOri],
   );
 
-  const rankedData = useMemo(
-    () => computeRankedRows(scoringRows),
-    [scoringRows]
-  );
-
   // Personalized Fit context + per-symbol Fit map. Built from the user's
   // portfolio/goals/theses; null when there's no context (so the screener stays
   // impersonal for users who haven't set anything up). Memoized over the whole
@@ -603,16 +588,17 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   }, [stocks, fitCtx, hasFitContext]);
 
   // The 7-category conviction weights resolved from the user's investor persona +
-  // risk + horizon + goal. Drives the whole-app Conviction blend; Q/V/G stays the
-  // (fixed) lens for the Fundamentals sub-score only.
+  // risk + horizon + goal. Drives the whole-app Conviction blend.
   const pillarWeights = useMemo(
     () => resolvePillarWeights({ persona, risk, horizon, goal }),
     [persona, risk, horizon, goal],
   );
 
+  // Attach the single Conviction (absolute) to every visible row. No cross-row
+  // ranking anymore, so this is one cheap O(n) pass re-run when the lens changes.
   const filteredWeighted = useMemo(
-    () => applyWeights(rankedData, weights, risk, fitMap, pillarWeights),
-    [rankedData, weights, risk, fitMap, pillarWeights]
+    () => scoreRows(scoringRows, { risk, fitMap, pillarWeights }),
+    [scoringRows, risk, fitMap, pillarWeights]
   );
 
   // Deep Research overrides are computed under the current personalization lens.
@@ -639,7 +625,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   // trickle is the sole lite generator. Frugal by design:
   //   • only a handful of the highest-Conviction leaders,
   //   • Pro/admin only (free users get 402s — don't spend the quota),
-  //   • debounced so dragging Q/V/G sliders doesn't sweep per frame,
+  //   • debounced so changing the persona lens doesn't sweep per frame,
   //   • concurrency 1 (one lite call in flight) so chat/DR stay responsive,
   //   • in-memory for the session; server-side db.getAllStocks re-attaches the
   //     cached review on the next data load (persists for free, across users).
@@ -704,7 +690,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   // Fold any fetched lite review into the displayed Conviction, exactly the way
   // Deep Research's computeVerdict does on open: re-run the shared quickConviction
   // with the cached Ori attached (so the Intangibles pillar + Ori's ±20 nudge
-  // apply), minus the same data-coverage penalty applyWeights used. A Deep
+  // apply), minus the same data-coverage penalty scoreRows used. A Deep
   // Research override is canonical and wins untouched (DR already folded Ori in) —
   // we only attach `ori` there for the ✧ badge/tooltip.
   const withOri = useMemo(() => {
@@ -720,6 +706,15 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       return { ...r, conviction: adj, ori: o };
     });
   }, [filtered, oriData, convictionOverrides, fitMap, risk, pillarWeights]);
+
+  // Final pass: the Conviction filter (applied here because Conviction is only
+  // known after scoring). Same reference when no Conviction filter is set.
+  const convictionFiltered = useMemo(() => {
+    const cond = filters.convictionMin;
+    if (cond == null || cond === "") return withOri;
+    const filteredOut = withOri.filter((r) => convictionPasses(r.conviction, cond));
+    return filteredOut.length === withOri.length ? withOri : filteredOut;
+  }, [withOri, filters.convictionMin]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
 
@@ -955,7 +950,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       if (cancelled) return;
 
       const hasServerState =
-        server && (Array.isArray(server.tabs) || server.weights || server.activeTab || server.risk || server.sort || server.persona || server.horizon || server.goal);
+        server && (Array.isArray(server.tabs) || server.activeTab || server.risk || server.sort || server.persona || server.horizon || server.goal);
 
       if (hasServerState) {
         let nextTabs = tabs;
@@ -969,11 +964,6 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
           nextActive = server.activeTab;
           setActiveTabState(nextActive);
           localStorage.setItem(activeKey(user), nextActive);
-        }
-        if (server.weights) {
-          const clean = sanitizeWeights(server.weights);
-          setWeightsRaw(clean);
-          saveWeights(user, clean);
         }
         if (server.risk) {
           const cleanRisk = sanitizeRisk(server.risk);
@@ -1014,7 +1004,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
         const tp = at?.state?.pins;
         setPins(Array.isArray(tp) ? new Set(tp) : new Set());
       } else {
-        patchUserSettings({ tabs, activeTab, weights, risk, persona, horizon, goal, sort: { key: tableSortKey, dir: tableSortDir } });
+        patchUserSettings({ tabs, activeTab, risk, persona, horizon, goal, sort: { key: tableSortKey, dir: tableSortDir } });
       }
 
       hydratedRef.current = true;
@@ -1354,17 +1344,14 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
 
   return {
     stocks,
-    filtered: withOri,  // post-filter/weight rows; lite/cached Ori reviews folded into Conviction
-    // Filtered set BEFORE weighting (stable when only the Q/V/G sliders move) — the
-    // table uses it for the heatmap so dragging weights doesn't recompute it.
+    filtered: convictionFiltered,  // post-filter rows (incl. Conviction filter); lite/cached Ori reviews folded in
+    // Filtered set BEFORE conviction scoring — the table uses it for the heatmap.
     filteredRows,
     status,
     lastFetch,
     filters,
     setFilters,
     applyFiltersFromAI,
-    weights,
-    setWeights,
     risk,
     setRisk,
     persona,

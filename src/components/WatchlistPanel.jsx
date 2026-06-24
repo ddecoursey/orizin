@@ -3,12 +3,8 @@ import Sparkline from "./Sparkline.jsx";
 import GlobalSearch from "./GlobalSearch.jsx";
 import Tooltip from "./Tooltip.jsx";
 
-function ScoreMini({ row, canUseOri }) {
-  const v = canUseOri
-    ? row?.conviction
-    : row?.score != null
-      ? Math.round(row.score * 100)
-      : null;
+function ScoreMini({ row }) {
+  const v = row?.conviction ?? null;
   if (v == null) return <span className="text-gray-600 text-[10px]">—</span>;
   const color = v >= 70 ? "text-emerald-400" : v >= 45 ? "text-amber-400" : "text-red-400";
   return <span className={`text-[10px] font-bold font-mono tabular-nums ${color}`}>{v}</span>;
@@ -95,7 +91,6 @@ export default function WatchlistPanel({
   sparklines = new Map(),
   snapshots = {},
   pendingSymbols = new Set(),
-  canUseOri = false,
   onSelectSymbol,
   alerts = [],
   onDismissAlert,
@@ -168,7 +163,7 @@ export default function WatchlistPanel({
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="font-bold text-gray-100 text-xs">{sym}</span>
-                          <ScoreMini row={row} canUseOri={canUseOri} />
+                          <ScoreMini row={row} />
                           {pct != null && (
                             <span className={`text-[10px] font-mono font-semibold ${pctCls(pct)}`}>
                               {pct >= 0 ? "+" : ""}{pct}%

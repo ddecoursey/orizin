@@ -1231,7 +1231,7 @@ Price ${num(s.price)} · Market cap ${num(s.mcap)} · Beta ${num(s.beta)}
 
 WHAT THE NUMBERS SAY (the deterministic verdict you are adjusting):
 - Hold horizon: ${clean(v.horizon, 40) || "—"} · Right-now action: ${clean(v.action, 40) || "—"} · Conviction ${num(v.conviction)}/100
-- Fundamentals/Orizin: ${num(s.orizinScore)}/100 · durability ${num(v.durability)} · valuation ${num(v.valuation)}
+- Durability ${num(v.durability)}/100 · valuation ${num(v.valuation)}/100 (fundamentals detail below)
 - Flags: ${flags.length ? flags.join(", ") : "none"}
 ${reasons.length ? `- Drivers: ${reasons.join("; ")}` : ""}
 

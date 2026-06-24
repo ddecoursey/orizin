@@ -128,7 +128,7 @@ export function welcomeEmail() {
     text: 'Welcome to Orizin! Your account is ready. Screen stocks, run deep research, and track your portfolio. Upgrade to Pro anytime to unlock Ori, the AI analyst.',
     html: wrap(
       `<p>Welcome aboard! Your Orizin account is ready.</p>
-       <p>Screen the market with Orizin Scores, run Deep Research, and track your portfolio, goals and theses. Upgrade to <strong>Pro</strong> anytime to unlock <strong>Ori</strong> — your portfolio-aware AI analyst.</p>`,
+       <p>Screen the market by Conviction, run Deep Research, and track your portfolio, goals and theses. Upgrade to <strong>Pro</strong> anytime to unlock <strong>Ori</strong> — your portfolio-aware AI analyst.</p>`,
     ),
   };
 }

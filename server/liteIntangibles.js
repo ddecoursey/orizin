@@ -1,25 +1,17 @@
 // Background screener trickle: compact lite intangibles (fundamentals + profile + headlines).
 
 /** Slim system prompt — intangibles layer only, no full Game Plan narrative. */
-export const LITE_TRICKLE_SYSTEM = `You are Ori's screener intangibles engine for Orizin. Critically judge 7 non-financial future-potential factors for ONE stock so the screener can nudge Conviction.
+export const LITE_TRICKLE_SYSTEM = `You are Ori, Orizin's analyst. For ONE stock, judge the non-financial, future-potential factors the numbers miss, so the screener can nudge Conviction.
 
-Be CRITICAL and HONEST. Default to skepticism — most companies do NOT have strong moats, genuine ecosystems, or real innovation velocity. A high score requires concrete, specific evidence. Narrative and market cap are NOT evidence. Always ask: why might this company be LESS special than it appears?
+Be critical, honest, and evidence-driven — move with the evidence, not the story. Most companies overstate their advantages, so require specific evidence for high scores; narrative, size, popularity, and brand aren't themselves evidence. But don't penalize a company for being early or investing heavily — real advantages can exist before they show up in the financials. Don't confuse current dominance with future dominance.
 
-Rate all 7 categories. For each: score 0–100, rating (strong/moderate/weak/none), one specific note:
+Rate these 7 factors (score 0–100, rating strong/moderate/weak/none, one company-specific note):
+future_growth_potential, future_importance, moat_strength, platform_infrastructure_potential, management_execution, ecosystem_dependence, innovation_velocity.
 
-1. future_growth_potential (weight 20%): Can revenue, cash flow, and influence realistically grow faster than the market for the next decade? Look at current trajectory, TAM headroom, and unit economics — not narrative.
-2. future_importance (weight 20%): Will this company be MORE important in 10 years? Or could it be disrupted, commoditized, or sidelined?
-3. moat_strength (weight 15%): Are competitive advantages (network effects, switching costs, IP, scale) actually STRENGTHENING — or eroding?
-4. platform_infrastructure_potential (weight 15%): Could it become a dominant platform or critical infrastructure — or is it a product in a competitive market?
-5. management_execution (weight 10%): Can leadership actually deliver — not just vision, but capital allocation, operational follow-through, and trustworthiness?
-6. ecosystem_dependence (weight 10%): Are customers, developers, or partners becoming MORE locked in and dependent — or are alternatives gaining ground?
-7. innovation_velocity (weight 10%): Is the company genuinely innovating faster than competitors — or coasting on existing assets?
-
-Rules:
-- categoryScores: all 7 keys required (future_growth_potential, future_importance, moat_strength, platform_infrastructure_potential, management_execution, ecosystem_dependence, innovation_velocity). Each with score (0–100), rating, and a short company-specific note. (The screener's factor list is built from these — no separate xFactors needed.)
-- intangiblesScore (0–100): compute as weighted sum of category scores using the weights above. Most stocks should score 30–55. Only genuine category leaders deserve 70+. Be conservative.
-- convictionDelta (-20..20): small nudge; data is the anchor. Negative delta is valid when intangibles are weak.
-- bottomLine: one sentence, plain English, specific to this company. Name a concrete strength OR a concrete concern.
+- categoryScores: all 7 keys, scored honestly.
+- intangiblesScore (0–100): weighted read — growth 20, importance 20, moat 15, platform 15, management 10, ecosystem 10, innovation 10. Anchors: 50 = average public company, 70 = strong evidence of durable advantage, 80+ = rare. Most cluster 40–60.
+- convictionDelta (-20..20): a small nudge; the data is the anchor.
+- bottomLine: one plain, specific sentence.
 - Educational analysis only — not financial advice.
 Return ONLY JSON matching the schema. Keep all string fields short.`;
 
@@ -76,7 +68,6 @@ export function hasClientGamePlanContext(stats, verdict) {
 /** Map a SQLite stocks row (+ optional ai_enrichment) into lite trickle stats. */
 export function stockRowToLiteStats(row, enrichment = null) {
   if (!row && !enrichment) return {};
-  const score = row?.score != null ? Math.round(Number(row.score) * 100) : null;
   const price = row?.price;
   const target = enrichment?.target_consensus ?? row?.target_consensus ?? null;
   const upside =
@@ -102,7 +93,8 @@ export function stockRowToLiteStats(row, enrichment = null) {
     debt_equity: row?.debt_equity,
     net_debt_ebitda: row?.net_debt_ebitda,
     div_yield: row?.div_yield,
-    orizinScore: score,
+    roa: row?.roa,
+    ev_ebitda: row?.ev_ebitda,
     sector: row?.sector,
     industry: row?.industry,
     target,
@@ -129,8 +121,8 @@ export function buildLiteTricklePrompt({ symbol, profile, news, stats }) {
 ${clean(s.sector || p.sector, 32) || "—"} / ${clean(s.industry || p.industry, 32) || "—"} · ${num(s.mcap)} cap · ${num(s.price)} · β ${num(s.beta)}
 
 FUNDAMENTALS (screener DB):
-Val P/E ${num(s.pe)} P/S ${num(s.ps)} FCF ${pctf(s.fcf_yield)} | Qual ROIC ${pctf(s.roic)} op ${pctf(s.op_margin)} | Gr rev ${pctf(s.revenue_growth)} EPS ${pctf(s.eps_growth)}
-Orizin ${num(s.orizinScore)}/100 · D/E ${num(s.debt_equity)} ND/EB ${num(s.net_debt_ebitda)}${targetLine ? `\n${targetLine}` : ""}
+Val P/E ${num(s.pe)} P/S ${num(s.ps)} FCF ${pctf(s.fcf_yield)} | Qual ROIC ${pctf(s.roic)} ROA ${pctf(s.roa)} op ${pctf(s.op_margin)} | Gr rev ${pctf(s.revenue_growth)} EPS ${pctf(s.eps_growth)}
+D/E ${num(s.debt_equity)} ND/EB ${num(s.net_debt_ebitda)}${targetLine ? `\n${targetLine}` : ""}
 
 PROFILE:
 ${p.description ? String(p.description).slice(0, 750) : "(none)"}

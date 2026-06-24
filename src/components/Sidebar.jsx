@@ -26,9 +26,10 @@ function PinStar({ className = "" }) {
   );
 }
 
-function FilterRow({ label, filterKey, filters, set, step = 1 }) {
+function FilterRow({ label, filterKey, filters, set, step = 1, accent = "blue" }) {
   const isMaxStyle = filterKey.endsWith('Max');
   const defaultOp = isMaxStyle ? "<=" : ">=";
+  const isViolet = accent === "violet";
   const current = filters[filterKey] || { op: defaultOp };
   const isBetween = current.op === "between";
 
@@ -73,14 +74,23 @@ function FilterRow({ label, filterKey, filters, set, step = 1 }) {
     "focus:outline-none placeholder-gray-600 " +
     "[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
 
+  // Purple accent (Conviction) — tints the label and focus/active borders so the
+  // headline-score filter reads as the special Ori-branded one.
+  const labelCls = isViolet
+    ? `flex items-center gap-1 flex-1 text-[11px] truncate transition-colors duration-150 ${hasValue ? "text-violet-200 font-medium" : "text-violet-300/80"}`
+    : `flex-1 text-[11px] truncate transition-colors duration-150 ${hasValue ? "text-gray-200 font-medium" : "text-gray-500"}`;
+  const boxCls = isViolet
+    ? `flex items-stretch shrink-0 rounded-md border overflow-hidden bg-gray-900 transition-colors duration-150 focus-within:border-violet-500/80 ${hasValue ? "border-violet-600/80" : "border-violet-800/50"}`
+    : `flex items-stretch shrink-0 rounded-md border overflow-hidden bg-gray-900 transition-colors duration-150 focus-within:border-blue-500/70 ${hasValue ? "border-gray-600" : "border-gray-700/80"}`;
+
   return (
     <div className="flex items-center gap-2 mb-1.5">
-      <label className={`flex-1 text-[11px] truncate transition-colors duration-150 ${hasValue ? "text-gray-200 font-medium" : "text-gray-500"}`}>
+      <label className={labelCls}>
+        {isViolet && <span className="text-violet-400 text-[9px] leading-none">✧</span>}
         {label}
       </label>
 
-      <div className={`flex items-stretch shrink-0 rounded-md border overflow-hidden bg-gray-900 transition-colors duration-150
-        focus-within:border-blue-500/70 ${hasValue ? "border-gray-600" : "border-gray-700/80"}`}>
+      <div className={boxCls}>
         <select
           value={current.op || ">="}
           onChange={(e) => handleOp(e.target.value)}
@@ -246,16 +256,18 @@ function MultiSelect({ label, options, selected, onChange, search, onSearchChang
   );
 }
 
-function Section({ title, defaultOpen = false, children }) {
+function Section({ title, defaultOpen = false, accent = "gray", children }) {
   const [open, setOpen] = useState(defaultOpen);
+  const isViolet = accent === "violet";
   return (
     <div className="mb-1">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1.5 w-full text-left py-2 lg:py-1.5 text-[11px] uppercase tracking-wider font-semibold
-          text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
+        className={`flex items-center gap-1.5 w-full text-left py-2 lg:py-1.5 text-[11px] uppercase tracking-wider font-semibold transition-colors cursor-pointer ${
+          isViolet ? "text-violet-300 hover:text-violet-200" : "text-gray-400 hover:text-gray-200"
+        }`}
       >
-        <ChevronRight className={`w-2.5 h-2.5 text-gray-600 transition-transform duration-150 ${open ? 'rotate-90' : ''}`} />
+        <ChevronRight className={`w-2.5 h-2.5 transition-transform duration-150 ${isViolet ? "text-violet-500" : "text-gray-600"} ${open ? 'rotate-90' : ''}`} />
         {title}
       </button>
       {open && <div className="pl-2 pb-1">{children}</div>}
@@ -426,6 +438,10 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
             />
             <span>Include ETFs &amp; Funds</span>
           </label>
+        </Section>
+
+        <Section title="Conviction" defaultOpen accent="violet">
+          <FilterRow label="Conviction" filterKey="convictionMin" filters={f} set={set} step={5} accent="violet" />
         </Section>
 
         <Section title="Size" defaultOpen>

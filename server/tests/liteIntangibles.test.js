@@ -23,12 +23,13 @@ test("stockRowToLiteStats maps SQLite row fields and enrichment target", () => {
       mcap: 2900,
       pe: 28,
       roic: 0.55,
-      score: 0.82,
+      roa: 0.22,
       sector: "Technology",
     },
     { target_consensus: 210 },
   );
-  assert.equal(stats.orizinScore, 82);
+  assert.equal(stats.roic, 0.55);
+  assert.equal(stats.roa, 0.22);
   assert.equal(stats.sector, "Technology");
   assert.equal(stats.target, 210);
   assert.ok(stats.targetUpsidePct > 0);

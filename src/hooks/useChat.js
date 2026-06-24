@@ -1,12 +1,14 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
-export function useChat(filteredStocks, filters, weights, onApplyUpdates, activeStock = null, session = {}) {
+export function useChat(filteredStocks, filters, onApplyUpdates, activeStock = null, session = {}) {
   const [isOpen, setIsOpen]         = useState(false);
   const [messages, setMessages]     = useState([]);
   const [sessionId, setSessionId]   = useState(null);
   const [isStreaming, setIsStreaming]= useState(false);
   const [error, setError]           = useState(null);
   const [focusSymbols, setFocusSymbols] = useState([]);
+  // Aborts the in-flight chat request/stream when the user hits Stop.
+  const abortRef = useRef(null);
 
   // Compact a stock row to the fields Ori needs (shared by the top-50 list,
   // the pinned list, and the active stock).
@@ -23,10 +25,8 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
       earnings_yield: s.earnings_yield,
       net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
       debt_equity: s.debt_equity, div_yield: s.div_yield,
-      payout: s.payout, beta: s.beta, score: s.score, conviction: s.conviction,
-      qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
+      payout: s.payout, beta: s.beta, conviction: s.conviction,
       dataCoverage: s.dataCoverage,
-      effectiveWeights: s.effectiveWeights,
     };
   }
 
@@ -93,7 +93,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
         revenue_growth: s.revenue_growth, eps_growth: s.eps_growth, fcf_growth: s.fcf_growth,
         net_debt_ebitda: s.net_debt_ebitda, current_ratio: s.current_ratio,
         debt_equity: s.debt_equity, div_yield: s.div_yield, beta: s.beta,
-        score: s.score, conviction: s.conviction, qScore: s.qScore, vScore: s.vScore, gScore: s.gScore,
+        conviction: s.conviction,
         dataCoverage: s.dataCoverage,
         latestRsi: s.latestRsi,
         profile: s.profile
@@ -226,7 +226,6 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
 
     return {
       filters: isDeepResearch ? {} : filters,
-      weights,
       view: currentView,
       chatIntent,
       today: new Date().toISOString().slice(0, 10),
@@ -264,6 +263,9 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
 
     let accumulated = '';
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -273,6 +275,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
           message: text,
           context: buildContext(text),
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -333,6 +336,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
               } else if (evt.type === 'done') {
                 setSessionId(evt.sessionId);
                 setIsStreaming(false);
+                abortRef.current = null;
 
                 // The server strips [[remember: …]] tokens before persisting;
                 // mirror that for the live bubble and surface what was saved.
@@ -365,7 +369,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
                   }
 
                   // Normalize recommendation for the UI.
-                  // Weights are intentionally ignored — the user controls the Q/V/G sliders directly.
+                  // Weights are intentionally ignored — Conviction's pillar weights come from the user's persona.
                   const rec = {
                     filters: extracted.filters || extracted.recommendFilters || extracted.applyFilters,
                     // weights from Ori are deliberately discarded
@@ -440,13 +444,44 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
             } catch {}
           }
           pump();
+        }).catch((err) => {
+          // User pressed Stop (or the connection dropped) mid-stream. Keep
+          // whatever text already streamed; only surface real errors.
+          setIsStreaming(false);
+          if (controller.signal.aborted || err?.name === 'AbortError') return;
+          setError(err.message);
         });
       }
       pump();
     } catch (e) {
-      setError(e.message);
       setIsStreaming(false);
+      abortRef.current = null;
+      // Abort = user hit Stop before the stream opened; not an error.
+      if (controller.signal.aborted || e?.name === 'AbortError') return;
+      setError(e.message);
+      setMessages(prev => {
+        const last = prev[prev.length - 1];
+        return last?.role === 'assistant' && !last.content ? prev.slice(0, -1) : prev;
+      });
     }
+  }
+
+  // User-initiated Stop: abort the in-flight request/stream, keep any partial
+  // reply (drop the bubble only if nothing streamed yet), and mark it stopped.
+  function stopStreaming() {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+    setIsStreaming(false);
+    setMessages(prev => {
+      const last = prev[prev.length - 1];
+      if (last?.role !== 'assistant') return prev;
+      if (!last.content) return prev.slice(0, -1); // nothing streamed → remove empty bubble
+      const next = [...prev];
+      next[next.length - 1] = { ...last, stopped: true, status: undefined };
+      return next;
+    });
   }
 
   function askAboutStock(symbol) {
@@ -574,7 +609,7 @@ export function useChat(filteredStocks, filters, weights, onApplyUpdates, active
     isOpen, setIsOpen,
     messages, isStreaming, error,
     sessionId, focusSymbols, setFocusSymbols,
-    sendMessage, askAboutStock, clearChat,
+    sendMessage, stopStreaming, askAboutStock, clearChat,
     applyRecommendation, dismissRecommendation,
     enterDeepResearch: (sym) => session.onEnterDeepResearch?.(sym),
     listSessions, loadSession, deleteSession,

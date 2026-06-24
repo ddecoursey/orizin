@@ -25,7 +25,7 @@ export const CATEGORY_LABELS = {
 
 // Tooltip descriptions for the category weight breakdown.
 export const CATEGORY_TOOLTIPS = {
-  fundamentals: "Orizin Score — profitability, ROIC, margins, growth, and balance sheet health",
+  fundamentals: "Fundamentals — profitability, growth & balance-sheet health on absolute thresholds",
   valuation: "How cheap or expensive the stock is vs peers and intrinsic value",
   technicals: "Trend strength, RSI, and momentum signals",
   smartMoney: "U.S. Congress + corporate insider net buying vs selling activity",
@@ -35,14 +35,17 @@ export const CATEGORY_TOOLTIPS = {
 };
 
 // Base persona weights — percent points, each set sums to 100 across CATEGORIES.
+// Ordered conservative → aggressive (the order the Lens dropdown shows them in):
+// value/deep-value (margin-of-safety) → quality compounders → balanced → momentum
+// → disruptor (most speculative, story-led).
 export const PERSONAS = {
-  balanced_growth: { label: "Balanced Growth", emoji: "🌱", blurb: "Quality growth with a strong intangibles lean — the all-rounder default.", weights: { fundamentals: 25, valuation: 10, technicals: 5, smartMoney: 7, analyst: 5, fit: 15, intangibles: 33 } },
   value:           { label: "Value Investor", emoji: "🪙", blurb: "Cheap, sound businesses; price discipline over story.", weights: { fundamentals: 30, valuation: 30, technicals: 5, smartMoney: 5, analyst: 5, fit: 10, intangibles: 15 } },
+  deep_value:      { label: "Deep Value", emoji: "🧱", blurb: "Hard valuation focus; deeply cheap over everything else.", weights: { fundamentals: 20, valuation: 45, technicals: 5, smartMoney: 5, analyst: 5, fit: 5, intangibles: 15 } },
   compounder:      { label: "Compounder", emoji: "♻️", blurb: "Durable, high-quality compounders held for years.", weights: { fundamentals: 35, valuation: 15, technicals: 5, smartMoney: 5, analyst: 5, fit: 10, intangibles: 25 } },
   garp:            { label: "GARP", emoji: "⚖️", blurb: "Growth at a reasonable price — quality and valuation in balance.", weights: { fundamentals: 30, valuation: 20, technicals: 5, smartMoney: 5, analyst: 5, fit: 10, intangibles: 25 } },
-  disruptor:       { label: "Disruptor", emoji: "🚀", blurb: "ARK-style: story, TAM and optionality lead; the numbers come second.", weights: { fundamentals: 20, valuation: 5, technicals: 3, smartMoney: 5, analyst: 2, fit: 15, intangibles: 50 } },
+  balanced_growth: { label: "Balanced Growth", emoji: "🌱", blurb: "Quality growth with a strong intangibles lean — the all-rounder default.", weights: { fundamentals: 25, valuation: 10, technicals: 5, smartMoney: 7, analyst: 5, fit: 15, intangibles: 33 } },
   momentum:        { label: "Momentum", emoji: "📈", blurb: "Trend and relative strength drive the call.", weights: { fundamentals: 15, valuation: 5, technicals: 40, smartMoney: 10, analyst: 10, fit: 5, intangibles: 15 } },
-  deep_value:      { label: "Deep Value", emoji: "🧱", blurb: "Hard valuation focus; deeply cheap over everything else.", weights: { fundamentals: 20, valuation: 45, technicals: 5, smartMoney: 5, analyst: 5, fit: 5, intangibles: 15 } },
+  disruptor:       { label: "Disruptor", emoji: "🚀", blurb: "ARK-style: story, TAM and optionality lead; the numbers come second.", weights: { fundamentals: 20, valuation: 5, technicals: 3, smartMoney: 5, analyst: 2, fit: 15, intangibles: 50 } },
 };
 export const PERSONA_KEYS = Object.keys(PERSONAS);
 export const DEFAULT_PERSONA = "balanced_growth";

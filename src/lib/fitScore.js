@@ -1,9 +1,8 @@
 // Fit Score — how well a stock aligns with THIS user's portfolio, goals, and
-// theses. Deliberately separate from the Orizin Score (quality/value/growth):
-// the Orizin Score says "is this a good company?", the Fit Score says "is this
-// right for ME?". It's independent of the Q/V/G weights, so it only recomputes
-// when the universe or the user's portfolio/goals/theses change — not on every
-// weight drag.
+// theses. Deliberately separate from the Fundamentals pillar (quality/value/
+// growth): Fundamentals says "is this a good company?", the Fit Score says "is
+// this right for ME?". It only recomputes when the universe or the user's
+// portfolio/goals/theses change.
 
 const STOPWORDS = new Set(
   ("the a an and or of to in for on with will would could should i my our we be is are as that this it its at by " +

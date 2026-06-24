@@ -93,7 +93,7 @@ function extractRememberTokens(text) {
 
 // Deep Research chat: one stock, no screener table / global news / full portfolio dump.
 function buildDeepResearchPrompt(context, personalization = {}) {
-  const { weights, activeStock, focusStocks, focusSymbols, today, portfolioGoals } = context || {};
+  const { activeStock, focusStocks, focusSymbols, today, portfolioGoals } = context || {};
   const { username, memory } = personalization;
   const sym = activeStock?.symbol;
 
@@ -110,8 +110,6 @@ ${username && username !== "default" ? `Talking to **${username}**.` : ""}`;
 ${memory.map((f, i) => `${i + 1}. ${f.text || f}`).join("\n")}`;
   }
 
-  prompt += `
-User Q/V/G weights: Q=${weights?.q ?? 35} V=${weights?.v ?? 35} G=${weights?.g ?? 30}.`;
 
   if (activeStock) {
     prompt += "\n\n" + buildDeepResearchStockSection(activeStock);
@@ -204,8 +202,8 @@ function buildDeepResearchStockSection(s) {
 
   let out = `=== ${sym} (${s.name || ""}) ===
 ${s.sector || "—"} / ${s.industry || "—"} · ${fmt(s.mcap, "money")} · ${fmt(s.price, "price")} · β ${s.beta != null ? s.beta.toFixed(2) : "—"}
-Conv ${s.verdict?.conviction ?? s.conviction ?? "—"}/100 · Score ${s.score != null ? Math.round(s.score * 100) : "—"} (Q${s.qScore != null ? Math.round(s.qScore * 100) : "—"} V${s.vScore != null ? Math.round(s.vScore * 100) : "—"} G${s.gScore != null ? Math.round(s.gScore * 100) : "—"})${s.dataCoverage != null ? ` · cov ${Math.round(s.dataCoverage * 100)}%` : ""}
-Val: P/E ${fmt(s.pe, "x")} P/B ${fmt(s.pb, "x")} EV/EB ${fmt(s.ev_ebitda, "x")} FCF ${fmt(s.fcf_yield, "pct")} | Qual: ROIC ${fmt(s.roic, "pct")} ROE ${fmt(s.roe, "pct")} op ${fmt(s.op_margin, "pct")} ND/EB ${fmt(s.net_debt_ebitda, "r")} | Gr: rev ${fmt(s.revenue_growth, "pct")} EPS ${fmt(s.eps_growth, "pct")} div ${fmt(s.div_yield, "pct")}
+Conv ${s.verdict?.conviction ?? s.conviction ?? "—"}/100${s.dataCoverage != null ? ` · cov ${Math.round(s.dataCoverage * 100)}%` : ""}
+Val: P/E ${fmt(s.pe, "x")} P/B ${fmt(s.pb, "x")} EV/EB ${fmt(s.ev_ebitda, "x")} FCF ${fmt(s.fcf_yield, "pct")} | Qual: ROIC ${fmt(s.roic, "pct")} ROA ${fmt(s.roa, "pct")} ROE ${fmt(s.roe, "pct")} op ${fmt(s.op_margin, "pct")} ND/EB ${fmt(s.net_debt_ebitda, "r")} | Gr: rev ${fmt(s.revenue_growth, "pct")} EPS ${fmt(s.eps_growth, "pct")} div ${fmt(s.div_yield, "pct")}
 RSI(10) ${rsiNote}`;
 
   if (s.verdict) {
@@ -298,7 +296,7 @@ function buildSystemPrompt(context, personalization = {}) {
   const {
     view,
     chatIntent,
-    filters, weights, stocks, focusSymbols, availableSectors, availableIndustries,
+    filters, stocks, focusSymbols, availableSectors, availableIndustries,
     activeStock, focusStocks, today, totalFiltered, activeScreener, pinnedStocks, news,
   } = context || {};
   const intent = chatIntent || "general";
@@ -336,7 +334,6 @@ ${view === 'deep-research'
 - Stocks in view: ${viewLine}
 - Active screener: ${activeScreener || "All Stocks"}
 - Current filters: ${summarizeFilters(filters)}`}
-- Current scorecard weights: Q=${weights?.q ?? 35} (Quality), V=${weights?.v ?? 35} (Value), G=${weights?.g ?? 30} (Growth). These determine how the final Orizin Score is calculated — read them through the USER PREFERENCE LENS above and adapt your tone/emphasis accordingly.
 
 Available Sectors: ${JSON.stringify(availableSectors || [])}
 Available Industries: ${JSON.stringify(availableIndustries || [])}
@@ -345,21 +342,21 @@ Available Industries: ${JSON.stringify(availableIndustries || [])}
   if (stocks?.length) {
     prompt += "\nSTOCK DATA:\n";
     prompt +=
-      "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROE | ND/EB | D/E | Div_Y | Q | V | G | Score | Conv | Cov |\n";
+      "| Sym | Sector | MCap | Price | PE | PB | EV/EB | EV/S | FCF_Y | Gross_M | Op_M | ROIC | ROA | ROE | ND/EB | D/E | Div_Y | Conv | Cov |\n";
     prompt +=
-      "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-------|-----|-------|-------|-------|-------|-------|------|-----|\n";
+      "|-----|--------|------|-------|----|----|-------|------|-------|---------|------|------|-----|-----|-------|-----|-------|------|-----|\n";
     const top = stocks.slice(0, 30);
     for (const s of top) {
-      prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.qScore != null ? Math.round(s.qScore * 100) : "—"} | ${s.vScore != null ? Math.round(s.vScore * 100) : "—"} | ${s.gScore != null ? Math.round(s.gScore * 100) : "—"} | ${s.score != null ? Math.round(s.score * 100) : "—"} | ${s.conviction != null ? s.conviction : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
+      prompt += `| ${s.symbol} | ${(s.sector || "").slice(0, 8)} | ${fmt(s.mcap, "money")} | ${fmt(s.price, "price")} | ${fmt(s.pe, "x")} | ${fmt(s.pb, "x")} | ${fmt(s.ev_ebitda, "x")} | ${fmt(s.ev_sales, "x")} | ${fmt(s.fcf_yield, "pct")} | ${fmt(s.gross_margin, "pct")} | ${fmt(s.op_margin, "pct")} | ${fmt(s.roic, "pct")} | ${fmt(s.roa, "pct")} | ${fmt(s.roe, "pct")} | ${fmt(s.net_debt_ebitda, "r")} | ${fmt(s.debt_equity, "r")} | ${fmt(s.div_yield, "pct")} | ${s.conviction != null ? s.conviction : "—"} | ${s.dataCoverage != null ? Math.round(s.dataCoverage * 100) + "%" : "—"} |\n`;
     }
     if (stocks.length > 30)
-      prompt += `\n(Showing top 30 of ${stocks.length} by Conviction. Score = Orizin fundamentals engine; Conv = the unified headline Conviction users see.)\n`;
+      prompt += `\n(Showing top 30 of ${stocks.length} by Conviction — the single absolute headline score users see.)\n`;
   }
 
   if (pinnedStocks?.length) {
     prompt += `\n📌 PINNED (the user's watchlist in this screener — they've flagged these as ones they care about):\n`;
     for (const s of pinnedStocks.slice(0, 30)) {
-      prompt += `- ${s.symbol} (${s.name || ""}) — ${(s.sector || "").slice(0, 16)} · ${fmt(s.mcap, "money")} · P/E ${fmt(s.pe, "x")} · EV/EBITDA ${fmt(s.ev_ebitda, "x")} · ROIC ${fmt(s.roic, "pct")} · Score ${s.score != null ? Math.round(s.score * 100) : "—"}\n`;
+      prompt += `- ${s.symbol} (${s.name || ""}) — ${(s.sector || "").slice(0, 16)} · ${fmt(s.mcap, "money")} · P/E ${fmt(s.pe, "x")} · EV/EBITDA ${fmt(s.ev_ebitda, "x")} · ROIC ${fmt(s.roic, "pct")} · Conv ${s.conviction != null ? s.conviction : "—"}\n`;
     }
     if (pinnedStocks.length > 30) prompt += `(…and ${pinnedStocks.length - 30} more pinned)\n`;
   }
@@ -482,7 +479,7 @@ The user has this stock open in the company-overview panel right now. Unless the
 - Quality: ROIC ${fmt(s.roic, "pct")}, ROE ${fmt(s.roe, "pct")}, ROA ${fmt(s.roa, "pct")}, Gross ${fmt(s.gross_margin, "pct")}, Op ${fmt(s.op_margin, "pct")}, Net ${fmt(s.net_margin, "pct")}, ND/EBITDA ${fmt(s.net_debt_ebitda, "r")}, D/E ${fmt(s.debt_equity, "r")}, Current ratio ${fmt(s.current_ratio, "r")}
 - Growth (TTM): Revenue ${fmt(s.revenue_growth, "pct")}, EPS ${fmt(s.eps_growth, "pct")}, FCF ${fmt(s.fcf_growth, "pct")}
 - Dividend yield: ${fmt(s.div_yield, "pct")}
-- Conviction (headline): ${s.verdict?.conviction ?? s.conviction ?? "—"}/100 · Fundamentals engine "Orizin Score": ${s.score != null ? Math.round(s.score * 100) : "—"} (Q ${s.qScore != null ? Math.round(s.qScore * 100) : "—"}, V ${s.vScore != null ? Math.round(s.vScore * 100) : "—"}, G ${s.gScore != null ? Math.round(s.gScore * 100) : "—"})${s.dataCoverage != null ? ` · data coverage ${Math.round(s.dataCoverage * 100)}%${s.dataCoverage < 0.6 ? " (LOW — leans on imputation, be skeptical)" : ""}` : ""}
+- Conviction (headline): ${s.verdict?.conviction ?? s.conviction ?? "—"}/100${s.dataCoverage != null ? ` · data coverage ${Math.round(s.dataCoverage * 100)}%${s.dataCoverage < 0.6 ? " (LOW — sparse fundamentals, be skeptical)" : ""}` : ""}
 - RSI(10): ${rsiNote}${s.rsiTrend ? ` — ${s.rsiTrend.direction} (${s.rsiTrend.change5d >= 0 ? "+" : ""}${s.rsiTrend.change5d.toFixed(1)} over ~5 sessions)` : ""}`;
 
   if (s.verdict) {
@@ -491,7 +488,7 @@ The user has this stock open in the company-overview panel right now. Unless the
     if (v.reasons && v.reasons.length) out += `\n  Horizon drivers: ${v.reasons.join("; ")}`;
     if (Array.isArray(v.pillars) && v.pillars.length)
       out += `\n  Pillars (0-100): ${v.pillars.map((p) => `${p.id} ${p.score ?? "—"}`).join(" · ")}`;
-    out += `\n  (confidence: ${v.confidence}). This ONE conviction unifies the Orizin Score (→ fundamentals pillar), personal Fit (→ fit pillar), valuation, technicals, insiders & analysts. Stay consistent with it, or state plainly why you'd differ. You ARE Ori — own the intangibles / future-potential judgment (the Tesla/SpaceX "numbers say no, story says yes" factor) and always give a bull case, a bear case, and what would change your mind.`;
+    out += `\n  (confidence: ${v.confidence}). This ONE conviction unifies fundamentals (→ fundamentals pillar), personal Fit (→ fit pillar), valuation, technicals, insiders & analysts. Stay consistent with it, or state plainly why you'd differ. You ARE Ori — own the intangibles / future-potential judgment (the Tesla/SpaceX "numbers say no, story says yes" factor) and always give a bull case, a bear case, and what would change your mind.`;
   }
 
   if (s.performance) {

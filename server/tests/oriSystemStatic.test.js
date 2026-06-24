@@ -11,7 +11,7 @@ import {
 const GEMINI_35_FLASH_CACHE_MIN_TOKENS = 4096;
 
 test("ORI_SYSTEM_STATIC includes score methodology and view-mode rules", () => {
-  assert.match(ORI_SYSTEM_STATIC, /ORIZEN SCORE & CONVICTION METHODOLOGY/);
+  assert.match(ORI_SYSTEM_STATIC, /CONVICTION METHODOLOGY/);
   assert.match(ORI_SYSTEM_STATIC, /VIEW MODE/);
   assert.ok(ORI_SYSTEM_STATIC.includes(ORI_SCORECARD_DEFINITION.description.slice(0, 40)));
 });

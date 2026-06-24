@@ -187,8 +187,8 @@ export default function StockTable({
   const [sparklines, setSparklines] = useState(() => new Map());
 
   // Memoize expensive computations. Heat (per-column percentile colouring) depends
-  // only on the metric distributions, which don't change when the Q/V/G weights move
-  // — so key it on the pre-weight `heatRows` to avoid re-sorting ~20 columns on every
+  // only on the metric distributions, which don't change when the conviction lens moves
+  // — so key it on the pre-score `heatRows` to avoid re-sorting ~20 columns on every
   // slider tick. Values are identical to building from `rows` (same securities).
   const heat = useMemo(() => buildHeat(heatRows), [heatRows]);
 
@@ -602,13 +602,13 @@ export default function StockTable({
                   {fmt(r.price, "price") ?? <span className="text-gray-600">—</span>}
                 </td>
 
-                {/* Conviction (Pro) or Orizin Score (free) */}
+                {/* Conviction — the single headline score (lean for free, Ori-refined for Pro) */}
                 <td className="px-3 py-2 min-w-[80px]">
                   <span className="inline-flex items-center">
                     <Tooltip
                       content={
                         r.conviction != null && r.dataCoveragePenalty > 0
-                          ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse Q/V/G data.`
+                          ? `${r.conviction} (base ${r.baseConviction} −${r.dataCoveragePenalty}). Sparse fundamentals data.`
                           : r.conviction != null
                             ? canUseOri
                               ? "Conviction (0–100) with Ori when available."

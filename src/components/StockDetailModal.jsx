@@ -792,7 +792,7 @@ export default function StockDetailModal({
   if (!row) return null;
 
   const sec = sectorChipColors(row.sector, isLight);
-  const sc = row.conviction != null ? row.conviction : row.score != null ? Math.round(row.score * 100) : null;
+  const sc = row.conviction != null ? row.conviction : null;
   const scoreColor = sc >= 70 ? "#10b981" : sc >= 45 ? "#f59e0b" : "#ef4444";
 
   return (

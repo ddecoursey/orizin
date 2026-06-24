@@ -51,6 +51,11 @@ export const CONVICTION_CONFIG = {
   // Intangibles pillar weight multiplier while only the deterministic proxy exists.
   intangiblesProxyConfidence: 0.4,
 
+  // Fundamentals pillar = absolute blend of profitability, growth and balance-sheet
+  // safety (NO valuation — that's its own pillar). Replaces the old relative Orizin
+  // Score. Missing sub-scores drop out and the rest renormalize.
+  fundamentals: { profit: 0.45, growth: 0.30, safety: 0.25 },
+
   // Risk-tolerance tilt — conviction points removed = speculationScore × this.
   riskTilt: { conservative: 42, balanced: 16, aggressive: 5 },
 
@@ -65,7 +70,7 @@ export const CONVICTION_CONFIG = {
   // Per-metric ramp anchors [lo, hi] → 0..1. These are the calibration dials for
   // each pillar's sub-scores; edit here rather than inline in the functions.
   ramps: {
-    profit: { roic: [0.05, 0.2], roe: [0.08, 0.22], net_margin: [0.0, 0.18], op_margin: [0.03, 0.22], fcf_margin: [0.0, 0.15] },
+    profit: { roic: [0.05, 0.2], roa: [0.03, 0.15], roe: [0.08, 0.22], net_margin: [0.0, 0.18], op_margin: [0.03, 0.22], fcf_margin: [0.0, 0.15] },
     safety: { debt_equity: [0.5, 2.5], net_debt_ebitda: [1.0, 4.5], current_ratio: [1.0, 2.0] },
     growth: { revenue_growth: [0.0, 0.2], eps_growth: [0.0, 0.2], fcf_growth: [0.0, 0.2] },
     size: [3e8, 5e10], // $300M..$50B → micro..large
@@ -300,9 +305,55 @@ function valuationScore(r, aiData) {
     up(r.fcf_yield, ...VR.fcf_yield),
     peTerm,
     r.ev_ebitda != null ? (r.ev_ebitda < 0 ? 0.2 : down(r.ev_ebitda, ...VR.ev_ebitda)) : null,
-    isNum(r.vScore) ? r.vScore : null,
   ]);
   return { score, mos, upsideAnalyst, dcf, target };
+}
+
+// ── Fundamentals pillar (ABSOLUTE) ───────────────────────────────────────────
+// The Fundamentals pillar of Conviction, rebuilt from absolute thresholds (no
+// percentile rank, no Orizin Score). Three sub-scores, each 0..1, averaged over
+// the inputs that exist (missing inputs drop out — they are NOT imputed):
+//   • profit  — capital efficiency + margins (ROIC, ROA, ROE, net/op/FCF margin)
+//   • safety  — balance-sheet strength (D/E, ND/EBITDA, current ratio)
+//   • growth  — top/bottom-line & FCF growth (rev / EPS / FCF, TTM)
+// Shared by quickConviction (screener) and computeVerdict (Deep Research) so the
+// two can never drift. All ramps live in CONVICTION_CONFIG.ramps.
+function profitScore(r) {
+  const P = CONVICTION_CONFIG.ramps.profit;
+  return avgDefined([
+    up(r.roic, ...P.roic),
+    up(r.roa, ...P.roa),
+    up(r.roe, ...P.roe),
+    up(r.net_margin, ...P.net_margin),
+    up(r.op_margin, ...P.op_margin),
+    up(r.fcf_margin, ...P.fcf_margin),
+  ]);
+}
+function safetyScore(r) {
+  const S = CONVICTION_CONFIG.ramps.safety;
+  return avgDefined([
+    r.debt_equity != null ? (r.debt_equity < 0 ? 0 : down(r.debt_equity, ...S.debt_equity)) : null,
+    down(r.net_debt_ebitda, ...S.net_debt_ebitda), // negative (net cash) ramps to 1 = good
+    up(r.current_ratio, ...S.current_ratio),
+  ]);
+}
+function growthScore(r) {
+  const G = CONVICTION_CONFIG.ramps.growth;
+  return avgDefined([
+    up(r.revenue_growth, ...G.revenue_growth),
+    up(r.eps_growth, ...G.eps_growth),
+    up(r.fcf_growth, ...G.fcf_growth),
+  ]);
+}
+// Combined Fundamentals pillar score (0..1) or null when no fundamentals exist.
+export function fundamentalsScore(r) {
+  if (!r) return null;
+  const FW = CONVICTION_CONFIG.fundamentals;
+  return weightedAvg([
+    [profitScore(r), FW.profit],
+    [growthScore(r), FW.growth],
+    [safetyScore(r), FW.safety],
+  ]);
 }
 
 // Default weights for the unified conviction blend = the "Balanced Growth" persona
@@ -358,14 +409,14 @@ const applyRisk = (conviction, delta) => (conviction == null ? conviction : Math
 
 /**
  * Lean conviction 0..100 for the screener (10k rows, no per-symbol detail / no
- * Ori). Uses only the pillars derivable from a scored row — Fundamentals (the
- * Orizin Score) + Valuation, plus Fit when a context is supplied — and lets the
- * weights renormalize. Equals computeVerdict().conviction for a row with no
- * detail loaded, so the number stays consistent as it refines on Deep Research.
+ * Ori). Uses only the pillars derivable from a row — Fundamentals (absolute
+ * profit+growth+safety) + Valuation, plus Fit when a context is supplied — and
+ * lets the weights renormalize. Equals computeVerdict().conviction for a row with
+ * no detail loaded, so the number stays consistent as it refines on Deep Research.
  */
 export function quickConviction(row, fit = null, risk = DEFAULT_RISK, weights = PILLAR_WEIGHTS) {
   if (!row) return null;
-  const fund = isNum(row.score) ? row.score : null;
+  const fund = fundamentalsScore(row);
   const price = isNum(row.price) ? row.price : null;
   const val = valuationScore(row, null).score;
   if (fund == null && val == null) return null; // nothing real to anchor on
@@ -409,27 +460,12 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
   const aiData = detail.aiData || null;
   const price = isNum(r.price) ? r.price : null;
 
-  // ── Sub-scores (each 0..1, absolute) ──────────────────────────────────────
+  // ── Sub-scores (each 0..1, absolute) — shared with quickConviction so the
+  // screener and Deep Research compute the Fundamentals pillar identically. ────
   const RP = CONVICTION_CONFIG.ramps;
-  const profit = avgDefined([
-    up(r.roic, ...RP.profit.roic),
-    up(r.roe, ...RP.profit.roe),
-    up(r.net_margin, ...RP.profit.net_margin),
-    up(r.op_margin, ...RP.profit.op_margin),
-    up(r.fcf_margin, ...RP.profit.fcf_margin),
-  ]);
-
-  const safety = avgDefined([
-    r.debt_equity != null ? (r.debt_equity < 0 ? 0 : down(r.debt_equity, ...RP.safety.debt_equity)) : null,
-    down(r.net_debt_ebitda, ...RP.safety.net_debt_ebitda), // negative (net cash) ramps to 1 = good
-    up(r.current_ratio, ...RP.safety.current_ratio),
-  ]);
-
-  const growth = avgDefined([
-    up(r.revenue_growth, ...RP.growth.revenue_growth),
-    up(r.eps_growth, ...RP.growth.eps_growth),
-    up(r.fcf_growth, ...RP.growth.fcf_growth),
-  ]);
+  const profit = profitScore(r);
+  const safety = safetyScore(r);
+  const growth = growthScore(r);
   const declining =
     (r.revenue_growth != null && r.revenue_growth < -0.02) ||
     (r.eps_growth != null && r.eps_growth < -0.05);
@@ -469,7 +505,7 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
   const speculative = (r.mcap != null && r.mcap < 3e8) || (r.beta != null && Math.abs(r.beta) > 2.0);
 
   // Not enough to say anything useful.
-  const hasFundamentals = profit != null || safety != null || growth != null || isNum(r.score);
+  const hasFundamentals = profit != null || safety != null || growth != null;
   if (!hasFundamentals) {
     return {
       insufficient: true,
@@ -571,9 +607,14 @@ export function computeVerdict(row, detail = {}, fit = null, opts = {}) {
     cov != null && cov >= 0.7 && signals >= 2 ? "high" : (cov != null && cov >= 0.45) || signals >= 2 ? "medium" : "low";
 
   // ── Unified pillars + a single conviction 0..100 (the Game Plan number).
-  // The Orizin Score folds in as the Fundamentals pillar; personal Fit folds in
-  // as its own pillar; Intangibles is left empty for Ori to fill (mergeOri…).
-  const fund = isNum(r.score) ? r.score : dur;
+  // Fundamentals = the absolute profit+growth+safety blend (reusing the sub-scores
+  // already computed above); personal Fit folds in as its own pillar; Intangibles
+  // is left for Ori to fill (mergeOri…).
+  const fund = weightedAvg([
+    [profit, CONVICTION_CONFIG.fundamentals.profit],
+    [growth, CONVICTION_CONFIG.fundamentals.growth],
+    [safety, CONVICTION_CONFIG.fundamentals.safety],
+  ]);
   const pillars = [
     pillar("fundamentals", "Fundamentals", fund, weights.fundamentals, unprofitable ? "bad" : undefined),
     pillar("valuation", "Valuation", valuation, weights.valuation),

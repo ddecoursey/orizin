@@ -7,7 +7,7 @@ import { explainPersonaFit, topStrengthsRisks } from "../lib/personas.js";
 import { prettyFactorLabel } from "../lib/intangibleFactors.js";
 
 // ── Game Plan — the ONE unified verdict for a stock ───────────────────────────
-// Folds the old Orizin Score (→ Fundamentals pillar) and Fit Score (→ Fit
+// Folds fundamentals (→ Fundamentals pillar) and Fit Score (→ Fit
 // pillar) into a single conviction 0–100 + hold horizon + right-now action, then
 // adds Ori's intelligence layer (Intangibles / future potential, macro, bull &
 // bear). Color tells the story: green = strong/favorable, amber = mixed/watch,
@@ -100,7 +100,7 @@ export function GamePlanProGate({ onUpgrade }) {
         Unified conviction, hold horizon, right-now action, and Ori&apos;s intangibles read — the full verdict for a stock.
       </p>
       <p className="text-xs text-gray-500 mt-2">
-        Free accounts still get charts, financials, and the Orizin fundamentals score in the header.
+        Free accounts still get charts, financials, and the Conviction score in the header.
       </p>
       {onUpgrade && (
         <button
@@ -218,7 +218,7 @@ export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriR
         </div>
       </div>
 
-      {/* Pillars (Orizin + Fit folded in here) */}
+      {/* Pillars (fundamentals + Fit folded in here) */}
       <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-x-4 gap-y-3">
         {verdict.pillars.map((p) => (
           <Pillar key={p.id} p={p} oriState={oriState} />

@@ -1392,13 +1392,19 @@ export function recordUserLogin(userId, { ip, userAgent, kind = 'login' } = {}) 
   activityThrottle.set(userId, at);
 }
 
-/** Throttled last-seen update (called on authenticated API traffic). */
+/**
+ * Throttled last-seen update (called on authenticated API traffic).
+ * @returns {boolean} true if last-seen actually advanced (throttle window
+ *   elapsed), false if it was a no-op — lets callers roll the session cookie
+ *   only when activity genuinely moved forward.
+ */
 export function touchUserActivity(userId) {
   const now = Date.now();
   const last = activityThrottle.get(userId) || 0;
-  if (now - last < ACTIVITY_THROTTLE_MS) return;
+  if (now - last < ACTIVITY_THROTTLE_MS) return false;
   activityThrottle.set(userId, now);
   touchActivityStmt.run(now, userId);
+  return true;
 }
 
 export function listRecentLoginEvents(limit = 40) {
