@@ -128,7 +128,7 @@ export default function PortfolioGoalsPage({
   if (!portfolioGoals || !hydrated) return <div className="p-8 text-gray-400">Loading...</div>;
 
   return (
-    <div className="h-full flex flex-col bg-gray-950 text-gray-100">
+    <div className="h-full flex flex-col bg-gray-950 text-gray-100 overflow-y-auto overscroll-contain lg:overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-4 sm:px-6 py-3 sm:py-4 shrink-0 bg-gray-950">
         <div><h1 className="text-xl font-semibold tracking-tight">Portfolio</h1><p className="text-xs text-gray-500 mt-0.5">Your holdings, goals and theses are sent to Ori automatically. Changes save as you type.</p></div>
         <div className="flex items-center gap-3 sm:gap-6">
@@ -138,7 +138,7 @@ export default function PortfolioGoalsPage({
           <div className="text-right"><div className="text-[10px] uppercase tracking-widest text-gray-500">Total Portfolio Value</div><div className="text-2xl font-semibold tabular-nums text-emerald-400">{formatMoney(grandTotal)}</div></div>
         </div>
       </div>
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-visible lg:overflow-hidden min-h-0">
         <div className="flex-1 flex flex-col border-r border-gray-800 min-h-0 overflow-hidden">
           <div className="px-6 pt-4 pb-3 flex items-center justify-between shrink-0 border-b border-gray-800 bg-gray-950">
             <div className="text-sm font-semibold text-gray-300">Your Portfolios</div>

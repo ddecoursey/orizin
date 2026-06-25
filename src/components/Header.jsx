@@ -83,7 +83,7 @@ function NavButton({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
-      className={`flex-1 sm:flex-none text-center px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
+      className={`flex-1 lg:flex-none text-center px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
         focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
         ${active
           ? "text-gray-100 bg-gray-800 font-semibold"
@@ -166,7 +166,7 @@ export default function Header({
   const rank = resolveRank({ plan, isAdmin });
 
   return (
-    <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 sm:flex-nowrap sm:gap-3 shrink-0 text-sm">
+    <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 lg:flex-nowrap lg:gap-3 shrink-0 text-sm">
       {currentUser && currentUser !== "default" && (
         <>
           <div
@@ -190,7 +190,7 @@ export default function Header({
           >
             Orizin
           </span>
-          <span className="text-[10.5px] text-gray-500 hidden md:inline tracking-wide">
+          <span className="text-[10.5px] text-gray-500 hidden lg:inline tracking-wide">
             stock recommendation engine
           </span>
         </div>
@@ -213,21 +213,21 @@ export default function Header({
         title={status.msg}
       >
         <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
-        {status.type !== "ready" && <span className="hidden sm:inline truncate max-w-[220px]">{status.msg}</span>}
+        {status.type !== "ready" && <span className="hidden lg:inline truncate max-w-[220px]">{status.msg}</span>}
         <DataSyncChip isAdmin={isAdmin} />
       </div>
 
       {/* Top-level page navigation. On mobile it drops to its own full-width row
-          (order-last + w-full) so the top row never scrunches; tablet/desktop keep
-          it inline (sm:* resets). */}
+          (order-last + w-full) so the top row never scrunches; desktop keeps
+          it inline (lg:* resets). */}
       <nav className="order-last w-full justify-center flex items-center gap-1 pt-1.5 border-t border-gray-800/60
-        sm:order-none sm:w-auto sm:justify-start sm:gap-1 sm:pt-0 sm:border-t-0 sm:border-l sm:border-gray-800 sm:pl-3 shrink-0">
+        lg:order-none lg:w-auto lg:justify-start lg:gap-1 lg:pt-0 lg:border-t-0 lg:border-l lg:border-gray-800 lg:pl-3 shrink-0">
         <NavButton active={currentView === 'screener'} onClick={() => onNavigate?.('screener')}>
           Screener
         </NavButton>
         <NavButton active={currentView === 'deep-research'} onClick={() => onNavigate?.('deep-research')}>
-          <span className="hidden sm:inline">Deep Research</span>
-          <span className="sm:hidden">Research</span>
+          <span className="hidden lg:inline">Deep Research</span>
+          <span className="lg:hidden">Research</span>
         </NavButton>
         <NavButton active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
           Portfolio
@@ -461,4 +461,3 @@ export default function Header({
     </header>
   );
 }
-
