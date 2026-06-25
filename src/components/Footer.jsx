@@ -27,7 +27,7 @@ function NewsTicker({ news }) {
     return (
       <button
         onClick={() => setHidden(false)}
-        className="relative z-[48] shrink-0 w-full flex items-center justify-center gap-1 py-0.5 text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-300 bg-gray-950/90 border-t border-gray-800 transition-colors"
+        className="relative z-[48] shrink-0 w-full hidden lg:flex items-center justify-center gap-1 py-0.5 text-[9px] uppercase tracking-wider text-gray-600 hover:text-gray-300 bg-gray-950/90 border-t border-gray-800 transition-colors"
         title="Show trending news"
       >
         ▴ Trending
@@ -52,7 +52,7 @@ function NewsTicker({ news }) {
       </a>
     ));
   return (
-    <div className="relative z-[48] shrink-0 flex items-stretch border-t border-gray-800 bg-gray-950/90 overflow-hidden">
+    <div className="relative z-[48] shrink-0 hidden lg:flex items-stretch border-t border-gray-800 bg-gray-950/90 overflow-hidden">
       <span className="shrink-0 z-10 flex items-center px-2.5 text-[9px] font-bold uppercase tracking-wider text-amber-300 bg-gray-900 border-r border-gray-800">
         Trending
       </span>
@@ -93,7 +93,7 @@ export default function Footer({ news = [] }) {
     <>
       <NewsTicker news={news} />
       <footer
-        className="relative z-[48] shrink-0 border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 flex items-center gap-3 lg:gap-4 text-[11px] text-gray-500"
+        className="relative z-[48] shrink-0 hidden lg:flex border-t border-gray-800 bg-gray-950 px-3 lg:px-4 py-2 items-center gap-3 lg:gap-4 text-[11px] text-gray-500"
         style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
       >
       <span className="whitespace-nowrap">

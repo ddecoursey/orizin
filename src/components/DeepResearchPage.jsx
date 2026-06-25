@@ -382,7 +382,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
     <div className="flex-1 overflow-y-auto overscroll-contain bg-gray-950">
       {/* Sticky page header — identity + compact action toolbar */}
       <div className="sticky top-0 z-10 bg-gray-950 border-b border-gray-800 px-4 sm:px-6 py-2.5 sm:py-3">
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 sm:flex-nowrap sm:gap-3 min-w-0">
           <Tooltip content="Back to screener" side="bottom">
             <button
               onClick={onBack}
@@ -402,23 +402,27 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             />
           )}
 
-          <div className="min-w-0 flex-1 flex items-center gap-2 sm:gap-3">
-            <div className="min-w-0 shrink">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="text-lg sm:text-xl font-black text-gray-100 shrink-0">{symbol}</span>
-                <span
-                  className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0 hidden md:inline"
-                  style={{ background: sec.bg, color: sec.fg }}
-                >
-                  {row?.sector || "—"}
-                </span>
-              </div>
-              <div className="text-[11px] sm:text-xs text-gray-400 truncate max-w-[8rem] sm:max-w-[12rem] md:max-w-none">
-                {row?.name || profile?.companyName || ""}
-              </div>
+          {/* Identity: symbol + sector + name */}
+          <div className="min-w-0 shrink">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-lg sm:text-xl font-black text-gray-100 shrink-0">{symbol}</span>
+              <span
+                className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0 hidden md:inline"
+                style={{ background: sec.bg, color: sec.fg }}
+              >
+                {row?.sector || "—"}
+              </span>
             </div>
+            <div className="text-[11px] sm:text-xs text-gray-400 truncate max-w-[11rem] sm:max-w-[12rem] md:max-w-none">
+              {row?.name || profile?.companyName || ""}
+            </div>
+          </div>
 
-            <Tooltip content="Switch symbol without leaving Deep Research" side="bottom" maxWidth={200} className="w-28 sm:w-36 md:w-44 lg:w-48 shrink min-w-0">
+          {/* Tools: switch-symbol search + personalization lens. On mobile this
+              drops to its own full-width row (order-last + w-full) so the top row
+              never scrunches; tablet/desktop keep it inline (sm:* resets). */}
+          <div className="order-last w-full flex items-center gap-2 min-w-0 sm:order-none sm:w-auto sm:gap-3">
+            <Tooltip content="Switch symbol without leaving Deep Research" side="bottom" maxWidth={200} className="flex-1 sm:w-36 md:w-44 lg:w-48 min-w-0">
               <GlobalSearch
                 stocks={stocks}
                 onSelect={handleSearch}
@@ -426,19 +430,17 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
                 className="max-w-none flex-none w-full"
               />
             </Tooltip>
+            {(setPersona || setRisk || setGoal) && (
+              <ScreenerLens
+                persona={persona} setPersona={setPersona ?? (() => {})}
+                risk={risk} setRisk={setRisk ?? (() => {})}
+                horizon={horizon} setHorizon={setHorizon ?? (() => {})}
+                goal={goal} setGoal={setGoal ?? (() => {})}
+              />
+            )}
           </div>
 
-          {/* Personalization lens — single compact button on the identity row. */}
-          {(setPersona || setRisk || setGoal) && (
-            <ScreenerLens
-              persona={persona} setPersona={setPersona ?? (() => {})}
-              risk={risk} setRisk={setRisk ?? (() => {})}
-              horizon={horizon} setHorizon={setHorizon ?? (() => {})}
-              goal={goal} setGoal={setGoal ?? (() => {})}
-            />
-          )}
-
-          <div className="shrink-0 text-right">
+          <div className="shrink-0 text-right ml-auto sm:ml-0">
             <div className="text-sm sm:text-lg font-bold font-mono text-gray-100 leading-tight">
               {fmt(row?.price, "price") ?? "—"}
             </div>

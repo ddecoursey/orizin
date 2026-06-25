@@ -83,7 +83,7 @@ function NavButton({ active, onClick, children }) {
   return (
     <button
       onClick={onClick}
-      className={`px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
+      className={`flex-1 sm:flex-none text-center px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
         focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
         ${active
           ? "text-gray-100 bg-gray-800 font-semibold"
@@ -166,7 +166,7 @@ export default function Header({
   const rank = resolveRank({ plan, isAdmin });
 
   return (
-    <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex items-center gap-2 sm:gap-3 shrink-0 text-sm">
+    <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 sm:flex-nowrap sm:gap-3 shrink-0 text-sm">
       {currentUser && currentUser !== "default" && (
         <>
           <div
@@ -217,8 +217,11 @@ export default function Header({
         <DataSyncChip isAdmin={isAdmin} />
       </div>
 
-      {/* Top-level page navigation */}
-      <nav className="flex items-center gap-0.5 sm:gap-1 border-l border-gray-800 pl-2 sm:pl-3 shrink-0">
+      {/* Top-level page navigation. On mobile it drops to its own full-width row
+          (order-last + w-full) so the top row never scrunches; tablet/desktop keep
+          it inline (sm:* resets). */}
+      <nav className="order-last w-full justify-center flex items-center gap-1 pt-1.5 border-t border-gray-800/60
+        sm:order-none sm:w-auto sm:justify-start sm:gap-1 sm:pt-0 sm:border-t-0 sm:border-l sm:border-gray-800 sm:pl-3 shrink-0">
         <NavButton active={currentView === 'screener'} onClick={() => onNavigate?.('screener')}>
           Screener
         </NavButton>
