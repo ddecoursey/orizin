@@ -3,6 +3,11 @@
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
+export const LITE_GAME_PLAN_CACHE_PREFIX = "gameplan-lite-v2:";
+export function liteGamePlanCacheKey(symbol) {
+  return LITE_GAME_PLAN_CACHE_PREFIX + symbol;
+}
+
 function envDays(name, defaultDays) {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? n : defaultDays;
@@ -117,7 +122,7 @@ export function readFreshFrontierGamePlan(symbol, deps, ttlMs) {
 // SCREENER serving (db.getAllStocks, the intangibles GET) passes the long
 // screenerLiteTtlMs explicitly so trickled names stay covered for weeks.
 export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs()) {
-  return readFreshDetail(`gameplan-lite:${symbol}`, ttlMs, deps);
+  return readFreshDetail(liteGamePlanCacheKey(symbol), ttlMs, deps);
 }
 
 /**
@@ -127,6 +132,13 @@ export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs())
 /** True when a kv_cache `updated_at` is still inside the entry TTL. */
 export function isFreshDetailCache(cachedAt, ttlMs, now = Date.now()) {
   return Number.isFinite(cachedAt) && now - cachedAt < ttlMs;
+}
+
+/** Tier-aware freshness for persisted Deep Research Game Plan rows. */
+export function isFreshGamePlanCacheEntry(ori, cachedAt, now = Date.now()) {
+  if (!ori || typeof ori !== "object") return false;
+  const ttlMs = isFrontierGamePlan(ori) ? gamePlanFrontierTtlMs() : gamePlanLiteTtlMs();
+  return isFreshDetailCache(cachedAt, ttlMs, now);
 }
 
 /** False when a fresh frontier Pro cache makes lite generation wasteful. */

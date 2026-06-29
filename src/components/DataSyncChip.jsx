@@ -5,10 +5,12 @@ import { fmtAge } from "../lib/format.js";
 // background enrichment keeps it fresh (no per-user FMP refresh).
 export default function DataSyncChip({ isAdmin = false }) {
   const [sync, setSync] = useState(null);
+  const [now, setNow] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
+      setNow(Date.now());
       fetch("/api/status")
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
@@ -27,7 +29,7 @@ export default function DataSyncChip({ isAdmin = false }) {
   if (!sync) return null;
 
   const lastMs = sync.lastUpdate ? (typeof sync.lastUpdate === "number" ? sync.lastUpdate : Date.parse(sync.lastUpdate)) : null;
-  const age = lastMs && Number.isFinite(lastMs) ? fmtAge(Date.now() - lastMs) : null;
+  const age = lastMs && Number.isFinite(lastMs) && now ? fmtAge(now - lastMs) : null;
   const session = sync.marketSession || "closed";
   const label = sync.backgroundRunning
     ? age

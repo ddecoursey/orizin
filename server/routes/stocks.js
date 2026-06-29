@@ -44,11 +44,11 @@ import {
 import {
   resolveCachedGamePlan,
   readFreshLiteGamePlan,
-  readFreshFrontierGamePlan,
   shouldRunLiteIntangiblesGeneration,
   gamePlanFrontierTtlMs,
   screenerLiteTtlMs,
   gamePlanMaxOutputTokens,
+  liteGamePlanCacheKey,
 } from "../gamePlanCache.js";
 import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
 import { execCompAllowed } from "../fmpPlanLimits.js";
@@ -169,7 +169,6 @@ import {
   fetchIndicatorLatest,
   fetchEarnings,
   fetchCongressTrades,
-  fetchInsiderBySymbol,
   fetchRatingsSnapshot,
   fetchGrades,
   fetchGeneralNews,
@@ -1160,7 +1159,8 @@ router.get("/stocks/smart-money/:symbol", aiDetailLimiter, async (req, res) => {
 // canonical narrative data (profile + recent news) and asks Gemini to judge the
 // INTANGIBLES / future potential (the Tesla/SpaceX factor a spreadsheet misses),
 // macro tail/headwinds, bull & bear cases, and a BOUNDED adjustment to the
-// verdict. Pro-gated, rate-limited, cached 24h (company-level, not personalized).
+// verdict. Pro-gated, rate-limited, cached by model tier (frontier default: 1w;
+// sub-frontier fallback: short lite window) and shared company-wide.
 const GAME_PLAN_SCHEMA = {
   type: "OBJECT",
   properties: {
@@ -1258,14 +1258,18 @@ function sanitizeGamePlan(o) {
   };
   const str = (v, max = 600) => (typeof v === "string" ? v.slice(0, max) : "");
   const arr = (v, max = 6) => (Array.isArray(v) ? v.filter((x) => typeof x === "string").slice(0, max) : []);
+  const normalizeFactor = (v) => {
+    const f = str(v, 60);
+    return f === "platform_infrastructure_potential" ? "pricing_power_distribution" : f;
+  };
   const STRENGTH = ["strong", "moderate", "weak", "none"];
   // X-factors: structured breakdown of the intangible case across the 7 rated
-  // factors (future growth/importance, moat, platform potential, management,
+  // factors (future growth/importance, moat, pricing power/distribution, management,
   // ecosystem lock-in, innovation velocity). Drop "none"/blank rows so the UI
   // only shows factors that actually apply, and cap the list at the 7 categories.
   const xFactors = (Array.isArray(o.xFactors) ? o.xFactors : [])
     .map((x) => ({
-      factor: str(x?.factor, 60),
+      factor: normalizeFactor(x?.factor),
       strength: STRENGTH.includes(x?.strength) ? x.strength : "moderate",
       note: str(x?.note, 160),
     }))
@@ -1299,7 +1303,7 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     return res.status(402).json({ error: "Ori's Game Plan is a Pro feature. Upgrade for $10/month.", code: "upgrade_required" });
   }
   try {
-    // Explicit refresh always re-runs flash/lite — never busts the 24h Pro cache.
+    // Explicit refresh always re-runs the lite path — never busts the frontier cache.
     const refreshLite =
       req.query.refresh === "lite" ||
       req.query.refresh === "1" ||
@@ -1387,7 +1391,7 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
 // ── Screener intangibles (lite) ────────────────────────────────────────────
 // Cheap intangibles + X-Factors for the screener, generated on the LITE tier
 // only (A:lite → B:lite via geminiGenerateJson's per-key iteration) and cached
-// under `gameplan-lite:` — a DIFFERENT key from Deep Research's `gameplan:`, so
+// under the versioned lite Game Plan key — a DIFFERENT key from Deep Research's `gameplan:`, so
 // these never clobber DR's premium frontier review (db.getAllStocks prefers the
 // frontier review when both exist). Shared by the on-demand route below and the
 // background "leaders" trickle in index.js.
@@ -1416,7 +1420,7 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
   if (!shouldRunLiteIntangiblesGeneration(symbol, deps, { force })) {
     return readFreshLiteGamePlan(symbol, deps) ?? null;
   }
-  return cachedDetail(`gameplan-lite:${symbol}`, screenerLiteTtlMs(), async () => {
+  return cachedDetail(liteGamePlanCacheKey(symbol), screenerLiteTtlMs(), async () => {
     await acquireLiteLane();
     try {
       const useFullPrompt = hasClientGamePlanContext(stats, verdict);
@@ -1457,8 +1461,8 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
 }
 
 // ── GET/POST /api/stocks/intangibles/:symbol ───────────────────────────────
-// CACHE-ONLY. Returns the shared 24h lite review if the background trickle has
-// already produced one, else null. It NEVER generates on demand: the screener
+// CACHE-ONLY. Returns the shared lite review if the background trickle has already
+// produced one inside the long screener TTL, else null. It NEVER generates on demand: the screener
 // used to call this per leader and (via an oriData-driven effect) chained
 // through the whole conviction≥65 universe, running up the bill. The GLOBAL
 // hourly top-LEADERS trickle is the sole generator now. Pro/admin gated.

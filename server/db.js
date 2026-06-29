@@ -2,7 +2,14 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
-import { gamePlanFrontierTtlMs, screenerLiteTtlMs, screenerMinMcap } from './gamePlanCache.js';
+import {
+  gamePlanFrontierTtlMs,
+  gamePlanLiteTtlMs,
+  isFreshGamePlanCacheEntry,
+  screenerLiteTtlMs,
+  screenerMinMcap,
+  LITE_GAME_PLAN_CACHE_PREFIX,
+} from './gamePlanCache.js';
 
 const DB_PATH = process.env.DB_PATH || './data/screener.db';
 
@@ -575,6 +582,8 @@ export function saveRat(symbol, data) {
 // flows. (mom lives on the stocks row.)
 export function getAllStocks() {
   const now = Date.now();
+  const frontierTtl = gamePlanFrontierTtlMs();
+  const screenerLiteTtl = screenerLiteTtlMs();
   const rows = db
     .prepare(
       `SELECT s.*, ae.target_consensus, ae.target_high, ae.target_low,
@@ -585,7 +594,7 @@ export function getAllStocks() {
          LEFT JOIN ai_enrichment ae ON ae.symbol = s.symbol
          LEFT JOIN kv_cache rc ON rc.key = ('ratings:' || s.symbol)
          LEFT JOIN kv_cache gp ON gp.key = ('gameplan:' || s.symbol)
-         LEFT JOIN kv_cache gpl ON gpl.key = ('gameplan-lite:' || s.symbol)
+         LEFT JOIN kv_cache gpl ON gpl.key = ('${LITE_GAME_PLAN_CACHE_PREFIX}' || s.symbol)
         ORDER BY s.mcap DESC NULLS LAST`,
     )
     .all();
@@ -604,10 +613,10 @@ export function getAllStocks() {
     // Fold a STILL-FRESH cached Ori review onto the row so the screener
     // Conviction can reuse it — free (no new LLM call). Prefer the premium
     // frontier review from a Deep Research visit (`gameplan:`); fall back to the
-    // cheap lite review the screener/background trickle generates (`gameplan-lite:`).
+    // cheap lite review the screener/background trickle generates (the versioned lite Game Plan cache).
     // modelTier on the object tells them apart (frontier vs lite).
-    const parseFresh = (jsonStr, at, ttlMs) => {
-      if (!jsonStr || !at || now - at >= ttlMs) return null;
+    const parseJson = (jsonStr) => {
+      if (!jsonStr) return null;
       try {
         const parsed = JSON.parse(jsonStr);
         return parsed && typeof parsed === "object" ? parsed : null;
@@ -615,12 +624,20 @@ export function getAllStocks() {
         return null;
       }
     };
-    const frontierOri = parseFresh(row.gameplan_json, row.gameplan_at, gamePlanFrontierTtlMs());
+    const parseFresh = (jsonStr, at, ttlMs) => {
+      if (!jsonStr || !at || now - at >= ttlMs) return null;
+      return parseJson(jsonStr);
+    };
+    const detailOri =
+      row.gameplan_at && now - row.gameplan_at < frontierTtl
+        ? parseJson(row.gameplan_json)
+        : null;
+    const freshDetailOri = isFreshGamePlanCacheEntry(detailOri, row.gameplan_at, now) ? detailOri : null;
     // Lite reviews are served on the long screener TTL (≈30d) so a trickled name
     // keeps its nudge as the sweep works through the rest of the universe.
-    const liteOri = parseFresh(row.gameplan_lite_json, row.gameplan_lite_at, screenerLiteTtlMs());
-    const ori = frontierOri || liteOri;
-    const oriCachedAt = frontierOri ? row.gameplan_at : liteOri ? row.gameplan_lite_at : null;
+    const liteOri = parseFresh(row.gameplan_lite_json, row.gameplan_lite_at, screenerLiteTtl);
+    const ori = freshDetailOri || liteOri;
+    const oriCachedAt = freshDetailOri ? row.gameplan_at : liteOri ? row.gameplan_lite_at : null;
     const clean = { ...row };
     delete clean.ratings_json;
     delete clean.gameplan_json;
@@ -632,7 +649,7 @@ export function getAllStocks() {
 }
 
 // Background screener trickle — BOUNDED sweep. Each tick returns the next `limit`
-// stocks AT/ABOVE the market-cap floor (screenerMinMcap, default $5B; ETFs already
+// stocks AT/ABOVE the market-cap floor (screenerMinMcap, default $10B; ETFs already
 // excluded) that still need a lite intangibles review: NEVER-scored names first so
 // coverage works down the cap ladder before anything is refreshed, then the stalest.
 // A name counts as "covered" (and is skipped) while it has a lite review inside the
@@ -645,17 +662,39 @@ export function getAllStocks() {
 const nextIntangiblesStmt = db.prepare(`
   SELECT s.symbol FROM stocks s
   LEFT JOIN kv_cache gp  ON gp.key  = ('gameplan:' || s.symbol)
-  LEFT JOIN kv_cache gpl ON gpl.key = ('gameplan-lite:' || s.symbol)
+  LEFT JOIN kv_cache gpl ON gpl.key = ('${LITE_GAME_PLAN_CACHE_PREFIX}' || s.symbol)
   WHERE (s.is_etf IS NULL OR s.is_etf = 0) AND s.mcap >= ? AND s.has_km = 1
     AND (gpl.updated_at IS NULL OR gpl.updated_at < ?)
-    AND (gp.updated_at IS NULL OR gp.updated_at < ?)
+    AND (
+      gp.updated_at IS NULL
+      OR json_valid(gp.data) = 0
+      OR (
+        COALESCE(
+          json_extract(gp.data, '$.modelTier') = 'frontier'
+          OR json_extract(gp.data, '$.model') = 'gemini-3.1-pro-preview',
+          0
+        )
+        AND gp.updated_at < ?
+      )
+      OR (
+        NOT COALESCE(
+          json_extract(gp.data, '$.modelTier') = 'frontier'
+          OR json_extract(gp.data, '$.model') = 'gemini-3.1-pro-preview',
+          0
+        )
+        AND gp.updated_at < ?
+      )
+    )
   ORDER BY (gpl.updated_at IS NULL) DESC, s.mcap DESC
   LIMIT ?
 `);
 export function nextIntangiblesBacklog(now = Date.now(), limit = 1) {
   const liteCutoff = now - screenerLiteTtlMs();
   const frontierCutoff = now - gamePlanFrontierTtlMs();
-  return nextIntangiblesStmt.all(screenerMinMcap(), liteCutoff, frontierCutoff, limit).map((r) => r.symbol);
+  const detailFallbackCutoff = now - gamePlanLiteTtlMs();
+  return nextIntangiblesStmt
+    .all(screenerMinMcap(), liteCutoff, frontierCutoff, detailFallbackCutoff, limit)
+    .map((r) => r.symbol);
 }
 
 // Persist the ~45-day price return used by the screener Technicals signal.

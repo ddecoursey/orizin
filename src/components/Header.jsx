@@ -117,6 +117,8 @@ export default function Header({
   stocks = [],
   onOpenWatchlist,
   watchlistUnread = 0,
+  refreshNotice = null,
+  onClearRefreshNotice,
 }) {
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
@@ -164,6 +166,12 @@ export default function Header({
       : "•";
 
   const rank = resolveRank({ plan, isAdmin });
+  const refreshSymbols = Array.isArray(refreshNotice?.symbols) ? refreshNotice.symbols.filter(Boolean) : [];
+  const refreshText = refreshSymbols.length === 1
+    ? refreshSymbols[0] + " was refreshed for all users"
+    : refreshSymbols.length > 1
+      ? String(refreshSymbols.length) + " stocks were refreshed for all users"
+      : "";
 
   return (
     <header className="relative z-30 bg-gray-950 border-b border-gray-800 px-2 sm:px-4 py-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 lg:flex-nowrap lg:gap-3 shrink-0 text-sm">
@@ -216,6 +224,18 @@ export default function Header({
         {status.type !== "ready" && <span className="hidden lg:inline truncate max-w-[220px]">{status.msg}</span>}
         <DataSyncChip isAdmin={isAdmin} />
       </div>
+
+      {refreshText && (
+        <button
+          type="button"
+          onClick={onClearRefreshNotice}
+          className="flex items-center gap-1.5 max-w-[280px] sm:max-w-[300px] rounded-md border border-emerald-700/60 bg-emerald-950/50 px-2 py-1 text-[11px] font-medium text-emerald-200 shadow-sm shadow-emerald-950/20 shrink-0"
+          title={refreshSymbols.join(", ") + " refreshed for all users. Dismiss"}
+        >
+          <IconRefresh className="w-3 h-3 text-emerald-300 shrink-0" />
+          <span className="truncate">{refreshText}</span>
+        </button>
+      )}
 
       {/* Top-level page navigation. On mobile it drops to its own full-width row
           (order-last + w-full) so the top row never scrunches; desktop keeps

@@ -11,8 +11,9 @@ import {
   screenerLiteTtlMs,
   screenerMinMcap,
   gamePlanMaxOutputTokens,
+  liteGamePlanCacheKey,
 } from '../gamePlanCache.js';
-import sqliteDb, { kvSet, nextIntangiblesBacklog } from '../db.js';
+import sqliteDb, { getAllStocks, kvSet, nextIntangiblesBacklog } from '../db.js';
 
 const sym = 'ZZGPCACHE';
 const sym2 = 'ZZGPCACHE2';
@@ -68,10 +69,10 @@ test('lite TTL defaults to 24 hours', () => {
 
 test('resolveCachedGamePlan ignores expired lite so DR can generate frontier', () => {
   const now = Date.now();
-  kvSet(`gameplan-lite:${sym}`, lite);
+  kvSet(liteGamePlanCacheKey(sym), lite);
   sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(
     now - 48 * 60 * 60 * 1000,
-    `gameplan-lite:${sym}`,
+    liteGamePlanCacheKey(sym),
   );
 
   assert.equal(resolveCachedGamePlan(sym, deps()), null);
@@ -80,7 +81,7 @@ test('resolveCachedGamePlan ignores expired lite so DR can generate frontier', (
 test('resolveCachedGamePlan prefers frontier over lite from SQLite', () => {
   const now = Date.now();
   kvSet(`gameplan:${sym}`, frontier);
-  kvSet(`gameplan-lite:${sym}`, lite);
+  kvSet(liteGamePlanCacheKey(sym), lite);
   sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key LIKE ?').run(now, `gameplan%:${sym}`);
 
   const hit = resolveCachedGamePlan(sym, deps());
@@ -113,10 +114,10 @@ test('nextIntangiblesBacklog skips leaders with fresh frontier even when lite is
   const now = Date.now();
   kvSet(`gameplan:${sym2}`, frontier);
   sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(now, `gameplan:${sym2}`);
-  kvSet(`gameplan-lite:${sym2}`, lite);
+  kvSet(liteGamePlanCacheKey(sym2), lite);
   sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(
     now - 31 * 24 * 60 * 60 * 1000, // stale under the 30d screener TTL → only the fresh frontier keeps it out
-    `gameplan-lite:${sym2}`,
+    liteGamePlanCacheKey(sym2),
   );
 
   sqliteDb.prepare(
@@ -152,8 +153,8 @@ test('nextIntangiblesBacklog sweeps the whole universe, never-scored first then 
   sqliteDb.prepare(`INSERT OR REPLACE INTO stocks (symbol, mcap, has_km, is_etf, updated_at) VALUES (?, 9.8e12, 1, 0, ?)`).run(B, now);
   sqliteDb.prepare(`INSERT OR REPLACE INTO stocks (symbol, mcap, has_km, is_etf, updated_at) VALUES (?, 9.7e12, 1, 0, ?)`).run(C, now);
   // A is covered by a fresh lite review (inside the long screener TTL).
-  kvSet(`gameplan-lite:${A}`, lite);
-  sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(now, `gameplan-lite:${A}`);
+  kvSet(liteGamePlanCacheKey(A), lite);
+  sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(now, liteGamePlanCacheKey(A));
 
   const backlog = nextIntangiblesBacklog(now, 50);
   assert.equal(backlog.includes(A), false, 'fresh-lite (covered) name is skipped');
@@ -228,6 +229,16 @@ test('a sub-frontier gameplan: entry goes stale at the lite TTL; frontier stays 
     assert.equal(resolveCachedGamePlan(s, deps()), null);
     assert.equal(shouldRunLiteIntangiblesGeneration(s, deps()), true);
 
+    sqliteDb.prepare(
+      `INSERT OR REPLACE INTO stocks (symbol, mcap, has_km, is_etf, updated_at)
+       VALUES (?, 9.96e12, 1, 0, ?)`,
+    ).run(s, Date.now());
+    assert.equal(
+      nextIntangiblesBacklog(Date.now(), 50).includes(s),
+      true,
+      'stale sub-frontier gameplan should not suppress lite trickle backlog',
+    );
+
     // Same age, but a REAL frontier take → still authoritative for the full ~7d.
     kvSet(`gameplan:${s}`, frontier);
     ageTo(`gameplan:${s}`, 36 * 60 * 60 * 1000);
@@ -239,5 +250,33 @@ test('a sub-frontier gameplan: entry goes stale at the lite TTL; frontier stays 
     assert.equal(readFreshFrontierGamePlan(s, deps())?.modelTier, 'value');
   } finally {
     sqliteDb.prepare('DELETE FROM kv_cache WHERE key LIKE ?').run(`gameplan%:${s}`);
+    sqliteDb.prepare('DELETE FROM stocks WHERE symbol = ?').run(s);
+  }
+});
+
+test('getAllStocks uses tier-aware freshness for persisted gameplan fallbacks', () => {
+  const s = 'ZZGPDBTIER';
+  const now = Date.now();
+  const staleValue = { bottomLine: 'Stale value take', modelTier: 'value', convictionDelta: 1 };
+  const freshLite = { bottomLine: 'Fresh lite take', modelTier: 'lite', convictionDelta: 0 };
+  try {
+    sqliteDb.prepare(
+      `INSERT OR REPLACE INTO stocks (symbol, mcap, has_km, is_etf, updated_at)
+       VALUES (?, 9.94e12, 1, 0, ?)`,
+    ).run(s, now);
+    kvSet(`gameplan:${s}`, staleValue);
+    sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(
+      now - 36 * 60 * 60 * 1000,
+      `gameplan:${s}`,
+    );
+    kvSet(liteGamePlanCacheKey(s), freshLite);
+    sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(now, liteGamePlanCacheKey(s));
+
+    const row = getAllStocks().find((r) => r.symbol === s);
+    assert.equal(row?.ori?.bottomLine, 'Fresh lite take');
+    assert.equal(row?.oriCachedAt, now);
+  } finally {
+    sqliteDb.prepare('DELETE FROM kv_cache WHERE key IN (?, ?)').run(`gameplan:${s}`, liteGamePlanCacheKey(s));
+    sqliteDb.prepare('DELETE FROM stocks WHERE symbol = ?').run(s);
   }
 });

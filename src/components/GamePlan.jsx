@@ -168,7 +168,7 @@ function PersonaInsight({ verdict, profile }) {
   );
 }
 
-export default function GamePlan({ verdict, oriState = {}, isAdmin = false, oriReady = false, canUseOri = true, profile = null }) {
+export default function GamePlan({ verdict, oriState = {}, oriReady = false, canUseOri = true, profile = null }) {
   if (!verdict) return null;
 
   if (verdict.insufficient) {
@@ -323,7 +323,7 @@ function OriTake({ ori, oriState, canUseOri = false, oriReady = false }) {
             <div>
               <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1 flex items-center gap-1.5">
                 X-Factors
-                <InfoHint text="Future growth & importance, moat strength, platform potential, management execution, ecosystem lock-in, innovation velocity. Dots = strength. Feeds Intangibles pillar." />
+                <InfoHint text="Future growth & importance, moat strength, pricing power/distribution, management execution, ecosystem lock-in, innovation velocity. Dots = strength. Feeds Intangibles pillar." />
               </div>
               <div>
                 {ori.xFactors.map((x, i) => (

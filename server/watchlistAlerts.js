@@ -11,7 +11,6 @@ const COOLDOWN_MS = 4 * 60 * 60 * 1000;
 const CONVICTION_DELTA = 8;
 const NEWS_CACHE_MS = 30 * 60 * 1000;
 const MAX_DIGEST_ITEMS = 10;
-const MAX_NEWS_PER_SYMBOL = 3;
 const MAX_URGENT_EMAILS_DAY = 2;
 
 const newsCache = new Map();

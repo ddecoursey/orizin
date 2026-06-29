@@ -59,9 +59,11 @@ test("sanitizeLiteIntangibles returns screener-safe shape", () => {
     bottomLine: "Moat intact",
     intangiblesScore: 72,
     intangiblesRationale: "Brand",
-    convictionDelta: 3,
+    convictionDelta: 30,
   });
-  assert.equal(out.intangiblesScore, 72);
+  assert.equal(out.intangiblesScore, 35);
+  assert.equal(out.xFactors.length, 0);
+  assert.equal(out.convictionDelta, 8);
   assert.equal(out.bullCase, "");
   assert.ok(Array.isArray(out.xFactors));
 });
@@ -76,7 +78,7 @@ test("xFactors are derived from categoryScores — sorted by score, 'none' dropp
       future_growth_potential: { score: 80, rating: "strong", note: "TAM" },
       future_importance: { score: 30, rating: "weak", note: "replaceable" },
       moat_strength: { score: 0, rating: "none", note: "no moat" }, // dropped
-      platform_infrastructure_potential: { score: 60, rating: "moderate", note: "some lock-in" },
+      pricing_power_distribution: { score: 60, rating: "moderate", note: "some lock-in" },
       management_execution: { score: 45, rating: "moderate", note: "ok" },
       ecosystem_dependence: { score: 20, rating: "weak", note: "alternatives" },
       innovation_velocity: { score: 55, rating: "moderate", note: "steady" },
@@ -85,7 +87,7 @@ test("xFactors are derived from categoryScores — sorted by score, 'none' dropp
   // "none"-rated category is filtered out; the rest are ordered strongest-first.
   assert.deepEqual(out.xFactors.map((x) => x.factor), [
     "future_growth_potential",      // 80
-    "platform_infrastructure_potential", // 60
+    "pricing_power_distribution", // 60
     "innovation_velocity",          // 55
     "management_execution",         // 45
     "future_importance",            // 30
@@ -107,7 +109,7 @@ test("intangiblesScore is derived from categoryScores when the model omits it", 
       future_growth_potential: { score: 30, rating: "weak" },
       future_importance: { score: 25, rating: "weak" },
       moat_strength: { score: 20, rating: "none" },
-      platform_infrastructure_potential: { score: 15, rating: "none" },
+      pricing_power_distribution: { score: 15, rating: "none" },
       management_execution: { score: 40, rating: "moderate" },
       ecosystem_dependence: { score: 20, rating: "weak" },
       innovation_velocity: { score: 25, rating: "weak" },

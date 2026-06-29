@@ -27,7 +27,6 @@ import { pruneOldOriUsage } from './oriUsage.js';
 import { ensureChatContextCaches, startChatContextCacheRefresh } from './geminiContextCache.js';
 import {
   COOKIE_NAME,
-  SESSION_MAX_AGE_MS,
   buildCookie,
   verifyToken,
   validateSessionPayload,
@@ -211,14 +210,6 @@ promoteDesignatedAdmins();
 // Note: We intentionally compute "has users" dynamically in most places now
 // so that the first-admin setup flow works without requiring a server restart.
 const hasDbUsersAtStartup = db.userCount() > 0;
-
-// Derive a stable signing key. 
-// Strongly recommended: Set AUTH_SECRET in your environment (especially on Railway)
-// so sessions survive server restarts.
-const AUTH_SECRET = process.env.AUTH_SECRET
-  || crypto.createHash('sha256')
-       .update(`orizin-session-v1:stable-dev-secret`)   // stable default for local dev
-       .digest('hex');
 
 if ((process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') && !process.env.AUTH_SECRET) {
   console.error('[FATAL] AUTH_SECRET must be set in production deployments.');

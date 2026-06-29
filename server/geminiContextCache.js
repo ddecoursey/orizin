@@ -41,9 +41,9 @@ function chatModels() {
 }
 
 export function chatMaxOutputTokens(view = "screener") {
-  if (view === "deep-research") return envInt("ORI_CHAT_MAX_OUTPUT_DR", 3000);
-  if (view === "portfolio-goals") return envInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 2000);
-  return envInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 2000);
+  if (view === "deep-research") return envInt("ORI_CHAT_MAX_OUTPUT_DR", 4500);
+  if (view === "portfolio-goals") return envInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 3500);
+  return envInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 3500);
 }
 
 async function createChatCache(apiKey, model, view) {

@@ -460,6 +460,12 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
 
   const [pins, setPins] = useState(initialPins);
   const [enrichNotice, setEnrichNotice] = useState(null);
+  const enrichNoticeAt = enrichNotice?.at;
+  useEffect(() => {
+    if (!enrichNoticeAt) return;
+    const id = setTimeout(() => setEnrichNotice(null), 15_000);
+    return () => clearTimeout(id);
+  }, [enrichNoticeAt]);
   // True once we've reconciled local state with the server copy. Until then we
   // don't push writes up, so the initial local/default values can't clobber
   // settings that exist server-side before hydration finishes.
@@ -644,9 +650,10 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
 
     let cancelled = false;
     const inFlight = new Set();
+    const fetchedSet = oriFetchedRef.current;
     const fetchOne = async (r) => {
       const sym = r.symbol;
-      oriFetchedRef.current.add(sym);
+      fetchedSet.add(sym);
       inFlight.add(sym);
       try {
         // Cache-only read — background trickle is the sole generator; no body needed.
@@ -656,13 +663,13 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
           if (j.ori && !cancelled) {
             setOriData((prev) => ({ ...prev, [sym]: j.ori }));
           } else {
-            oriFetchedRef.current.delete(sym); // cache not warm yet — retry after trickle
+            fetchedSet.delete(sym); // cache not warm yet — retry after trickle
           }
         } else if (res.status === 503 || res.status === 429) {
-          oriFetchedRef.current.delete(sym); // transient — let a later sweep retry
+          fetchedSet.delete(sym); // transient — let a later sweep retry
         }
       } catch {
-        oriFetchedRef.current.delete(sym);
+        fetchedSet.delete(sym);
       } finally {
         inFlight.delete(sym);
       }
@@ -677,7 +684,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     return () => {
       cancelled = true;
       clearTimeout(timer);
-      for (const sym of inFlight) oriFetchedRef.current.delete(sym);
+      for (const sym of inFlight) fetchedSet.delete(sym);
     };
     // NOTE: `oriData` is intentionally NOT a dependency. With it in, every fetch
     // bumped oriData → re-ran this effect → fetched the next 15 uncached leaders,

@@ -113,7 +113,7 @@ export function useWatchlistAlerts({ enabled = true, pollMs = 60_000 } = {}) {
     } catch {
       return { error: "Network error" };
     }
-  }, [poll]);
+  }, []);
 
   return { alerts, snapshots, unread, dismiss, markRead, refresh: poll, triggerTestAlert };
 }

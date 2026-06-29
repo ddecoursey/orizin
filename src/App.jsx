@@ -467,7 +467,6 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     });
     setWlTestBusy(false);
     if (result?.ok) {
-      const sym = result.alert?.symbol || watchlists.watchlist?.symbols?.[0] || "AAPL";
       setWlTestOk(true);
       const n = result.alerts?.length ?? 1;
       setWlTestMsg(`${n} alert${n === 1 ? "" : "s"} queued — check the red badge on Watchlist in the header. Email is not sent by this button.`);
@@ -477,32 +476,42 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     }
   };
   const watchlistSymbols = watchlists.watchlist?.symbols || [];
+  const watchlistSymbolsKey = watchlistSymbols.join(",");
+  const [watchlistNow, setWatchlistNow] = useState(0);
+  useEffect(() => {
+    const update = () => setWatchlistNow(Date.now());
+    update();
+    const id = setInterval(update, 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
   const stockBySymbol = useMemo(
     () => new Map(stocks.map((s) => [s.symbol, s])),
     [stocks],
   );
   const pendingWlSymbols = useMemo(() => {
     const wl = watchlists.watchlist;
+    if (!watchlistNow) return new Set();
     if (!wl?.symbols?.length) return new Set();
-    const listRecent = wl.updatedAt && Date.now() - wl.updatedAt < 10 * 60 * 1000;
+    const listRecent = wl.updatedAt && watchlistNow - wl.updatedAt < 10 * 60 * 1000;
     if (!listRecent) return new Set();
     const stale = new Set();
-    const now = Date.now();
     for (const sym of wl.symbols) {
       const snap = wlAlerts.snapshots[sym];
       const row = stockBySymbol.get(sym);
       const pu = snap?.priceUpdatedAt ?? row?.price_updated_at;
-      if (!pu || now - pu > 5 * 60 * 1000) stale.add(sym);
+      if (!pu || watchlistNow - pu > 5 * 60 * 1000) stale.add(sym);
     }
     return stale;
-  }, [watchlists.watchlist, wlAlerts.snapshots, stockBySymbol]);
+  }, [watchlists.watchlist, wlAlerts.snapshots, stockBySymbol, watchlistNow]);
 
   useEffect(() => {
-    if (!watchlistSymbols.length || !refreshWatchlistQuotes) return;
-    refreshWatchlistQuotes(watchlistSymbols);
-    const id = setInterval(() => refreshWatchlistQuotes(watchlistSymbols), 3 * 60 * 1000);
+    if (!watchlistSymbolsKey || !refreshWatchlistQuotes) return;
+    const symbols = watchlistSymbolsKey.split(",").filter(Boolean);
+    if (!symbols.length) return;
+    refreshWatchlistQuotes(symbols);
+    const id = setInterval(() => refreshWatchlistQuotes(symbols), 3 * 60 * 1000);
     return () => clearInterval(id);
-  }, [watchlistSymbols.join(","), refreshWatchlistQuotes]);
+  }, [watchlistSymbolsKey, refreshWatchlistQuotes]);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
@@ -517,9 +526,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // Deep Research data load: admins re-gather from FMP (shared SQLite for all users);
   // everyone else reads the shared cache only — background job keeps it fresh.
   const regatherRef = useRef(regatherSymbol);
-  regatherRef.current = regatherSymbol;
   const researchSymbolRef = useRef(researchSymbol);
-  researchSymbolRef.current = researchSymbol;
+  useEffect(() => {
+    regatherRef.current = regatherSymbol;
+  }, [regatherSymbol]);
+  useEffect(() => {
+    researchSymbolRef.current = researchSymbol;
+  }, [researchSymbol]);
   const lastDrOpen = useRef({ view: null, symbol: null });
   useEffect(() => {
     if (currentView !== "deep-research") {
@@ -844,19 +857,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   return (
     <LazyMotion features={domAnimation} strict>
     <div className="h-[100dvh] flex flex-col bg-gray-950 text-gray-100 overflow-hidden">
-      {isAdmin && enrichNotice && (
-        <div className="enrich-notice shrink-0 flex items-center justify-between gap-3 px-4 py-2 bg-emerald-950/50 border-b border-emerald-800/50 text-xs text-emerald-200">
-          <span>
-            Refreshed <strong>{enrichNotice.symbols.join(", ")}</strong> — visible to all users
-          </span>
-          <button type="button" onClick={clearEnrichNotice} className="enrich-notice-dismiss text-emerald-400/80 hover:text-emerald-200 cursor-pointer">Dismiss</button>
-        </div>
-      )}
       <Header
         status={status}
         filtered={filtered}
         onOpenWatchlist={() => setShowWatchlist(true)}
         watchlistUnread={wlAlerts.alerts.length}
+        refreshNotice={enrichNotice}
+        onClearRefreshNotice={clearEnrichNotice}
 
         lastFetch={lastFetch}
         onRefresh={() => loadStocks(true)}
@@ -1581,4 +1588,3 @@ function rsiTrend(rsi) {
     direction: change5d > 1 ? "rising" : change5d < -1 ? "falling" : "flat",
   };
 }
-

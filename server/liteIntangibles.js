@@ -1,16 +1,22 @@
 // Background screener trickle: compact lite intangibles (fundamentals + profile + headlines).
 
+// Lite reviews have less context than full Deep Research, so their Conviction
+// adjustment must stay a small nudge and not dominate the deterministic score.
+export const LITE_CONVICTION_DELTA_CAP = 8;
+
 /** Slim system prompt — intangibles layer only, no full Game Plan narrative. */
-export const LITE_TRICKLE_SYSTEM = `You are Ori, Orizin's analyst. For ONE stock, judge the non-financial, future-potential factors the numbers miss, so the screener can nudge Conviction.
+export const LITE_TRICKLE_SYSTEM = `You are Ori, Orizin's analyst. For ONE stock, judge the non-financial, future-potential factors the numbers miss, so the screener can apply a small, calibrated Conviction nudge.
 
 Be critical, honest, and evidence-driven — move with the evidence, not the story. Most companies overstate their advantages, so require specific evidence for high scores; narrative, size, popularity, and brand aren't themselves evidence. But don't penalize a company for being early or investing heavily — real advantages can exist before they show up in the financials. Don't confuse current dominance with future dominance.
 
 Rate these 7 factors (score 0–100, rating strong/moderate/weak/none, one company-specific note):
-future_growth_potential, future_importance, moat_strength, platform_infrastructure_potential, management_execution, ecosystem_dependence, innovation_velocity.
+future_growth_potential, future_importance, moat_strength, pricing_power_distribution, management_execution, ecosystem_dependence, innovation_velocity.
+
+Calibration must match the full Game Plan: limited screener context is uncertainty, not permission to be optimistic. Most companies should land 40–60; >70 requires direct company-specific evidence, not generic sector tailwinds, market cap, popularity, or one upbeat headline.
 
 - categoryScores: all 7 keys, scored honestly.
-- intangiblesScore (0–100): weighted read — growth 20, importance 20, moat 15, platform 15, management 10, ecosystem 10, innovation 10. Anchors: 50 = average public company, 70 = strong evidence of durable advantage, 80+ = rare. Most cluster 40–60.
-- convictionDelta (-20..20): a small nudge; the data is the anchor.
+- intangiblesScore (0–100): weighted read from categoryScores — growth 20, importance 20, moat 15, pricing/distribution 15, management 10, ecosystem 10, innovation 10. Anchors: 50 = average public company, 70 = strong evidence of durable advantage, 80+ = rare. Most cluster 40–60.
+- convictionDelta (-${LITE_CONVICTION_DELTA_CAP}..${LITE_CONVICTION_DELTA_CAP}): a small nudge; the data is the anchor.
 - bottomLine: one plain, specific sentence.
 - Educational analysis only — not financial advice.
 Return ONLY JSON matching the schema. Keep all string fields short.`;
@@ -38,13 +44,13 @@ export const LITE_TRICKLE_SCHEMA = {
         future_growth_potential: CATEGORY_SCORE_ITEM,
         future_importance: CATEGORY_SCORE_ITEM,
         moat_strength: CATEGORY_SCORE_ITEM,
-        platform_infrastructure_potential: CATEGORY_SCORE_ITEM,
+        pricing_power_distribution: CATEGORY_SCORE_ITEM,
         management_execution: CATEGORY_SCORE_ITEM,
         ecosystem_dependence: CATEGORY_SCORE_ITEM,
         innovation_velocity: CATEGORY_SCORE_ITEM,
       },
-      required: ["future_growth_potential", "future_importance", "moat_strength", "platform_infrastructure_potential", "management_execution", "ecosystem_dependence", "innovation_velocity"],
-      propertyOrdering: ["future_growth_potential", "future_importance", "moat_strength", "platform_infrastructure_potential", "management_execution", "ecosystem_dependence", "innovation_velocity"],
+      required: ["future_growth_potential", "future_importance", "moat_strength", "pricing_power_distribution", "management_execution", "ecosystem_dependence", "innovation_velocity"],
+      propertyOrdering: ["future_growth_potential", "future_importance", "moat_strength", "pricing_power_distribution", "management_execution", "ecosystem_dependence", "innovation_velocity"],
     },
     convictionDelta: { type: "INTEGER" },
     horizonView: { type: "STRING", enum: ["trade", "oneYr", "threeYr", "fiveYr", "tenYr"] },
@@ -107,6 +113,7 @@ export function buildLiteTricklePrompt({ symbol, profile, news, stats }) {
   const s = stats || {};
   const num = (x, suf = "") => (x == null || !Number.isFinite(Number(x)) ? "—" : `${Number(x)}${suf}`);
   const pctf = (x) => (x == null || !Number.isFinite(Number(x)) ? "—" : `${(Number(x) * 100).toFixed(1)}%`);
+  // eslint-disable-next-line no-control-regex -- intentionally strips control chars from prompt-bound text
   const clean = (x, max = 160) => (typeof x === "string" ? x.replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, max) : "");
   const headlines = (Array.isArray(news) ? news : [])
     .slice(0, 5)
@@ -137,7 +144,7 @@ const INTANGIBLES_CATEGORY_KEYS = [
   "future_growth_potential",
   "future_importance",
   "moat_strength",
-  "platform_infrastructure_potential",
+  "pricing_power_distribution",
   "management_execution",
   "ecosystem_dependence",
   "innovation_velocity",
@@ -147,7 +154,7 @@ const INTANGIBLES_WEIGHTS = {
   future_growth_potential: 0.20,
   future_importance: 0.20,
   moat_strength: 0.15,
-  platform_infrastructure_potential: 0.15,
+  pricing_power_distribution: 0.15,
   management_execution: 0.10,
   ecosystem_dependence: 0.10,
   innovation_velocity: 0.10,
@@ -166,21 +173,22 @@ export function sanitizeLiteIntangibles(o) {
   const rawCat = o.categoryScores && typeof o.categoryScores === "object" ? o.categoryScores : {};
   const categoryScores = {};
   for (const k of INTANGIBLES_CATEGORY_KEYS) {
-    const c = rawCat[k] && typeof rawCat[k] === "object" ? rawCat[k] : {};
+    const sourceKey = k === "pricing_power_distribution" && !rawCat[k]
+      ? "platform_infrastructure_potential"
+      : k;
+    const c = rawCat[sourceKey] && typeof rawCat[sourceKey] === "object" ? rawCat[sourceKey] : {};
     categoryScores[k] = {
-      score: clampInt(c.score, 0, 100, 40),
-      rating: STRENGTH.includes(c.rating) ? c.rating : "moderate",
+      score: clampInt(c.score, 0, 100, 35),
+      rating: STRENGTH.includes(c.rating) ? c.rating : "none",
       note: str(c.note, 100),
     };
   }
 
-  // If intangiblesScore is absent/invalid, derive it from categoryScores.
-  let intangiblesScore = clampInt(o.intangiblesScore, 0, 100, -1);
-  if (intangiblesScore < 0) {
-    intangiblesScore = Math.round(
-      INTANGIBLES_CATEGORY_KEYS.reduce((sum, k) => sum + categoryScores[k].score * INTANGIBLES_WEIGHTS[k], 0)
-    );
-  }
+  // Always derive the headline score from categoryScores so the lite trickle
+  // cannot drift away from the same factor rubric used by the full Game Plan.
+  const intangiblesScore = Math.round(
+    INTANGIBLES_CATEGORY_KEYS.reduce((sum, k) => sum + categoryScores[k].score * INTANGIBLES_WEIGHTS[k], 0)
+  );
 
   // xFactors (the UI display list) is DERIVED from categoryScores — single source
   // of truth, so what the screener shows always matches the scored categories.
@@ -197,7 +205,7 @@ export function sanitizeLiteIntangibles(o) {
     intangiblesRationale: str(o.intangiblesRationale, 320),
     categoryScores,
     xFactors,
-    convictionDelta: clampInt(o.convictionDelta, -20, 20, 0),
+    convictionDelta: clampInt(o.convictionDelta, -LITE_CONVICTION_DELTA_CAP, LITE_CONVICTION_DELTA_CAP, 0),
     horizonView: HOR.includes(o.horizonView) ? o.horizonView : null,
     actionView: str(o.actionView, 60),
     // UI / mergeOriIntoVerdict tolerate absent narrative fields on lite cache.

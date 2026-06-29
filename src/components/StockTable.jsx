@@ -170,7 +170,6 @@ export default function StockTable({
   pins,
   onTogglePin,
   canUseOri = true,
-  onUpgradeToPro,
   onAskAI,
   onSelectStock,
   enrichLoading = false,
@@ -472,7 +471,8 @@ export default function StockTable({
           {COLS.map((c) => (
             <col key={c.key} style={{ width: COL_WIDTHS[c.key] }} />
           ))}
-          <col style={{ width: '52px' }} />     {/* Ask Ori */}
+          {/* Ask Ori */}
+          <col style={{ width: "52px" }} />
         </colgroup>
 
         <thead className="sticky top-0 z-20 bg-gray-950">
