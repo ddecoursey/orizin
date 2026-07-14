@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { applyFilters, DEFAULT_FILTERS } from '../../src/hooks/useScreener.js';
+import { applyConvictionFilters, applyFilters, DEFAULT_FILTERS } from '../../src/hooks/useScreener.js';
 
 const ROWS = [
   { symbol: 'AAA', name: 'Alpha', pe: 10, mcap: 5e9, price: 50, beta: 0.9, gross_margin: 0.55, roic: 0.18, volume: 2e6 },
@@ -79,4 +79,15 @@ test('pinnedOnly uses screener pins only (not watchlists)', () => {
   assert.deepEqual(syms(pinned), ['BBB']);
   const emptyPins = applyFilters(ROWS, f({ pinnedOnly: true }), NO_PINS);
   assert.deepEqual(syms(emptyPins), []);
+});
+
+test('Has Ori conviction only keeps scores backed by an Ori review', () => {
+  const rows = [
+    { symbol: 'ORI', conviction: 82, ori: { summary: 'Reviewed' } },
+    { symbol: 'BASE', conviction: 91, ori: null },
+    { symbol: 'NO_SCORE', conviction: null, ori: { summary: 'Reviewed' } },
+  ];
+  assert.deepEqual(syms(applyConvictionFilters(rows, '', true)), ['ORI']);
+  assert.deepEqual(syms(applyConvictionFilters(rows, { op: '>=', value: 85 }, true)), []);
+  assert.strictEqual(applyConvictionFilters(rows, '', false), rows);
 });

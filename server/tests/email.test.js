@@ -5,10 +5,17 @@ import * as db from '../db.js';
 import {
   canSendEmail,
   dailyEmailSentCount,
+  emailDeliveryDisabled,
   emailQuotaDateKey,
 } from '../email.js';
 
 const QUOTA_DAY = '2099-06-20';
+
+test('email delivery is disabled in tests or by explicit environment flag', () => {
+  assert.equal(emailDeliveryDisabled({ NODE_ENV: 'test' }), true);
+  assert.equal(emailDeliveryDisabled({ EMAIL_DISABLED: 'TRUE' }), true);
+  assert.equal(emailDeliveryDisabled({ NODE_ENV: 'production' }), false);
+});
 
 test('canSendEmail reserves slots for critical sends', () => {
   const key = `email_sent:${QUOTA_DAY}`;

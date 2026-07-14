@@ -637,7 +637,7 @@ const VALID_FILTER_KEYS = [
   'grossMin', 'opMin', 'netMin', 'ebitdaMin', 'fcfMargMin',
   'roicMin', 'roeMin', 'roaMin', 'peMax', 'pbMax', 'psMax',
   'evEbMax', 'evSMax', 'evGpMax', 'fcfMin', 'ndMax', 'crMin',
-  'deMax', 'divMin', 'payMax', 'betaMin', 'betaMax', 'pinnedOnly',
+  'deMax', 'divMin', 'payMax', 'betaMin', 'betaMax', 'pinnedOnly', 'hasOriConviction',
   // Additional keys the screener actually supports (so Ori recommendations aren't silently dropped)
   'universe', 'search', 'rule40Only', 'revGrowthMin', 'epsGrowthMin',
   'fcfGrowthMin', 'r40Min',

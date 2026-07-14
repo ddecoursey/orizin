@@ -6,6 +6,7 @@ import {
   gamePlanThinkingLevel,
   liteThinkingLevel,
   geminiGenerateJson,
+  isProductionEnv,
 } from "../geminiJson.js";
 
 // Drive geminiGenerateJson with a stubbed fetch and return the captured outgoing
@@ -105,5 +106,21 @@ test("per-journey level getters default low / medium / minimal and honor env", (
     assert.equal(liteThinkingLevel(), "default");
   } finally {
     keys.forEach((k) => (prev[k] == null ? delete process.env[k] : (process.env[k] = prev[k])));
+  }
+});
+
+test("Railway preview environments do not silently enable paid Gemini tiers", () => {
+  const keys = ["NODE_ENV", "APP_ENV", "PAYPAL_ENV", "RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME"];
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    keys.forEach((key) => delete process.env[key]);
+    process.env.RAILWAY_ENVIRONMENT = "preview-environment-id";
+    process.env.RAILWAY_ENVIRONMENT_NAME = "staging";
+    assert.equal(isProductionEnv(), false);
+
+    process.env.RAILWAY_ENVIRONMENT_NAME = "production";
+    assert.equal(isProductionEnv(), true);
+  } finally {
+    keys.forEach((key) => (prev[key] == null ? delete process.env[key] : (process.env[key] = prev[key])));
   }
 });

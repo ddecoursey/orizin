@@ -161,6 +161,7 @@ export const DEFAULT_FILTERS = {
   // Conviction (0-100) — the headline score. Applied AFTER scoring (it's computed
   // per-row post-filter), not in applyFilters. See convictionFiltered below.
   convictionMin: "",
+  hasOriConviction: false,
   mcapMin: "",
   mcapMax: "",
   volMin: "",
@@ -250,6 +251,20 @@ export function convictionPasses(conviction, cond) {
     case "<>": return conviction != value;
     default:   return true;
   }
+}
+
+export function hasOriConviction(row) {
+  return Boolean(row?.ori) && row?.conviction != null && Number.isFinite(Number(row.conviction));
+}
+
+export function applyConvictionFilters(rows, convictionCondition, requireOriConviction = false) {
+  const hasConvictionCondition = convictionCondition != null && convictionCondition !== "";
+  if (!hasConvictionCondition && !requireOriConviction) return rows;
+  const filtered = rows.filter((row) =>
+    (!requireOriConviction || hasOriConviction(row))
+    && (!hasConvictionCondition || convictionPasses(row.conviction, convictionCondition)),
+  );
+  return filtered.length === rows.length ? rows : filtered;
 }
 
 export function applyFilters(all, f, pins) {
@@ -714,14 +729,11 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     });
   }, [filtered, oriData, convictionOverrides, fitMap, risk, pillarWeights]);
 
-  // Final pass: the Conviction filter (applied here because Conviction is only
-  // known after scoring). Same reference when no Conviction filter is set.
+  // Final pass: Conviction filters run after cached/DR Ori reviews have been
+  // folded into each score, so "Has Ori conviction" cannot match a base score.
   const convictionFiltered = useMemo(() => {
-    const cond = filters.convictionMin;
-    if (cond == null || cond === "") return withOri;
-    const filteredOut = withOri.filter((r) => convictionPasses(r.conviction, cond));
-    return filteredOut.length === withOri.length ? withOri : filteredOut;
-  }, [withOri, filters.convictionMin]);
+    return applyConvictionFilters(withOri, filters.convictionMin, filters.hasOriConviction);
+  }, [withOri, filters.convictionMin, filters.hasOriConviction]);
 
   // ── Data loading ─────────────────────────────────────────────────────────
 

@@ -16,6 +16,7 @@ import settingsRouter from './routes/settings.js';
 import watchlistRouter from './routes/watchlist.js';
 import brokerageRouter from './routes/brokerage.js';
 import billingRouter from './routes/billing.js';
+import strategiesRouter from './routes/strategies.js';
 import { sendEmail, welcomeEmail, resetPasswordEmail, deletedAccountEmail } from './email.js';
 import * as db from './db.js';
 import * as paypal from './paypal.js';
@@ -588,6 +589,7 @@ app.use('/api', settingsRouter);
 app.use('/api', watchlistRouter);
 app.use('/api', brokerageRouter);
 app.use('/api', billingRouter);
+app.use('/api', strategiesRouter);
 
 // Global error handler for all /api routes — ensures we never return HTML.
 // (Express identifies error middleware by arity, so the 4th param stays.)

@@ -1224,3 +1224,84 @@ export async function fetchInsiderTrades(symbol, { limit = 40 } = {}) {
     url: t.url ?? null,
   }));
 }
+
+// ── Market context for Strategies ──────────────────────────────────────────
+// Starter currently exposes the historical sector/industry and mover endpoints,
+// but not dated snapshots. Keep these wrappers narrow and normalized so callers
+// never depend on FMP response drift or leak the API key into browser requests.
+
+async function fetchMarketArray(endpoint, params = {}, label = endpoint) {
+  const query = new URLSearchParams({ ...params, apikey: KEY() });
+  const url = `${BASE}/${endpoint}?${query.toString()}`;
+  try {
+    const data = await fetchWithRetry(url, 1, 12000);
+    if (!Array.isArray(data)) return [];
+    return data;
+  } catch (e) {
+    console.warn(`[FMP] ${label}:`, e.message);
+    return [];
+  }
+}
+
+export async function fetchHistoricalSectorPerformance(sector) {
+  const data = await fetchMarketArray("historical-sector-performance", { sector }, `sector-performance ${sector}`);
+  return data.map((row) => ({
+    date: row.date ?? null,
+    sector: row.sector ?? sector,
+    exchange: row.exchange ?? null,
+    averageChange: n(row.averageChange),
+  })).filter((row) => row.date && row.averageChange != null);
+}
+
+export async function fetchHistoricalIndustryPerformance(industry) {
+  const data = await fetchMarketArray("historical-industry-performance", { industry }, `industry-performance ${industry}`);
+  return data.map((row) => ({
+    date: row.date ?? null,
+    industry: row.industry ?? industry,
+    exchange: row.exchange ?? null,
+    averageChange: n(row.averageChange),
+  })).filter((row) => row.date && row.averageChange != null);
+}
+
+export async function fetchHistoricalSectorPe(sector) {
+  const data = await fetchMarketArray("historical-sector-pe", { sector }, `sector-pe ${sector}`);
+  return data.map((row) => ({
+    date: row.date ?? null,
+    sector: row.sector ?? sector,
+    exchange: row.exchange ?? null,
+    pe: n(row.pe),
+  })).filter((row) => row.date && row.pe != null);
+}
+
+export async function fetchHistoricalIndustryPe(industry) {
+  const data = await fetchMarketArray("historical-industry-pe", { industry }, `industry-pe ${industry}`);
+  return data.map((row) => ({
+    date: row.date ?? null,
+    industry: row.industry ?? industry,
+    exchange: row.exchange ?? null,
+    pe: n(row.pe),
+  })).filter((row) => row.date && row.pe != null);
+}
+
+function normalizeMover(row) {
+  const symbol = String(row?.symbol || "").trim().toUpperCase();
+  if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return null;
+  return {
+    symbol,
+    name: String(row.name || symbol).slice(0, 160),
+    price: n(row.price),
+    change: n(row.change),
+    changesPercentage: n(row.changesPercentage),
+    exchange: row.exchange ?? null,
+  };
+}
+
+export async function fetchBiggestGainers() {
+  const data = await fetchMarketArray("biggest-gainers", {}, "biggest-gainers");
+  return data.map(normalizeMover).filter(Boolean).slice(0, 50);
+}
+
+export async function fetchBiggestLosers() {
+  const data = await fetchMarketArray("biggest-losers", {}, "biggest-losers");
+  return data.map(normalizeMover).filter(Boolean).slice(0, 50);
+}

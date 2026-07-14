@@ -806,6 +806,13 @@ export function getStock(symbol) {
   return db.prepare('SELECT * FROM stocks WHERE symbol=?').get(symbol);
 }
 
+export function getStockClassifications(symbols) {
+  const clean = [...new Set((symbols || []).map((symbol) => String(symbol || '').toUpperCase()).filter((symbol) => /^[A-Z0-9.-]{1,12}$/.test(symbol)))].slice(0, 200);
+  if (!clean.length) return [];
+  const placeholders = clean.map(() => '?').join(',');
+  return db.prepare(`SELECT symbol, sector, industry, mcap FROM stocks WHERE symbol IN (${placeholders})`).all(...clean);
+}
+
 export function getMissingKm() {
   return db.prepare('SELECT symbol FROM stocks WHERE has_km=0').all().map(r => r.symbol);
 }
@@ -1165,6 +1172,12 @@ export function pruneUniverse(floor, refreshStart = 0) {
 
 export function getStockCount() {
   return db.prepare('SELECT COUNT(*) as c FROM stocks').get().c;
+}
+
+export function getStrategyContextNames() {
+  const sectors = db.prepare("SELECT DISTINCT sector FROM stocks WHERE sector IS NOT NULL AND sector != '' AND sector != '—'").all().map((row) => row.sector);
+  const industries = db.prepare("SELECT DISTINCT industry FROM stocks WHERE industry IS NOT NULL AND industry != '' AND industry != '—'").all().map((row) => row.industry);
+  return { sectors, industries };
 }
 
 export function getKmCount() {

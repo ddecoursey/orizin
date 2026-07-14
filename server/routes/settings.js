@@ -5,17 +5,19 @@ import { normalizeWatchlists } from "../../src/lib/watchlistNormalize.js";
 import { sanitizeWatchlistAlerts } from "../../src/lib/watchlistAlertsConfig.js";
 import { invalidateWatchlistUnionCache } from "../watchlistSymbols.js";
 import { PERSONA_KEYS, HORIZONS, GOALS } from "../../src/lib/personas.js";
+import { normalizeStrategy } from "../../src/lib/strategies.js";
 
 const router = Router();
 
 const ALLOWED_KEYS = new Set([
   "tabs", "activeTab", "weights", "risk", "persona", "horizon", "goal", "sort", "theme", "sidebarCollapsed",
   "portfolios", "goals", "theses", "oriMemory", "watchlists", "activeWatchlistId",
-  "watchlistAlerts", "nickname",
+  "watchlistAlerts", "nickname", "strategies", "activeStrategyId",
 ]);
 const MAX_NICKNAME_LEN = 64;
 const MAX_WATCHLIST_PAYLOAD_LISTS = 20;
 const MAX_BODY_BYTES = 256 * 1024;
+const MAX_STRATEGIES_BODY_BYTES = 1024 * 1024;
 const MAX_TABS = 30;
 const MAX_ORI_MEMORY = 80;
 const MAX_STRING_LEN = 4000;
@@ -23,8 +25,10 @@ const MAX_ARRAY_LEN = 200;
 
 function sanitizeSettings(partial) {
   if (!partial || typeof partial !== "object" || Array.isArray(partial)) return null;
-  const bodySize = JSON.stringify(partial).length;
-  if (bodySize > MAX_BODY_BYTES) return null;
+  const { strategies, ...otherSettings } = partial;
+  const settingsBytes = Buffer.byteLength(JSON.stringify(otherSettings));
+  const strategiesBytes = strategies === undefined ? 0 : Buffer.byteLength(JSON.stringify(strategies));
+  if (settingsBytes > MAX_BODY_BYTES || strategiesBytes > MAX_STRATEGIES_BODY_BYTES) return null;
 
   const out = {};
   for (const [k, v] of Object.entries(partial)) {
@@ -60,6 +64,15 @@ function sanitizeSettings(partial) {
     if (k === "portfolios") {
       if (!Array.isArray(v) || v.length > 20) continue;
       out.portfolios = v;
+      continue;
+    }
+    if (k === "strategies") {
+      if (!Array.isArray(v) || v.length > 20) continue;
+      out.strategies = v.map(normalizeStrategy).slice(0, 20);
+      continue;
+    }
+    if (k === "activeStrategyId" && typeof v === "string" && v.length <= 80) {
+      out.activeStrategyId = v;
       continue;
     }
     if (k === "weights" && v && typeof v === "object") {

@@ -91,7 +91,11 @@ const aiDetailLimiter = rateLimit({
 
 const sparklineLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 40,
+  // One valid strategy check can inspect 50 symbols, refresh removed holdings,
+  // then immediately backtest up to 20 positions. The FMP gate and 24h cache
+  // still bound upstream calls; this ceiling prevents legitimate runs from
+  // failing halfway through their own bounded workload.
+  max: 80,
   message: { error: 'Too many sparkline requests — slow down a moment.' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -115,19 +119,38 @@ function sparklinePricesFromRow(row) {
   }
 }
 
-async function resolveSparklinePrices(symbol, days, force = false) {
+const sparklineInflight = new Map();
+
+function sparklineRowFresh(row, maxAgeMs) {
+  return !maxAgeMs || (Number.isFinite(Number(row?.updated_at)) && Date.now() - Number(row.updated_at) <= maxAgeMs);
+}
+
+async function loadAndCacheSparkline(symbol) {
+  if (sparklineInflight.has(symbol)) return sparklineInflight.get(symbol);
+  const request = fetchHistoricalPricesLight(symbol, 1825)
+    .then((history) => {
+      if (history?.length) saveSparklineWindows(symbol, history);
+      return history || [];
+    })
+    .finally(() => sparklineInflight.delete(symbol));
+  sparklineInflight.set(symbol, request);
+  return request;
+}
+
+async function resolveSparklinePrices(symbol, days, force = false, maxAgeMs = null) {
   if (!force) {
-    const direct = sparklinePricesFromRow(getSparkline(symbol, days));
+    const directRow = getSparkline(symbol, days);
+    const direct = sparklineRowFresh(directRow, maxAgeMs) ? sparklinePricesFromRow(directRow) : null;
     if (direct) return direct.slice(-days);
     // One enrich pass can populate 45 / 365 / 1825 — reuse wider windows.
     for (const win of [1825, 365, 45]) {
       if (win < days) continue;
-      const wider = sparklinePricesFromRow(getSparkline(symbol, win));
+      const widerRow = getSparkline(symbol, win);
+      const wider = sparklineRowFresh(widerRow, maxAgeMs) ? sparklinePricesFromRow(widerRow) : null;
       if (wider?.length) return wider.slice(-days);
     }
   }
-  const history = await fetchHistoricalPricesLight(symbol, 1825);
-  if (history?.length) saveSparklineWindows(symbol, history);
+  const history = await loadAndCacheSparkline(symbol);
   return history?.slice(-days) || [];
 }
 
@@ -1787,9 +1810,13 @@ router.get("/stocks/sparkline/:symbol", sparklineLimiter, async (req, res) => {
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   const days = Math.min(1825, Math.max(5, parseInt(req.query.days, 10) || 45));
   const force = req.query.force === '1' || req.query.force === 'true';
+  const requestedMaxAgeHours = Number(req.query.maxAgeHours);
+  const maxAgeMs = Number.isFinite(requestedMaxAgeHours) && requestedMaxAgeHours > 0
+    ? Math.min(168, Math.max(1, requestedMaxAgeHours)) * 60 * 60 * 1000
+    : null;
 
   try {
-    const prices = await resolveSparklinePrices(symbol, days, force);
+    const prices = await resolveSparklinePrices(symbol, days, force, maxAgeMs);
     res.json({ symbol, prices });
   } catch (e) {
     console.error(`[Sparkline] Unexpected error for ${symbol}:`, e.message);

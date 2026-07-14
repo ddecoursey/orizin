@@ -624,6 +624,7 @@ function summarizeFilters(f) {
   if (f.industries?.length) parts.push(`industries: ${f.industries.join(", ")}`);
   if (f.pinnedOnly) parts.push("pinned only");
   if (f.rule40Only) parts.push("Rule-of-40 only");
+  if (f.hasOriConviction) parts.push("has Ori-reviewed Conviction");
   if (f.includeEtfs === false) parts.push("ETFs excluded");
 
   const numeric = [

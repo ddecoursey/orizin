@@ -21,7 +21,7 @@ export const isProductionEnv = () =>
   process.env.NODE_ENV === "production" ||
   process.env.APP_ENV === "production" ||
   process.env.PAYPAL_ENV === "live" ||
-  !!process.env.RAILWAY_ENVIRONMENT;
+  String(process.env.RAILWAY_ENVIRONMENT_NAME || "").toLowerCase() === "production";
 
 // Outside production, collapse any model ladder to lite-only so testing never
 // burns money on flash/pro. Set GEMINI_ALLOW_PAID_NONPROD=1 to opt back in.
