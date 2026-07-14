@@ -294,7 +294,8 @@ async function cachedDetail(key, ttlMs, fn, force = false) {
   }
 }
 
-// Bound the persistent cache: drop entries unused for 14 days, once a day.
+// Bound the persistent cache once a day. kvPurgeOlderThan protects Ori trickle
+// scores for their separate (default 30-day) configured lifetime.
 setInterval(() => {
   try {
     const purged = kvPurgeOlderThan(14 * 24 * 60 * 60 * 1000);
