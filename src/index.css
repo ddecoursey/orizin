@@ -58,6 +58,8 @@ body { background-color: var(--color-gray-950); }
 .light .text-violet-300,
 .light .text-violet-400 { color: #6d28d9 !important; }
 .light .text-sky-400 { color: #0284c7 !important; }
+.light .text-cyan-300,
+.light .text-cyan-400 { color: #0e7490 !important; }
 .light .text-emerald-300,
 .light .text-emerald-400 { color: #15803d !important; }
 .light .text-emerald-400\/80 { color: rgba(21,128,61,0.85) !important; }

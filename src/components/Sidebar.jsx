@@ -442,6 +442,16 @@ export default function Sidebar({ filters, setFilters, stocks, collapsed, onTogg
 
         <Section title="Conviction" defaultOpen accent="violet">
           <FilterRow label="Conviction" filterKey="convictionMin" filters={f} set={set} step={5} accent="violet" />
+          <label className="group mt-2 flex cursor-pointer select-none items-start gap-2.5 rounded-md border border-violet-900/40 bg-violet-950/15 px-2.5 py-2" title="Only show stocks whose displayed Conviction includes a cached or Deep Research Ori review.">
+            <input
+              type="checkbox"
+              checked={!!f.hasOriConviction}
+              onChange={(event) => set("hasOriConviction", event.target.checked)}
+              className="mt-0.5 accent-violet-400"
+            />
+            <span className={`mt-px text-[11px] leading-none ${f.hasOriConviction ? "text-violet-300" : "text-violet-500/70"}`}>✧</span>
+            <span><span className={`block text-[11px] font-medium ${f.hasOriConviction ? "text-gray-200" : "text-gray-400 group-hover:text-gray-200"}`}>Has Ori conviction</span><span className="mt-0.5 block text-[9px] leading-3.5 text-gray-600">Score includes an Ori review</span></span>
+          </label>
         </Section>
 
         <Section title="Size" defaultOpen>

@@ -17,8 +17,12 @@ const APP_URL = process.env.APP_URL || '';
 const EMAIL_DAILY_LIMIT = Math.max(1, Number(process.env.EMAIL_DAILY_LIMIT) || 100);
 const EMAIL_CRITICAL_RESERVE = Math.max(0, Number(process.env.EMAIL_CRITICAL_RESERVE) || 25);
 
+export function emailDeliveryDisabled(env = process.env) {
+  return env.NODE_ENV === 'test' || String(env.EMAIL_DISABLED || '').toLowerCase() === 'true';
+}
+
 export function emailConfigured() {
-  return !!(RESEND_API_KEY || SENDGRID_API_KEY);
+  return !emailDeliveryDisabled() && !!(RESEND_API_KEY || SENDGRID_API_KEY);
 }
 
 /** UTC calendar day — aligns with typical provider daily quotas. */
@@ -82,6 +86,7 @@ async function sendViaSendgrid({ to, subject, html, text }) {
 // priority: 'critical' (welcome, auth, billing, deletion) | 'optional' (watchlist urgent).
 export async function sendEmail({ to, subject, html, text, priority = 'optional' }) {
   if (!to) return { skipped: true };
+  if (emailDeliveryDisabled()) return { skipped: true, reason: 'disabled' };
   if (!canSendEmail(priority)) {
     const sent = dailyEmailSentCount();
     console.warn(

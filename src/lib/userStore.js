@@ -22,8 +22,8 @@ function flush() {
   timer = null;
   const body = pending;
   pending = {};
-  if (!Object.keys(body).length) return;
-  fetch("/api/settings", {
+  if (!Object.keys(body).length) return Promise.resolve();
+  return fetch("/api/settings", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -43,6 +43,13 @@ export function patchUserSettings(partial) {
 export function flushUserSettings() {
   if (timer) {
     clearTimeout(timer);
-    flush();
+    return flush();
   }
+  return Promise.resolve();
+}
+
+export function discardPendingUserSettings() {
+  if (timer) clearTimeout(timer);
+  timer = null;
+  pending = {};
 }

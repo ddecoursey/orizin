@@ -252,6 +252,9 @@ export default function Header({
         <NavButton active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
           Portfolio
         </NavButton>
+        <NavButton active={currentView === 'strategies'} onClick={() => onNavigate?.('strategies')}>
+          Strategies
+        </NavButton>
       </nav>
 
       {/* Right: watchlist panel + data menu + profile */}

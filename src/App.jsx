@@ -10,6 +10,7 @@ import { useChat } from "./hooks/useChat.js";
 import { useStockDetail } from "./hooks/useStockDetail.js";
 import { useNews } from "./hooks/useNews.js";
 import { usePortfolioGoals } from "./hooks/usePortfolioGoals.js";
+import { useStrategies } from "./hooks/useStrategies.js";
 import Header from "./components/Header.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import TabsBar from "./components/TabsBar.jsx";
@@ -22,6 +23,7 @@ import ChatPanel from "./components/ChatPanel.jsx";
 // Lazy: the landing page (and framer-motion with it) is only downloaded by
 // signed-out visitors — signed-in users go straight to the app bundle.
 const HomePage = lazy(() => import("./pages/HomePage.jsx"));
+const StrategiesPage = lazy(() => import("./pages/StrategiesPage.jsx"));
 import UsersModal from "./components/UsersModal.jsx";
 import StockDetailModal from "./components/StockDetailModal.jsx";
 import CompareModal from "./components/CompareModal.jsx";
@@ -30,7 +32,7 @@ import DeepResearchPage from "./components/DeepResearchPage.jsx";
 import Footer from "./components/Footer.jsx";
 import UpgradeModal from "./components/UpgradeModal.jsx";
 import AddTickerModal from "./components/AddTickerModal.jsx";
-import { fetchUserSettings, patchUserSettings } from "./lib/userStore.js";
+import { discardPendingUserSettings, fetchUserSettings, flushUserSettings, patchUserSettings } from "./lib/userStore.js";
 import { computeFit } from "./lib/fitScore.js";
 import { computeVerdict } from "./lib/verdict.js";
 import { parseSessionPlan, hasOriAccess } from "./lib/ranks.js";
@@ -118,12 +120,14 @@ export default function App() {
   }, []);
 
   const handleLogout = useCallback(async () => {
+    await flushUserSettings();
     try {
       await fetch("/api/auth/logout", { method: "POST" });
     } catch {
       // Even if the request fails, surface the login page so the user
       // can re-authenticate manually.
     }
+    discardPendingUserSettings();
     setCurrentUser(null);
     setAuthState("login");
   }, []);
@@ -214,13 +218,13 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // Portfolio & Goals (always loaded so it can be sent to Ori chat context)
   const portfolioGoals = usePortfolioGoals();
 
-  // Main view: 'screener' | 'portfolio-goals' | 'deep-research'. Initialized from
+  // Main view: 'screener' | 'portfolio-goals' | 'deep-research' | 'strategies'. Initialized from
   // the URL (?v=…&sym=…) so a refresh restores the page you were on instead of
   // snapping back to the screener. Kept in sync below.
   const [currentView, setCurrentView] = useState(() => {
     if (typeof window === "undefined") return "screener";
     const v = new URLSearchParams(window.location.search).get("v");
-    return v === "deep-research" || v === "portfolio-goals" ? v : "screener";
+    return v === "deep-research" || v === "portfolio-goals" || v === "strategies" ? v : "screener";
   });
   // Symbol currently open in the Deep Research page (single-stock focus).
   const [researchSymbol, setResearchSymbol] = useState(() => {
@@ -265,6 +269,11 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   // Deep Research owns the full width).
   const navigateTo = (view) => {
     if (view === "deep-research") {
+      setDetailStock(null);
+      setDetailStock2(null);
+      setPickingSecond(false);
+    }
+    if (view === "strategies") {
       setDetailStock(null);
       setDetailStock2(null);
       setPickingSecond(false);
@@ -451,6 +460,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     addTicker,
     cancelOperation,
   } = useScreener(currentUser, portfolioGoals, canUseOri, currentView);
+
+  // Strategy monitoring stays mounted across every main view so due paper checks
+  // continue while the user researches elsewhere in the app.
+  const strategies = useStrategies(currentUser, stocks, canUseOri);
 
   const watchlists = useWatchlists(currentUser);
   const wlAlerts = useWatchlistAlerts({ enabled: currentUser && currentUser !== "default" });
@@ -980,6 +993,15 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               risk={risk}
               setRisk={setRisk}
             />
+          ) : currentView === 'strategies' ? (
+            <Suspense fallback={<div className="flex h-full items-center justify-center bg-gray-950 text-xs text-gray-500">Loading strategies...</div>}>
+              <StrategiesPage
+                strategiesStore={strategies}
+                stocks={stocks}
+                canUseOri={canUseOri}
+                onUpgradeToPro={openUpgradeModal}
+              />
+            </Suspense>
           ) : (
             <>
               <TabsBar
@@ -1241,7 +1263,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           />
         )}
 
-        {chat.isOpen && (
+        {chat.isOpen && currentView !== 'strategies' && (
           <ChatPanel
             chat={chat}
             canUseOri={canUseOri}
@@ -1258,7 +1280,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           on open and settles back down from orbit on close. Slides left to clear
           the company detail pane(s) when open. */}
       <AnimatePresence>
-        {!chat.isOpen && (
+        {!chat.isOpen && currentView !== 'strategies' && (
           <m.div
             key="ori-fab"
             className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
@@ -1463,7 +1485,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 // read, so a recommendation is never silently dropped. mcap/price/beta live on
 // a single base key (range-capable); every other numeric metric lives on its
 // Min/Max key as { op, value }.
-const REC_PASSTHROUGH = new Set(["sectors", "industries", "universe", "search", "pinnedOnly", "rule40Only"]);
+const REC_PASSTHROUGH = new Set(["sectors", "industries", "universe", "search", "pinnedOnly", "rule40Only", "hasOriConviction"]);
 const REC_RANGES = { mcap: ["mcapMin", "mcapMax"], price: ["priceMin", "priceMax"], beta: ["betaMin", "betaMax"] };
 const REC_RANGE_FLAT = new Set(["mcapMin", "mcapMax", "priceMin", "priceMax", "betaMin", "betaMax"]);
 // Base metric names → canonical Min/Max key the screener reads.

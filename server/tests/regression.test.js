@@ -58,6 +58,9 @@ before(async () => {
       // guarantees no live FMP/Gemini calls and a clean auth slate.
       FMP_API_KEY: '',
       GEMINI_API_KEY: '',
+      RESEND_API_KEY: '',
+      SENDGRID_API_KEY: '',
+      EMAIL_DISABLED: 'true',
       AUTH_PASSWORD: '',
       AUTH_USERS_JSON: '',
       ENABLE_BACKGROUND_ENRICH: 'false',
@@ -378,6 +381,78 @@ test('settings are stored per user and shallow-merged', async () => {
   assert.equal(adminSettings.data.theme, undefined);
 });
 
+test('settings persist paper strategies and the active strategy per user', async () => {
+  const strategy = {
+    id: 'strat_test',
+    name: 'Test strategy',
+    description: 'A regression fixture',
+    status: 'paused',
+    universe: { type: 'symbols', symbols: ['SPY'], sectors: [], includeEtfs: true },
+    rules: [{ id: 'r1', metric: 'momentum90', operator: '>=', value: 0, label: 'Positive momentum' }],
+    branches: [{
+      id: 'b1', name: 'Volatility branch', match: 'all',
+      conditions: [{ id: 'c1', metric: 'annualized_volatility', lookbackDays: 999, operator: '>=', value: 0.3 }],
+      action: 'underweight', multiplier: 9,
+    }],
+    ranking: { primary: 'momentum90', secondary: 'conviction', direction: 'desc' },
+    limits: { maxPositions: 1, maxPositionPct: 80, cashReservePct: 20, rebalance: 'Monthly', allowOri: false },
+    paper: { startingCash: 100000, cash: 100000, holdings: [], equityHistory: [] },
+    activity: [],
+  };
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ strategies: [strategy], activeStrategyId: strategy.id }),
+  });
+  assert.equal(put.status, 200);
+  const body = await json(put);
+  assert.equal(body.data.strategies.length, 1);
+  assert.equal(body.data.strategies[0].name, 'Test strategy');
+  assert.equal(body.data.strategies[0].paper.startingCash, 100000);
+  assert.equal(body.data.strategies[0].branches[0].conditions[0].lookbackDays, 252);
+  assert.equal(body.data.strategies[0].branches[0].multiplier, 3);
+  assert.equal(body.data.activeStrategyId, strategy.id);
+
+  const adminSettings = await json(await fetch(api('/api/settings'), { headers: { cookie: adminCookie } }));
+  assert.equal(adminSettings.data.strategies, undefined);
+});
+
+test('settings allow bounded strategy history beyond the ordinary settings budget', async () => {
+  const email = `strategy_history_${Date.now()}@example.com`;
+  const signup = await fetch(api('/api/auth/signup'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: 'strongpass1A' }),
+  });
+  const cookie = cookieFrom(signup);
+  const strategies = Array.from({ length: 3 }, (_, strategyIndex) => ({
+    id: `history_${strategyIndex}`,
+    name: `History ${strategyIndex}`,
+    universe: { type: 'symbols', symbols: ['SPY'], includeEtfs: true },
+    rules: [{ metric: 'conviction', operator: '>=', value: 65 }],
+    paper: { startingCash: 100000, cash: 100000, holdings: [], equityHistory: [] },
+    activity: Array.from({ length: 100 }, (_, eventIndex) => ({
+      id: `event_${strategyIndex}_${eventIndex}`,
+      source: 'system',
+      action: 'Paper check completed',
+      explanation: 'x'.repeat(1000),
+    })),
+  }));
+  const payload = JSON.stringify({ strategies });
+  assert.ok(Buffer.byteLength(payload) > 256 * 1024);
+  assert.ok(Buffer.byteLength(payload) < 1024 * 1024);
+
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie },
+    body: payload,
+  });
+  assert.equal(put.status, 200);
+  const body = await json(put);
+  assert.equal(body.data.strategies.length, 3);
+  assert.equal(body.data.strategies[0].activity.length, 100);
+});
+
 // ── Stocks API ──────────────────────────────────────────────────────────────
 
 test('GET /api/stocks returns an empty universe with meta', async () => {
@@ -571,6 +646,27 @@ test('sparkline endpoint degrades cleanly without an FMP key', async () => {
   assert.deepEqual(body.prices, []);
 });
 
+test('strategy market signals endpoint is available without Ori access', async () => {
+  const empty = await fetch(api('/api/strategies/signals'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ families: [] }),
+  });
+  assert.equal(empty.status, 200);
+  const emptyBody = await json(empty);
+  assert.deepEqual(emptyBody.sectorPerformance, {});
+
+  const movers = await fetch(api('/api/strategies/signals'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ families: ['movers'] }),
+  });
+  assert.equal(movers.status, 200);
+  const moversBody = await json(movers);
+  assert.equal(moversBody.movers.counts.gainers, 0);
+  assert.equal(moversBody.movers.counts.losers, 0);
+});
+
 // ── Chat & Ori memory ───────────────────────────────────────────────────────
 
 test('chat requires a message and a configured key', async () => {
@@ -631,6 +727,24 @@ test('Ori is gated behind the Pro plan (402 for free users, open after upgrade)'
     body: JSON.stringify({ plan: 'enterprise' }),
   });
   assert.equal(junk.status, 400);
+});
+
+test('Ori strategy drafting and ranking are Pro-gated', async () => {
+  const draft = await fetch(api('/api/strategies/ori/draft'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ idea: 'Build a monthly quality strategy with a cash reserve' }),
+  });
+  assert.equal(draft.status, 402);
+  assert.equal((await json(draft)).code, 'upgrade_required');
+
+  const evaluate = await fetch(api('/api/strategies/ori/evaluate'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ candidates: [{ symbol: 'AAPL' }], maxPositions: 1 }),
+  });
+  assert.equal(evaluate.status, 402);
+  assert.equal((await json(evaluate)).code, 'upgrade_required');
 });
 
 test('admin can grant Starfarer (ultimate) to a free user', async () => {
