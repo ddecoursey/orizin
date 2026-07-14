@@ -12,8 +12,15 @@ import {
   screenerMinMcap,
   gamePlanMaxOutputTokens,
   liteGamePlanCacheKey,
+  readFreshLiteGamePlan,
 } from '../gamePlanCache.js';
-import sqliteDb, { getAllStocks, kvSet, nextIntangiblesBacklog } from '../db.js';
+import sqliteDb, {
+  getAllStocks,
+  kvPurgeOlderThan,
+  kvSet,
+  migrateLegacyLiteGamePlanCache,
+  nextIntangiblesBacklog,
+} from '../db.js';
 
 const sym = 'ZZGPCACHE';
 const sym2 = 'ZZGPCACHE2';
@@ -76,6 +83,71 @@ test('resolveCachedGamePlan ignores expired lite so DR can generate frontier', (
   );
 
   assert.equal(resolveCachedGamePlan(sym, deps()), null);
+});
+
+test('legacy lite scores remain readable during a cache-key rolling deploy', () => {
+  const symbol = 'ZZGPLEGACYREAD';
+  const legacyKey = `gameplan-lite:${symbol}`;
+  try {
+    kvSet(legacyKey, lite);
+    assert.equal(readFreshLiteGamePlan(symbol, deps())?.bottomLine, 'Lite take');
+  } finally {
+    sqliteDb.prepare('DELETE FROM kv_cache WHERE key LIKE ?').run(`gameplan-lite%:${symbol}`);
+  }
+});
+
+test('startup migration restores legacy lite scores without replacing a newer current score', () => {
+  const legacyOnly = 'ZZGPLEGACY';
+  const both = 'ZZGPBOTH';
+  const legacyOnlyKey = `gameplan-lite:${legacyOnly}`;
+  const oldKey = `gameplan-lite:${both}`;
+  const currentKey = liteGamePlanCacheKey(both);
+  const now = Date.now();
+  try {
+    kvSet(legacyOnlyKey, { ...lite, bottomLine: 'Restored legacy take' });
+    kvSet(oldKey, { ...lite, bottomLine: 'Older legacy take' });
+    sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?').run(now - 1000, oldKey);
+    kvSet(currentKey, { ...lite, bottomLine: 'Newer current take' });
+
+    const result = migrateLegacyLiteGamePlanCache();
+    assert.equal(result.found, 2);
+    assert.equal(sqliteDb.prepare('SELECT 1 FROM kv_cache WHERE key = ?').get(legacyOnlyKey), undefined);
+    assert.equal(sqliteDb.prepare('SELECT 1 FROM kv_cache WHERE key = ?').get(oldKey), undefined);
+    assert.equal(readFreshLiteGamePlan(legacyOnly, deps())?.bottomLine, 'Restored legacy take');
+    assert.equal(readFreshLiteGamePlan(both, deps())?.bottomLine, 'Newer current take');
+  } finally {
+    sqliteDb.prepare('DELETE FROM kv_cache WHERE key IN (?, ?, ?)').run(
+      legacyOnlyKey,
+      oldKey,
+      currentKey,
+    );
+    sqliteDb.prepare('DELETE FROM kv_cache WHERE key = ?').run(liteGamePlanCacheKey(legacyOnly));
+  }
+});
+
+test('generic cache cleanup keeps trickle scores for their configured TTL', () => {
+  const genericKey = 'profile:ZZGPPURGE';
+  const freshLiteKey = liteGamePlanCacheKey('ZZGPPURGEKEEP');
+  const staleLiteKey = liteGamePlanCacheKey('ZZGPPURGEDROP');
+  const now = Date.now();
+  sqliteDb.exec('SAVEPOINT trickle_purge_test');
+  try {
+    kvSet(genericKey, { ok: true });
+    kvSet(freshLiteKey, lite);
+    kvSet(staleLiteKey, lite);
+    const age = sqliteDb.prepare('UPDATE kv_cache SET updated_at = ? WHERE key = ?');
+    age.run(now - 20 * 24 * 60 * 60 * 1000, genericKey);
+    age.run(now - 20 * 24 * 60 * 60 * 1000, freshLiteKey);
+    age.run(now - 31 * 24 * 60 * 60 * 1000, staleLiteKey);
+
+    kvPurgeOlderThan(14 * 24 * 60 * 60 * 1000);
+    assert.equal(sqliteDb.prepare('SELECT 1 FROM kv_cache WHERE key = ?').get(genericKey), undefined);
+    assert.ok(sqliteDb.prepare('SELECT 1 FROM kv_cache WHERE key = ?').get(freshLiteKey));
+    assert.equal(sqliteDb.prepare('SELECT 1 FROM kv_cache WHERE key = ?').get(staleLiteKey), undefined);
+  } finally {
+    sqliteDb.exec('ROLLBACK TO trickle_purge_test');
+    sqliteDb.exec('RELEASE trickle_purge_test');
+  }
 });
 
 test('resolveCachedGamePlan prefers frontier over lite from SQLite', () => {

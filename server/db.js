@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
 import bcrypt from 'bcryptjs';
+import { resolveDatabaseLocation } from './dbPath.js';
 import {
   gamePlanFrontierTtlMs,
   gamePlanLiteTtlMs,
@@ -9,19 +10,24 @@ import {
   screenerLiteTtlMs,
   screenerMinMcap,
   LITE_GAME_PLAN_CACHE_PREFIX,
+  LEGACY_LITE_GAME_PLAN_CACHE_PREFIXES,
 } from './gamePlanCache.js';
 
-const DB_PATH = process.env.DB_PATH || './data/screener.db';
-
-// Use the path as-is if it is already absolute, otherwise resolve relative to cwd.
-// path.resolve() on an absolute path is a no-op, but being explicit here avoids
-// any confusion when DB_PATH="/data/screener.db" is injected by Railway.
-const resolvedDbPath = path.isAbsolute(DB_PATH) ? DB_PATH : path.resolve(DB_PATH);
+const dbLocation = resolveDatabaseLocation();
+const DB_PATH = dbLocation.inputPath;
+const resolvedDbPath = dbLocation.resolvedPath;
 const dir = path.dirname(resolvedDbPath);
 
-console.log(`[db] DB_PATH env: "${DB_PATH}"`);
+console.log(`[db] DB_PATH: "${DB_PATH}"${dbLocation.inferredFromVolume ? ' (inferred from Railway volume)' : ''}`);
 console.log(`[db] Resolved database path: "${resolvedDbPath}"`);
 console.log(`[db] Database directory: "${dir}"`);
+
+if (dbLocation.error) {
+  console.error(`[db] FATAL: ${dbLocation.error}`);
+  process.exit(1);
+} else if (process.env.NODE_ENV === 'production' && !dbLocation.railway && !process.env.DB_PATH) {
+  console.warn('[db] WARNING: DB_PATH is not configured in production. Confirm that the default data directory is persistent.');
+}
 
 // Ensure the parent directory exists and is writable before opening the database.
 try {
@@ -259,6 +265,54 @@ try {
 } catch (err) {
   console.error(`[db] FATAL: Schema initialization failed: ${err.message}`);
   process.exit(1);
+}
+
+// v2 originally changed the lite Game Plan key without moving existing rows,
+// which made every paid trickle score look deleted after deployment. Cache-key
+// changes must migrate data: copy the newest value to the current key, then remove
+// the superseded key. This is safe to run on every boot and across rolling deploys.
+export function migrateLegacyLiteGamePlanCache() {
+  const migrate = db.transaction(() => {
+    let found = 0;
+    let removed = 0;
+    const countStmt = db.prepare('SELECT COUNT(*) AS count FROM kv_cache WHERE key LIKE ?');
+    const copyStmt = db.prepare(`
+      INSERT INTO kv_cache (key, data, updated_at)
+      SELECT ? || substr(key, ?), data, updated_at
+        FROM kv_cache
+       WHERE key LIKE ?
+      ON CONFLICT(key) DO UPDATE SET
+        data = excluded.data,
+        updated_at = excluded.updated_at
+      WHERE excluded.updated_at > kv_cache.updated_at
+    `);
+    const deleteStmt = db.prepare('DELETE FROM kv_cache WHERE key LIKE ?');
+
+    for (const prefix of LEGACY_LITE_GAME_PLAN_CACHE_PREFIXES) {
+      const pattern = `${prefix}%`;
+      const count = countStmt.get(pattern)?.count || 0;
+      if (!count) continue;
+      found += count;
+      copyStmt.run(LITE_GAME_PLAN_CACHE_PREFIX, prefix.length + 1, pattern);
+      removed += deleteStmt.run(pattern).changes;
+    }
+    const current = countStmt.get(`${LITE_GAME_PLAN_CACHE_PREFIX}%`)?.count || 0;
+    return { found, removed, current };
+  });
+
+  return migrate();
+}
+
+try {
+  const migrated = migrateLegacyLiteGamePlanCache();
+  if (migrated.found > 0) {
+    console.log(`[db] Migration: restored ${migrated.found} legacy Ori trickle score(s) under the current cache key`);
+  }
+  console.log(`[db] Ori trickle cache ready: ${migrated.current} persisted score(s)`);
+} catch (err) {
+  // The read path still falls back to legacy keys, so a migration failure is
+  // visible and recoverable rather than a reason to take the whole app down.
+  console.error(`[db] Ori trickle cache migration failed: ${err.message}`);
 }
 
 // ── Migrations: ensure new columns exist on already-created databases ─────
@@ -1074,9 +1128,18 @@ export function kvSet(key, data) {
 }
 
 // Drop entries not touched within maxAgeMs (run occasionally to bound growth).
+// Trickle scores have their own longer configurable TTL and must not be removed
+// early by the generic detail-cache policy.
 export function kvPurgeOlderThan(maxAgeMs = 14 * 24 * 60 * 60 * 1000) {
-  const cutoff = Date.now() - maxAgeMs;
-  return db.prepare('DELETE FROM kv_cache WHERE updated_at < ?').run(cutoff).changes;
+  const now = Date.now();
+  const cutoff = now - maxAgeMs;
+  const liteCutoff = now - screenerLiteTtlMs();
+  const litePattern = `${LITE_GAME_PLAN_CACHE_PREFIX}%`;
+  return db.prepare(`
+    DELETE FROM kv_cache
+     WHERE (key LIKE ? AND updated_at < ?)
+        OR (key NOT LIKE ? AND updated_at < ?)
+  `).run(litePattern, liteCutoff, litePattern, cutoff).changes;
 }
 
 export function getOldestSymbols(limit = 50) {

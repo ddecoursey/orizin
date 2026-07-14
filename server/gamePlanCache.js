@@ -4,8 +4,18 @@ const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 export const LITE_GAME_PLAN_CACHE_PREFIX = "gameplan-lite-v2:";
+// Cache-key versions are storage migrations, not invalidation switches. Keep old
+// prefixes readable until db.js has copied them to the current key at startup.
+export const LEGACY_LITE_GAME_PLAN_CACHE_PREFIXES = Object.freeze([
+  "gameplan-lite:",
+]);
+
 export function liteGamePlanCacheKey(symbol) {
   return LITE_GAME_PLAN_CACHE_PREFIX + symbol;
+}
+
+export function legacyLiteGamePlanCacheKeys(symbol) {
+  return LEGACY_LITE_GAME_PLAN_CACHE_PREFIXES.map((prefix) => prefix + symbol);
 }
 
 function envDays(name, defaultDays) {
@@ -122,7 +132,16 @@ export function readFreshFrontierGamePlan(symbol, deps, ttlMs) {
 // SCREENER serving (db.getAllStocks, the intangibles GET) passes the long
 // screenerLiteTtlMs explicitly so trickled names stay covered for weeks.
 export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs()) {
-  return readFreshDetail(liteGamePlanCacheKey(symbol), ttlMs, deps);
+  const current = readFreshDetail(liteGamePlanCacheKey(symbol), ttlMs, deps);
+  if (current) return current;
+
+  // Rolling deploys can briefly run code from both sides of a cache-key migration,
+  // and an interrupted startup migration must not make paid scores disappear.
+  for (const key of legacyLiteGamePlanCacheKeys(symbol)) {
+    const legacy = readFreshDetail(key, ttlMs, deps);
+    if (legacy) return legacy;
+  }
+  return null;
 }
 
 /**
