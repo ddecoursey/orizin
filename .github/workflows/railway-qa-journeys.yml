@@ -1,0 +1,152 @@
+name: Railway QA user journeys
+
+on:
+  deployment_status:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Journey suite to run
+        required: true
+        default: qa
+        type: choice
+        options:
+          - qa
+          - preview
+      base_url:
+        description: Preview origin for a manual preview run; persistent QA always uses QA_BASE_URL
+        required: false
+        type: string
+      live_ai:
+        description: Send one real Ori/Gemini canary prompt (uses quota)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: railway-journeys-${{ github.event.deployment.environment || inputs.suite || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  persistent-qa:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.suite == 'qa') ||
+      (github.event_name == 'deployment_status' &&
+       github.event.deployment_status.state == 'success' &&
+       (github.event.deployment.environment == 'qa' ||
+        (vars.RAILWAY_QA_ENVIRONMENT != '' &&
+         github.event.deployment.environment == vars.RAILWAY_QA_ENVIRONMENT)))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      # Railway already created this GitHub Environment for the persistent QA
+      # service. `deployment: false` keeps this test job from creating a second
+      # deployment-status event.
+      name: Orizin / qa
+      deployment: false
+    env:
+      # Never let a dispatch input redirect the dedicated QA admin credential to
+      # another host. Persistent role journeys always use this allowlisted URL.
+      E2E_BASE_URL: ${{ vars.QA_BASE_URL }}
+      SMOKE_BASE_URL: ${{ vars.QA_BASE_URL }}
+      E2E_EXPECTED_ENV: qa
+      E2E_EXPECTED_SHA: ${{ github.event_name == 'deployment_status' && github.event.deployment.sha || '' }}
+      QA_E2E_LIVE_AI: ${{ inputs.live_ai || false }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.deployment.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Wait for the exact Railway deployment
+        run: npm run test:qa:wait
+      - name: Run credential-free deployed smoke checks
+        run: npm run test:smoke
+      - name: Provision disposable QA journey accounts
+        run: npm run test:qa:provision
+        env:
+          QA_E2E_ADMIN_EMAIL: ${{ secrets.QA_E2E_ADMIN_EMAIL }}
+          QA_E2E_ADMIN_PASSWORD: ${{ secrets.QA_E2E_ADMIN_PASSWORD }}
+      - name: Walk anonymous, free, Voyager, admin, and mobile journeys
+        run: npm run test:e2e:deployed
+      - name: Remove disposable QA journey accounts
+        if: ${{ always() }}
+        run: npm run test:qa:cleanup
+        env:
+          QA_E2E_ADMIN_EMAIL: ${{ secrets.QA_E2E_ADMIN_EMAIL }}
+          QA_E2E_ADMIN_PASSWORD: ${{ secrets.QA_E2E_ADMIN_PASSWORD }}
+      - name: Upload browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: railway-qa-playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  disposable-preview:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.suite == 'preview') ||
+      (github.event_name == 'deployment_status' &&
+       github.event.deployment_status.state == 'success' &&
+       vars.RAILWAY_PR_E2E_ENABLED == 'true' &&
+       (startsWith(github.event.deployment.environment, 'pr-') ||
+        (vars.RAILWAY_PR_ENV_PREFIX != '' &&
+         startsWith(github.event.deployment.environment, vars.RAILWAY_PR_ENV_PREFIX))))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      # Preview tests use only the QA-only setup token, injected at the step
+      # that needs it. They share the existing QA Environment rather than a
+      # production deployment environment.
+      name: Orizin / qa
+      deployment: false
+    env:
+      E2E_BASE_URL: ${{ inputs.base_url || github.event.deployment_status.environment_url }}
+      SMOKE_BASE_URL: ${{ inputs.base_url || github.event.deployment_status.environment_url }}
+      E2E_EXPECTED_ENV: qa
+      E2E_EXPECTED_SHA: ${{ github.event_name == 'deployment_status' && github.event.deployment.sha || '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.deployment.sha || github.sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Require the preview-only setup token
+        run: test -n "$E2E_FIRST_ADMIN_SETUP_TOKEN"
+        env:
+          E2E_FIRST_ADMIN_SETUP_TOKEN: ${{ secrets.E2E_FIRST_ADMIN_SETUP_TOKEN }}
+      - name: Wait for the exact Railway preview
+        run: npm run test:qa:wait
+      - name: Run credential-free deployed smoke checks
+        run: npm run test:smoke
+      - name: Walk first-admin setup, strategy persistence, mobile, and logout journeys
+        run: npm run test:e2e:preview
+        env:
+          E2E_FIRST_ADMIN_SETUP_TOKEN: ${{ secrets.E2E_FIRST_ADMIN_SETUP_TOKEN }}
+      - name: Upload browser diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: railway-preview-playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
