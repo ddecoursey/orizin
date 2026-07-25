@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   execCompAllowed,
   execCompRestricted,
+  markExecCompUnavailable,
   _resetFmpPlanLimitsForTests,
 } from "../fmpPlanLimits.js";
 
@@ -30,4 +31,11 @@ test("empty FMP_EXEC_COMP_SYMBOLS means unrestricted", () => {
   process.env.FMP_EXEC_COMP_SYMBOLS = "  ";
   assert.equal(execCompRestricted(), false);
   assert.equal(execCompAllowed("PLD"), true);
+});
+
+test("runtime 402 denials prevent repeat executive-compensation calls", () => {
+  assert.equal(execCompAllowed("FICO"), true);
+  markExecCompUnavailable("fico");
+  assert.equal(execCompAllowed("FICO"), false);
+  assert.equal(execCompAllowed("AAPL"), true);
 });

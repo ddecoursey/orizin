@@ -89,3 +89,25 @@ test("buildChatGeminiBody applies the configured chat thinking level (cached + f
     else process.env.ORI_CHAT_THINKING_LEVEL = prev;
   }
 });
+
+test("buildChatGeminiBody adds optional function tools to cached and fallback requests", () => {
+  const model = valueModel();
+  const declarations = [{
+    name: "fmp_quote",
+    description: "Get a quote",
+    parameters: {
+      type: "object",
+      properties: { symbol: { type: "string" } },
+      required: ["symbol"],
+    },
+  }];
+
+  const fallback = buildChatGeminiBody(model, "ctx", [], "screener", declarations);
+  assert.deepEqual(fallback.tools, [{ functionDeclarations: declarations }]);
+  assert.equal(fallback.toolConfig.functionCallingConfig.mode, "AUTO");
+
+  _setChatContextCacheForTests(model, "cachedContents/test-cache");
+  const cached = buildChatGeminiBody(model, "ctx", [], "screener", declarations);
+  assert.deepEqual(cached.tools, [{ functionDeclarations: declarations }]);
+  assert.equal(cached.system_instruction, undefined);
+});

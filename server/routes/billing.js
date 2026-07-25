@@ -4,6 +4,7 @@ import * as db from '../db.js';
 import * as paypal from '../paypal.js';
 import { sendEmail, subscriptionEmail, cancelEmail } from '../email.js';
 import { emailForNotifications } from '../userProfile.js';
+import { cancelLinkedSubscription, cancellationErrorResponse } from '../subscriptionLifecycle.js';
 
 const router = Router();
 
@@ -15,14 +16,35 @@ const actionLimiter = rateLimit({ windowMs: 60_000, max: 20, standardHeaders: tr
 
 // PayPal statuses that count as "subscribed → Pro".
 const ACTIVE = new Set(['ACTIVE', 'APPROVED']);
+const REPLACEABLE_SUBSCRIPTION_STATUSES = new Set(['', 'CANCELLED', 'EXPIRED']);
+const SYNC_EVENTS = new Set([
+  'BILLING.SUBSCRIPTION.ACTIVATED',
+  'BILLING.SUBSCRIPTION.RE-ACTIVATED',
+  'BILLING.SUBSCRIPTION.UPDATED',
+  'PAYMENT.SALE.COMPLETED',
+]);
 function toMs(t) {
   const ms = t ? Date.parse(t) : NaN;
   return Number.isFinite(ms) ? ms : null;
 }
 
-// GET /api/billing/config — public config for the browser PayPal SDK.
-router.get('/billing/config', (req, res) => {
-  res.json(paypal.publicConfig());
+function canReplaceSubscription(user, nextSubscriptionId) {
+  if (!user?.paypal_subscription_id || user.paypal_subscription_id === nextSubscriptionId) return true;
+  return REPLACEABLE_SUBSCRIPTION_STATUSES.has(
+    String(user.subscription_status || '').toUpperCase(),
+  );
+}
+
+// GET /api/billing/config — safe browser config plus a per-user ownership token.
+router.get('/billing/config', actionLimiter, (req, res) => {
+  const config = paypal.publicConfig();
+  if (!config.configured) return res.json(config);
+  try {
+    return res.json({ ...config, checkoutToken: db.createBillingCheckoutToken(req.userId) });
+  } catch (error) {
+    console.error('[billing] checkout token creation failed:', error.message);
+    return res.status(500).json({ error: 'Could not initialize a secure checkout' });
+  }
 });
 
 // GET /api/billing/status — the current user's subscription/plan state.
@@ -66,11 +88,37 @@ router.post('/billing/activate', actionLimiter, async (req, res) => {
     return res.status(409).json({ error: 'This subscription is already linked to another account' });
   }
 
-  db.setUserSubscription(req.userId, {
-    subscriptionId,
-    status: sub.status,
-    proUntil: toMs(sub?.billing_info?.next_billing_time),
-  });
+  const currentUser = db.getUserByUsername(req.userId);
+  if (!currentUser) return res.status(404).json({ error: 'User not found' });
+  if (!canReplaceSubscription(currentUser, subscriptionId)) {
+    return res.status(409).json({ error: 'Cancel the existing subscription before linking another one' });
+  }
+
+  // Existing links have already established ownership. Every new link must carry
+  // the opaque custom_id issued to this signed-in user before checkout started.
+  if (!existing) {
+    const checkoutOwner = db.getUserByBillingCheckoutToken(sub.custom_id);
+    if (!checkoutOwner || checkoutOwner.username !== req.userId) {
+      return res.status(403).json({
+        error: 'This checkout does not belong to the signed-in account',
+        code: 'checkout_owner_mismatch',
+      });
+    }
+  }
+
+  try {
+    db.setUserSubscription(req.userId, {
+      subscriptionId,
+      status: sub.status,
+      proUntil: toMs(sub?.billing_info?.next_billing_time),
+    });
+  } catch (error) {
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return res.status(409).json({ error: 'This subscription is already linked to another account' });
+    }
+    console.error('[billing] subscription activation write failed:', error.message);
+    return res.status(500).json({ error: 'Could not activate the subscription' });
+  }
 
   const updated = db.getUserByUsername(req.userId);
   const to = emailForNotifications(updated);
@@ -85,28 +133,24 @@ router.post('/billing/activate', actionLimiter, async (req, res) => {
 router.post('/billing/cancel', actionLimiter, async (req, res) => {
   const user = db.getUserByUsername(req.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
-
-  const subId = user.paypal_subscription_id;
-  let proUntil; // undefined → keep the existing pro_until (the known period end)
-
-  if (subId && paypal.isConfigured()) {
-    // Read the paid-through date BEFORE cancelling (PayPal clears it after).
-    try {
-      const sub = await paypal.getSubscription(subId);
-      const ms = toMs(sub?.billing_info?.next_billing_time);
-      if (ms) proUntil = ms;
-    } catch (e) {
-      console.error('[billing] cancel: getSubscription failed:', e.message);
-    }
-    // Stop future charges. Downgrade-with-grace happens locally regardless.
-    try {
-      await paypal.cancelSubscription(subId);
-    } catch (e) {
-      console.error('[billing] cancel: PayPal cancel failed (continuing):', e.message);
-    }
+  if (!user.paypal_subscription_id) {
+    return res.status(400).json({ error: 'No linked subscription was found' });
   }
 
-  db.setUserSubscription(req.userId, { subscriptionId: subId || null, status: 'CANCELLED', proUntil });
+  let cancellation;
+  try {
+    cancellation = await cancelLinkedSubscription(user);
+  } catch (error) {
+    console.error('[billing] cancellation failed:', error.cause?.message || error.message);
+    const failure = cancellationErrorResponse(error);
+    return res.status(failure.status).json(failure.body);
+  }
+
+  db.setUserSubscription(req.userId, {
+    subscriptionId: cancellation.subscriptionId,
+    status: 'CANCELLED',
+    proUntil: cancellation.proUntil,
+  });
   const updated = db.getUserByUsername(req.userId);
 
   const to = emailForNotifications(updated);
@@ -130,44 +174,54 @@ router.post('/billing/webhook', webhookLimiter, async (req, res) => {
     await handleWebhookEvent(event);
   } catch (e) {
     console.error('[billing] webhook handling error:', e.message);
+    return res.status(500).json({ error: 'Webhook processing failed' });
   }
   res.json({ ok: true });
 });
 
-async function handleWebhookEvent(event) {
+export async function handleWebhookEvent(event) {
   const type = event?.event_type || '';
   const resource = event?.resource || {};
-  const subId = resource.id || resource.billing_agreement_id;
+  const subId = type === 'PAYMENT.SALE.COMPLETED'
+    ? resource.billing_agreement_id
+    : resource.id || resource.billing_agreement_id;
   if (!subId) return;
 
-  const user = db.getUserBySubscriptionId(subId);
-  if (!user) return; // not one of ours (or not linked yet)
+  let user = db.getUserBySubscriptionId(subId);
 
-  if (
-    type === 'BILLING.SUBSCRIPTION.ACTIVATED' ||
-    type === 'BILLING.SUBSCRIPTION.RE-ACTIVATED' ||
-    type === 'BILLING.SUBSCRIPTION.UPDATED' ||
-    type === 'PAYMENT.SALE.COMPLETED'
-  ) {
-    // Refresh from the source of truth so pro_until tracks each renewal.
-    let status = 'ACTIVE';
-    let proUntil;
-    try {
-      const sub = await paypal.getSubscription(subId);
-      status = sub.status || 'ACTIVE';
-      proUntil = toMs(sub?.billing_info?.next_billing_time);
-    } catch (e) {
-      console.error('[billing] webhook getSubscription failed:', e.message);
+  if (SYNC_EVENTS.has(type)) {
+    // Always refresh from PayPal. This verifies the plan, finds custom_id for an
+    // unlinked redirect checkout, and keeps the paid-through date current.
+    const sub = await paypal.getSubscription(subId);
+    if (paypal.expectedPlanId() && sub.plan_id !== paypal.expectedPlanId()) {
+      console.warn('[billing] ignored webhook for an unexpected PayPal plan');
+      return;
     }
-    db.setUserSubscription(user.username, { subscriptionId: subId, status, proUntil });
+
+    if (!user) {
+      const checkoutOwner = db.getUserByBillingCheckoutToken(sub.custom_id || resource.custom_id);
+      if (!checkoutOwner || !ACTIVE.has(String(sub.status || '').toUpperCase())) return;
+      if (!canReplaceSubscription(checkoutOwner, subId)) {
+        throw new Error('Checkout owner already has a different non-terminal subscription');
+      }
+      user = checkoutOwner;
+    }
+
+    db.setUserSubscription(user.username, {
+      subscriptionId: subId,
+      status: sub.status || 'ACTIVE',
+      proUntil: toMs(sub?.billing_info?.next_billing_time),
+    });
   } else if (
     type === 'BILLING.SUBSCRIPTION.CANCELLED' ||
     type === 'BILLING.SUBSCRIPTION.SUSPENDED'
   ) {
+    if (!user) return;
     // Keep the grace: status changes, pro_until (period end) is preserved.
     const status = type.split('.').pop(); // CANCELLED | SUSPENDED
     db.setUserSubscription(user.username, { subscriptionId: subId, status });
   } else if (type === 'BILLING.SUBSCRIPTION.EXPIRED') {
+    if (!user) return;
     // The subscription is genuinely over → Free now.
     db.setUserSubscription(user.username, { subscriptionId: subId, status: 'EXPIRED', proUntil: null });
   }

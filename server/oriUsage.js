@@ -16,8 +16,7 @@ import {
   getUserByUsername,
   normalizePlan,
   userCount,
-  incrementOriUsage,
-  insertOriUsageEvent,
+  recordOriUsageLedger,
   countOriUsageEventsSince,
   oldestOriUsageEventSince,
   getOriUsageDay,
@@ -32,6 +31,15 @@ import {
   estimateCostUsd,
   costBreakdownFromTotals,
 } from "./geminiTokens.js";
+
+// Node handles requests concurrently while Gemini calls are in flight. Count a
+// request from the moment it is admitted, not only after Gemini returns, so a
+// burst cannot pass the same stale quota snapshot many times.
+const pendingOriRequests = new Map();
+
+function pendingCount(userId) {
+  return pendingOriRequests.get(userId) || 0;
+}
 
 // Positive integer from env, else the default. A non-positive / garbage value
 // falls back to the default rather than silently locking every Pro user out.
@@ -70,7 +78,6 @@ export function oriLimitsForPlan(plan) {
 }
 
 function limitsForUser(userId) {
-  if (isOriUnlimited(userId)) return oriLimits();
   const user = getUserByUsername(userId);
   return oriLimitsForPlan(user?.plan);
 }
@@ -99,7 +106,7 @@ export function isOriUnlimited(userId) {
     if (!user) return userCount() === 0; // legacy env-password mode
     return !!user.is_admin;
   } catch {
-    return true; // never let a bookkeeping error block a paying user
+    return false;
   }
 }
 
@@ -123,13 +130,14 @@ function sessionResetsAt(userId, sinceMs) {
  * Is this user allowed to spend another Ori request right now?
  * @returns {{ ok: true, unlimited?: boolean } | { ok: false, scope, limit, used, resetsAt?, message }}
  */
-export function checkOriQuota(userId) {
+function checkOriQuotaFromLedger(userId) {
   if (isOriUnlimited(userId)) return { ok: true, unlimited: true };
   const limits = limitsForUser(userId);
+  const pending = pendingCount(userId);
   const day = todayKey();
   const windowMs = sessionWindowMs(limits.sessionHours);
   const since = Date.now() - windowMs;
-  const sessionUsed = countOriUsageEventsSince(userId, since);
+  const sessionUsed = countOriUsageEventsSince(userId, since) + pending;
 
   if (sessionUsed >= limits.session) {
     const resetsAt = sessionResetsAt(userId, since);
@@ -147,39 +155,74 @@ export function checkOriQuota(userId) {
   }
 
   const today = getOriUsageDay(userId, day);
-  if (today.requests >= limits.daily) {
+  const dailyUsed = today.requests + pending;
+  if (dailyUsed >= limits.daily) {
     return {
       ok: false,
       scope: "day",
       limit: limits.daily,
-      used: today.requests,
-      message: limitMessage("day", limits.daily, today.requests),
+      used: dailyUsed,
+      message: limitMessage("day", limits.daily, dailyUsed),
     };
   }
 
   const weekStart = dayKeyDaysAgo(day, 6);
   const week = getOriUsageRange(userId, weekStart, day);
-  if (week.requests >= limits.weekly) {
+  const weeklyUsed = week.requests + pending;
+  if (weeklyUsed >= limits.weekly) {
     return {
       ok: false,
       scope: "week",
       limit: limits.weekly,
-      used: week.requests,
-      message: limitMessage("week", limits.weekly, week.requests),
+      used: weeklyUsed,
+      message: limitMessage("week", limits.weekly, weeklyUsed),
     };
   }
 
   const month = getOriUsageRange(userId, monthStartKey(day), day);
-  if (month.requests >= limits.monthly) {
+  const monthlyUsed = month.requests + pending;
+  if (monthlyUsed >= limits.monthly) {
     return {
       ok: false,
       scope: "month",
       limit: limits.monthly,
-      used: month.requests,
-      message: limitMessage("month", limits.monthly, month.requests),
+      used: monthlyUsed,
+      message: limitMessage("month", limits.monthly, monthlyUsed),
     };
   }
   return { ok: true };
+}
+
+export function checkOriQuota(userId) {
+  try {
+    return checkOriQuotaFromLedger(userId);
+  } catch (error) {
+    console.warn("[oriUsage] quota verification failed:", error.message);
+    return {
+      ok: false,
+      scope: "metering",
+      message: "Ori usage could not be verified. Please try again in a moment.",
+    };
+  }
+}
+
+/** Atomically check the current process's ledger view and reserve one call. */
+export function acquireOriQuota(userId) {
+  const quota = checkOriQuota(userId);
+  if (!quota.ok || quota.unlimited) return { ...quota, reservation: null };
+
+  const reservation = { userId, released: false };
+  pendingOriRequests.set(userId, pendingCount(userId) + 1);
+  return { ...quota, reservation };
+}
+
+/** Idempotently release an in-flight quota reservation. */
+export function releaseOriQuota(reservation) {
+  if (!reservation || reservation.released) return;
+  reservation.released = true;
+  const count = pendingCount(reservation.userId);
+  if (count <= 1) pendingOriRequests.delete(reservation.userId);
+  else pendingOriRequests.set(reservation.userId, count - 1);
 }
 
 /**
@@ -190,7 +233,7 @@ export function checkOriQuota(userId) {
  * @param {{ kind: 'chat' | 'plan', usage?: object, model?: string, fallback?: object }} opts
  */
 export async function recordOriUsage(userId, { kind, usage, model, fallback } = {}) {
-  if (!userId) return;
+  if (!userId) return false;
   try {
     const isPlan = kind === "plan";
     const usedModel = model || (isPlan ? frontierModel() : valueModel());
@@ -220,14 +263,15 @@ export async function recordOriUsage(userId, { kind, usage, model, fallback } = 
       delta.chatThoughtsTokens = t.thoughtsTokens || 0;
       delta.chatCostUsdMicros = cost.totalUsdMicros;
     }
-    incrementOriUsage(userId, todayKey(), delta);
-    insertOriUsageEvent(userId, isPlan ? "plan" : "chat", at);
+    recordOriUsageLedger(userId, todayKey(), delta, isPlan ? "plan" : "chat", at);
     if (t.source === "countTokens") {
-      console.log(`[oriUsage] countTokens fallback for ${userId} (${kind}): ${t.promptTokens}+${t.outputTokens} tok → ${cost.totalUsd.toFixed(4)} USD`);
+      console.log(`[oriUsage] countTokens fallback (${kind}): ${t.promptTokens}+${t.outputTokens} tok → ${cost.totalUsd.toFixed(4)} USD`);
     }
+    return true;
   } catch (e) {
     // Usage accounting must never break the actual feature.
     console.warn("[oriUsage] record failed:", e.message);
+    return false;
   }
 }
 
@@ -254,7 +298,7 @@ function shapeWindow(row) {
 export function getOriUsageSummary(userId) {
   const day = todayKey();
   const unlimited = isOriUnlimited(userId);
-  const limits = limitsForUser(userId);
+  const limits = unlimited ? oriLimits() : limitsForUser(userId);
   const user = unlimited ? null : getUserByUsername(userId);
   const planTier = unlimited ? null : normalizePlan(user?.plan);
   const windowMs = sessionWindowMs(limits.sessionHours);

@@ -16,6 +16,16 @@
     "build": "vite build",
     "lint": "eslint .",
     "test": "node --test \"server/tests/**/*.test.js\"",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:only": "playwright test",
+    "test:e2e:deployed": "E2E_DEPLOYED=true playwright test e2e/deployed-journeys.spec.js",
+    "test:e2e:preview": "playwright test e2e/core-flows.spec.js",
+    "test:qa:provision": "node scripts/qa-e2e-users.mjs provision",
+    "test:qa:cleanup": "node scripts/qa-e2e-users.mjs cleanup",
+    "test:qa:wait": "node scripts/wait-for-deployment.mjs",
+    "test:smoke": "node scripts/smoke-deployed.mjs",
+    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "test:ci": "npm run lint && npm test && npm run build && npm run test:e2e:only",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -24,7 +34,6 @@
     "@vitejs/plugin-react": "^6.0.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^9.4.3",
-    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^8.5.2",
@@ -39,6 +48,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "eslint": "^10.3.0",

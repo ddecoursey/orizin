@@ -16,6 +16,9 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
   const [user, setUser] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [setupToken, setSetupToken] = useState("");
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
+  const [setupAvailable, setSetupAvailable] = useState(true);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -29,10 +32,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
     setError(null);
     setPassword("");
     setConfirm("");
+    setSetupToken("");
     fetch("/api/auth/status")
       .then((r) => r.json())
       .then((data) => {
         setSignupsEnabled(!!data.signupsEnabled);
+        setSetupTokenRequired(!!data.setupTokenRequired);
+        setSetupAvailable(data.setupAvailable !== false);
         if (data.needsSetup) setMode("setup");
         else if (initialMode === "signup" && !data.signupsEnabled) setMode("login");
       })
@@ -53,6 +59,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
     setNotice(null);
     setPassword("");
     setConfirm("");
+    setSetupToken("");
   }
 
   async function handleSubmit(e) {
@@ -78,9 +85,9 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
       return;
     }
 
-    if (mode === "signup") {
-      if (password !== confirm) return setError("Passwords don't match");
-      if (password.length < 8) return setError("Password must be at least 8 characters");
+    if (mode === "signup" || mode === "setup") {
+      if (mode === "signup" && password !== confirm) return setError("Passwords don't match");
+      if (password.length < 8 || password.length > 200) return setError("Password must be 8-200 characters");
     }
     if (mode === "signup" || mode === "setup") {
       const email = user.trim().toLowerCase();
@@ -96,7 +103,7 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
     const body = mode === "signup"
       ? { email, password }
       : mode === "setup"
-        ? { user: email, password }
+        ? { user: email, password, setupToken }
         : { user, password };
 
     try {
@@ -186,10 +193,11 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
+                <label htmlFor="auth-identifier" className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
                   {mode === "signup" || mode === "forgot" || mode === "setup" ? "Email" : "Username or email"}
                 </label>
                 <input
+                  id="auth-identifier"
                   type={mode === "signup" || mode === "forgot" || mode === "setup" ? "email" : "text"}
                   value={user}
                   onChange={(e) => setUser(e.target.value)}
@@ -202,11 +210,12 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
 
               {mode !== "forgot" && (
               <div>
-                <label className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
+                <label htmlFor="auth-password" className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
                   Password
                 </label>
                 <div className="relative">
                   <input
+                    id="auth-password"
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -236,6 +245,32 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
               </div>
               )}
 
+              {mode === "setup" && setupTokenRequired && (
+                <div>
+                  <label htmlFor="auth-setup-token" className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
+                    Deployment setup token
+                  </label>
+                  <input
+                    id="auth-setup-token"
+                    type="password"
+                    value={setupToken}
+                    onChange={(e) => setSetupToken(e.target.value)}
+                    autoComplete="off"
+                    className={inputCls}
+                    placeholder="FIRST_ADMIN_SETUP_TOKEN"
+                  />
+                  <p className="mt-1.5 text-[10px] leading-relaxed text-gray-600">
+                    Enter the private token configured by the server operator.
+                  </p>
+                </div>
+              )}
+
+              {mode === "setup" && setupTokenRequired && !setupAvailable && (
+                <div className="text-xs text-amber-300 bg-amber-950/40 border border-amber-900/60 rounded-lg px-3 py-2" role="status">
+                  Setup is locked until the server operator configures a first-admin setup token.
+                </div>
+              )}
+
               {mode === "login" && (
                 <div className="-mt-2 text-right">
                   <button
@@ -250,10 +285,11 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
 
               {mode === "signup" && (
                 <div>
-                  <label className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
+                  <label htmlFor="auth-confirm-password" className="block text-[11px] uppercase tracking-wider text-gray-500 mb-1.5">
                     Confirm password
                   </label>
                   <input
+                    id="auth-confirm-password"
                     type={showPassword ? "text" : "password"}
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
@@ -278,7 +314,13 @@ export default function AuthModal({ open, initialMode = "login", onClose, onSucc
 
               <button
                 type="submit"
-                disabled={submitting || !user || (mode !== "forgot" && !password) || (mode === "signup" && !confirm)}
+                disabled={
+                  submitting ||
+                  !user ||
+                  (mode !== "forgot" && !password) ||
+                  (mode === "signup" && !confirm) ||
+                  (mode === "setup" && setupTokenRequired && (!setupToken || !setupAvailable))
+                }
                 className="w-full px-4 py-2.5 rounded-lg text-sm font-semibold text-white cursor-pointer
                   bg-gradient-to-br from-blue-500 via-indigo-500 to-violet-500 hover:brightness-110
                   disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200

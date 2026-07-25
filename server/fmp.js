@@ -2,7 +2,7 @@
 // on its response PassThrough when aborted, which crashes the process if
 // nothing listens — native fetch propagates AbortError cleanly.
 import { logError } from "./logger.js";
-import { execCompAllowed } from "./fmpPlanLimits.js";
+import { execCompAllowed, markExecCompUnavailable } from "./fmpPlanLimits.js";
 
 const BASE = "https://financialmodelingprep.com/stable";
 const KEY = () => process.env.FMP_API_KEY || "";
@@ -16,6 +16,10 @@ const KEY = () => process.env.FMP_API_KEY || "";
 // e.g. prod=250, QA=40. Defaults to ~292 rpm (just under a 300-rpm plan).
 const FMP_MAX_RPM = Math.max(10, parseInt(process.env.FMP_MAX_RPM || '292', 10) || 292);
 const MIN_INTERVAL_MS = Math.ceil(60000 / FMP_MAX_RPM); // 292 rpm → ~206ms
+const FMP_MAX_QUEUE_MS = Math.max(
+  MIN_INTERVAL_MS,
+  Math.min(5 * 60 * 1000, parseInt(process.env.FMP_MAX_QUEUE_MS || "45000", 10) || 45000),
+);
 let _nextSlot = 0;
 
 // Slot reservation: each caller atomically claims the next free slot BEFORE
@@ -25,11 +29,31 @@ let _nextSlot = 0;
 async function rateGate() {
   const now = Date.now();
   const target = Math.max(now, _nextSlot);
-  _nextSlot = target + MIN_INTERVAL_MS;
   const wait = target - now;
+  if (wait > FMP_MAX_QUEUE_MS) {
+    const error = new Error("FMP request queue is full; try again shortly");
+    error.code = "fmp_queue_full";
+    throw error;
+  }
+  _nextSlot = target + MIN_INTERVAL_MS;
   if (wait > 0) {
     await new Promise((r) => setTimeout(r, wait));
   }
+}
+
+// MCP-backed Ori calls share the same Starter-plan rate budget as direct REST
+// calls. Export the slot reservation without exposing limiter internals.
+export async function waitForFmpRateSlot() {
+  await rateGate();
+}
+
+/** Test hooks for the bounded reservation queue. */
+export function _setFmpRateGateForTests(nextSlot) {
+  _nextSlot = Number(nextSlot) || 0;
+}
+
+export function _fmpMaxQueueMsForTests() {
+  return FMP_MAX_QUEUE_MS;
 }
 
 // ── FMP call instrumentation ───────────────────────────────────────────────
@@ -84,6 +108,11 @@ function recordCall(endpoint, { ok, is429, ms }) {
   if (is429) b.http429++;
   else if (ok) b.ok++;
   else b.errors++;
+}
+
+// Keep MCP calls visible in the existing admin FMP statistics.
+export function recordExternalFmpCall(endpoint, result) {
+  recordCall(`mcp/${endpoint || "unknown"}`, result);
 }
 
 export function getFmpStats() {
@@ -285,7 +314,48 @@ async function fetchWithRetry(url, maxRetries = 6, timeoutMs = 15000) {
   return null;
 }
 
-// ── Fetch stocks via company-screener (preferred for ~8k limit) ────────────
+function screenerPageSize(totalLimit) {
+  const configured = parseInt(process.env.FMP_SCREENER_PAGE_SIZE || "1000", 10);
+  const pageSize = Number.isFinite(configured) && configured > 0 ? configured : 1000;
+  return Math.max(1, Math.min(totalLimit, pageSize, 5000));
+}
+
+async function fetchScreenerPages(baseParams, totalLimit, label) {
+  const wanted = Math.max(1, Math.floor(Number(totalLimit) || 1));
+  const perPage = screenerPageSize(wanted);
+  const rows = [];
+  const seen = new Set();
+
+  for (let page = 0; rows.length < wanted; page++) {
+    const params = new URLSearchParams(baseParams);
+    // FMP calculates the page offset from `page * limit`, so the page size must
+    // stay constant. Shrinking the final request would overlap earlier rows.
+    params.set("limit", String(perPage));
+    params.set("page", String(page));
+    params.set("apikey", KEY());
+    const data = await fetchWithRetry(`${BASE}/company-screener?${params.toString()}`, 3, 90000);
+    if (!Array.isArray(data) || !data.length) break;
+
+    let added = 0;
+    for (const item of data) {
+      const identity = item?.symbol || JSON.stringify(item);
+      if (!identity || seen.has(identity)) continue;
+      seen.add(identity);
+      rows.push(item);
+      added++;
+      if (rows.length >= wanted) break;
+    }
+
+    // A short page is the natural end. A duplicate page means the upstream
+    // ignored pagination, so stop instead of looping over the same results.
+    if (data.length < perPage || added === 0) break;
+  }
+
+  console.log(`[FMP] ${label}: ${rows.length} rows across paged company-screener`);
+  return rows;
+}
+
+// ── Fetch stocks via company-screener (paged for predictable response sizes) ─
 export async function fetchScreenerStocks({
   minMarketCap = 0,
   limit = 8000,
@@ -294,7 +364,7 @@ export async function fetchScreenerStocks({
   isActivelyTrading = true,
   includeEtfsAndFunds = false,  // set true to also pull ETFs/funds (e.g. SPY, QQQ). Many lack full fundamentals.
 } = {}) {
-  const params = new URLSearchParams({ limit: String(limit), apikey: KEY() });
+  const params = new URLSearchParams();
   if (minMarketCap > 0) params.set("marketCapMoreThan", String(minMarketCap));
   if (country) params.set("country", country);
   if (exchange) params.set("exchange", exchange);
@@ -304,11 +374,8 @@ export async function fetchScreenerStocks({
     params.set("isFund", "false");
   }
 
-  const url = `${BASE}/company-screener?${params.toString()}`;
   try {
-    // company-screener with high limit can take 30–60s on FMP's side.
-    // Use a 90s per-attempt timeout instead of the 15s default.
-    const data = await fetchWithRetry(url, 3, 90000);
+    const data = await fetchScreenerPages(params, limit, "stock screener");
     if (!Array.isArray(data) || !data.length) {
       console.warn("[FMP] company-screener returned no data");
       return [];
@@ -398,28 +465,20 @@ export async function fetchStockList() {
     const items = await fetchFullUniverseList();
     if (items && items.length) return items.map((r) => r.symbol);
   } catch (e) {
-    console.warn("[FMP] full universe from stable lists failed, trying old fallback:", e.message);
+    console.warn("[FMP] full universe from stable lists failed, trying screener fallback:", e.message);
   }
 
-  // Last-resort fallback (old /stock/list)
-  const url = `${BASE}/stock/list?apikey=${KEY()}`;
+  // Last-resort fallback. The old stable/stock/list path is undocumented and
+  // now returns 404; use the supported paged screener instead.
   try {
-    // Use fetchWithRetry so it respects rateGate, retries, and global admin abort signal.
-    const data = await fetchWithRetry(url, 2, 30000);
-    if (!data) throw new Error('FMP stock/list: no data');
-    if (!Array.isArray(data)) return null;
-    const cand = data
-      .filter((s) => s.symbol && s.type === "stock")
-      .map((s) => s.symbol);
-    const profRows = await fetchProfiles(cand, { concurrency: 4, batchSize: 1 });
-    const filtered = profRows.filter(
-      (r) =>
-        r.mcap != null &&
-        ["NYSE", "NASDAQ", "AMEX"].includes(r.exchange),
-    );
-    return filtered.map((r) => r.symbol);
+    const rows = await fetchScreenerStocks({
+      limit: 8000,
+      isActivelyTrading: true,
+      includeEtfsAndFunds: false,
+    });
+    return rows.length ? rows.map((row) => row.symbol).filter(Boolean) : null;
   } catch (e) {
-    console.warn("[FMP] stock/list fallback:", e.message);
+    console.warn("[FMP] company-screener fallback:", e.message);
     return null;
   }
 }
@@ -546,15 +605,13 @@ export async function fetchUniverseRows() {
 // run through key-metrics/ratios enrichment.
 export async function fetchEtfsFunds({ country = null, exchange = null, limit = 12000 } = {}) {
   async function call(kindParam) {
-    const params = new URLSearchParams({ limit: String(limit), apikey: KEY() });
+    const params = new URLSearchParams();
     params.set(kindParam, "true");
     params.set("isActivelyTrading", "true");
     if (country) params.set("country", country);
     if (exchange) params.set("exchange", exchange);
-    const url = `${BASE}/company-screener?${params.toString()}`;
     try {
-      const data = await fetchWithRetry(url, 3, 90000);
-      return Array.isArray(data) ? data : [];
+      return await fetchScreenerPages(params, limit, `${kindParam}=true`);
     } catch (e) {
       console.warn(`[FMP] company-screener ${kindParam}=true failed:`, e.message);
       return [];
@@ -828,13 +885,16 @@ export async function fetchRSI(symbol, { periodLength = 14, timeframe = "1day" }
 // williams, standarddeviation. Returns { value, close, date } or null. The value
 // field is named after the indicator (standarddeviation → "standardDeviation").
 export async function fetchIndicatorLatest(symbol, indicator, periodLength, timeframe = "1day") {
-  const url = `${BASE}/technical-indicators/${indicator}?symbol=${encodeURIComponent(symbol)}&periodLength=${periodLength}&timeframe=${timeframe}&apikey=${KEY()}`;
+  const to = new Date().toISOString().slice(0, 10);
+  const from = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const url = `${BASE}/technical-indicators/${indicator}?symbol=${encodeURIComponent(symbol)}&periodLength=${periodLength}&timeframe=${timeframe}&from=${from}&to=${to}&apikey=${KEY()}`;
   try {
     const data = await fetchWithRetry(url, 2, 12000);
     if (!Array.isArray(data) || !data.length) return null;
     const key = indicator === "standarddeviation" ? "standardDeviation" : indicator;
-    // FMP order isn't guaranteed; take the most recent date.
-    const latest = [...data].sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+    // FMP order isn't guaranteed; take the most recent date without sorting.
+    const latest = data.reduce((best, row) =>
+      !best || new Date(row?.date) > new Date(best?.date) ? row : best, null);
     const value = n(latest?.[key]);
     if (value == null) return null;
     return {
@@ -851,7 +911,7 @@ export async function fetchIndicatorLatest(symbol, indicator, periodLength, time
 // Earnings calendar for a symbol: the upcoming report date (null actuals) plus
 // recent quarters with EPS/revenue actual vs estimate. Newest first.
 export async function fetchEarnings(symbol, { limit = 10 } = {}) {
-  const url = `${BASE}/earnings?symbol=${encodeURIComponent(symbol)}&limit=${limit}&apikey=${KEY()}`;
+  const url = `${BASE}/earnings?symbol=${encodeURIComponent(symbol)}&limit=${limit}&includeReportTimes=true&apikey=${KEY()}`;
   try {
     const data = await fetchWithRetry(url, 2, 12000);
     if (!Array.isArray(data)) return [];
@@ -862,6 +922,12 @@ export async function fetchEarnings(symbol, { limit = 10 } = {}) {
         epsEstimated: n(d.epsEstimated),
         revenueActual: n(d.revenueActual),
         revenueEstimated: n(d.revenueEstimated),
+        time: d.time ?? null,
+        periodEnding: typeof d.periodEnding === "string" ? d.periodEnding.split(" ")[0] : d.periodEnding ?? null,
+        fiscalPeriod: d.fiscalPeriod ?? null,
+        fiscalYear: n(d.fiscalYear),
+        confirmed: typeof d.confirmed === "boolean" ? d.confirmed : null,
+        lastUpdated: typeof d.lastUpdated === "string" ? d.lastUpdated.split(" ")[0] : d.lastUpdated ?? null,
       }))
       .filter((d) => d.date)
       .sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -884,6 +950,8 @@ export async function fetchCongressTrades(chamber, symbol, { limit = 80 } = {}) 
       district: d.district || null,
       type: d.type || null,
       amount: d.amount || null,
+      senateId: d.senateID ?? null,
+      houseId: d.houseID ?? null,
     }));
   } catch (e) {
     console.warn(`[FMP] ${chamber}-trades ${symbol}:`, e.message);
@@ -1174,7 +1242,9 @@ export async function fetchExecutiveCompensation(symbol, { limit = 12 } = {}) {
       .slice(0, limit);
   } catch (e) {
     // 402 = plan doesn't include this symbol/endpoint — expected on gated plans.
-    if (!String(e.message || "").includes("402")) {
+    if (String(e.message || "").includes("402")) {
+      markExecCompUnavailable(sym);
+    } else {
       console.warn(`[FMP] exec-comp ${sym}:`, e.message);
     }
     return [];

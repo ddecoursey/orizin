@@ -51,13 +51,19 @@ export default function UpgradeModal({ onClose, onSuccess }) {
       let cfg;
       try {
         const r = await fetch("/api/billing/config");
-        cfg = await r.json();
-      } catch {
-        if (!cancelled) { setError("Could not reach the server. Please try again."); setPhase("error"); }
+        cfg = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(cfg.error || "Could not initialize checkout");
+      } catch (e) {
+        if (!cancelled) { setError(e.message || "Could not reach the server. Please try again."); setPhase("error"); }
         return;
       }
       if (cancelled) return;
       if (!cfg?.configured) { setPhase("unconfigured"); return; }
+      if (!cfg.checkoutToken) {
+        setError("Could not initialize a secure checkout. Please try again.");
+        setPhase("error");
+        return;
+      }
 
       // 2) Load the SDK with that client id.
       // Note: we no longer load a static SDK script in index.html (it was the
@@ -90,6 +96,7 @@ export default function UpgradeModal({ onClose, onSuccess }) {
         createSubscription: (data, actions) =>
           actions.subscription.create({
             plan_id: cfg.planId,
+            custom_id: cfg.checkoutToken,
             application_context: {
               brand_name: "Orizin",
               user_action: "SUBSCRIBE_NOW",

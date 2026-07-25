@@ -5,7 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'playwright-report', 'test-results']),
   // Frontend (browser, React)
   {
     files: ['src/**/*.{js,jsx}'],
@@ -31,10 +31,23 @@ export default defineConfig([
   },
   // Backend (Node) + tooling configs — no React rules, Node globals.
   {
-    files: ['server/**/*.js', 'vite.config.js', 'eslint.config.js', 'diagnose-refresh.js'],
+    files: ['server/**/*.js', 'scripts/**/*.mjs', 'vite.config.js', 'playwright.config.js', 'eslint.config.js', 'diagnose-refresh.js'],
     extends: [js.configs.recommended],
     languageOptions: {
       globals: globals.node,
+    },
+    rules: {
+      'no-empty': ['error', { allowEmptyCatch: true }],
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }],
+    },
+  },
+  // Browser E2E tests execute in Node but callbacks passed to page.evaluate run
+  // in Chromium, so both global sets are valid in this directory.
+  {
+    files: ['e2e/**/*.js'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      globals: { ...globals.node, ...globals.browser },
     },
     rules: {
       'no-empty': ['error', { allowEmptyCatch: true }],

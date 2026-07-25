@@ -1,0 +1,30 @@
+name: Deployed smoke check
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Deployment origin; defaults to the SMOKE_BASE_URL repository variable
+        required: false
+        type: string
+  repository_dispatch:
+    types: [railway-deployed]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SMOKE_BASE_URL: ${{ inputs.base_url || vars.SMOKE_BASE_URL || 'https://www.orizin.io' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Verify deployed app without credentials or writes
+        run: npm run test:smoke
