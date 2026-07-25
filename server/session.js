@@ -1,5 +1,6 @@
 // Session helpers: cookie issuance, inactivity enforcement, login recording.
 import crypto from "crypto";
+import net from "node:net";
 import * as db from "./db.js";
 
 export const COOKIE_NAME = "orizin_auth";
@@ -17,9 +18,20 @@ export function inactivityMs() {
 }
 
 export function clientIp(req) {
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string" && fwd.trim()) return fwd.split(",")[0].trim();
-  return req.ip || req.socket?.remoteAddress || null;
+  const validIp = (value) => {
+    const candidate = typeof value === "string" ? value.trim() : "";
+    return net.isIP(candidate) ? candidate : null;
+  };
+
+  // Railway documents X-Real-IP as the edge-supplied client address. Do not
+  // trust X-Forwarded-For directly: a caller can supply that header and evade
+  // IP-based login throttling if every forwarded hop is trusted.
+  if (process.env.RAILWAY_ENVIRONMENT) {
+    const railwayIp = validIp(req.headers?.["x-real-ip"]);
+    if (railwayIp) return railwayIp;
+  }
+
+  return validIp(req.ip) || validIp(req.socket?.remoteAddress) || null;
 }
 
 export function buildCookie(name, value, { maxAgeMs, secure }) {

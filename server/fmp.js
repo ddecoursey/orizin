@@ -16,6 +16,10 @@ const KEY = () => process.env.FMP_API_KEY || "";
 // e.g. prod=250, QA=40. Defaults to ~292 rpm (just under a 300-rpm plan).
 const FMP_MAX_RPM = Math.max(10, parseInt(process.env.FMP_MAX_RPM || '292', 10) || 292);
 const MIN_INTERVAL_MS = Math.ceil(60000 / FMP_MAX_RPM); // 292 rpm → ~206ms
+const FMP_MAX_QUEUE_MS = Math.max(
+  MIN_INTERVAL_MS,
+  Math.min(5 * 60 * 1000, parseInt(process.env.FMP_MAX_QUEUE_MS || "45000", 10) || 45000),
+);
 let _nextSlot = 0;
 
 // Slot reservation: each caller atomically claims the next free slot BEFORE
@@ -25,8 +29,13 @@ let _nextSlot = 0;
 async function rateGate() {
   const now = Date.now();
   const target = Math.max(now, _nextSlot);
-  _nextSlot = target + MIN_INTERVAL_MS;
   const wait = target - now;
+  if (wait > FMP_MAX_QUEUE_MS) {
+    const error = new Error("FMP request queue is full; try again shortly");
+    error.code = "fmp_queue_full";
+    throw error;
+  }
+  _nextSlot = target + MIN_INTERVAL_MS;
   if (wait > 0) {
     await new Promise((r) => setTimeout(r, wait));
   }
@@ -36,6 +45,15 @@ async function rateGate() {
 // calls. Export the slot reservation without exposing limiter internals.
 export async function waitForFmpRateSlot() {
   await rateGate();
+}
+
+/** Test hooks for the bounded reservation queue. */
+export function _setFmpRateGateForTests(nextSlot) {
+  _nextSlot = Number(nextSlot) || 0;
+}
+
+export function _fmpMaxQueueMsForTests() {
+  return FMP_MAX_QUEUE_MS;
 }
 
 // ── FMP call instrumentation ───────────────────────────────────────────────
