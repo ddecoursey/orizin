@@ -92,10 +92,10 @@ The E2E harness disables FMP, Gemini, PayPal, background enrichment, and email d
 To verify a deployed Railway service without credentials or data changes:
 
 ```bash
-SMOKE_BASE_URL=https://orizin.io npm run test:smoke
+SMOKE_BASE_URL=https://www.orizin.io npm run test:smoke
 ```
 
-The scheduled workflow checks `https://orizin.io` every six hours; set the GitHub repository variable `SMOKE_BASE_URL` only to override that target. Railway also checks `/api/health` before activating each deployment.
+The scheduled workflow checks `https://www.orizin.io` every six hours; set the GitHub repository variable `SMOKE_BASE_URL` only to override that target. Railway also checks `/api/health` before activating each deployment.
 
 Railway QA can also run hands-off role-based Playwright journeys after every
 successful deployment, using disposable accounts that are always removed. See
