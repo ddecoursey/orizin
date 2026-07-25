@@ -16,7 +16,7 @@ export default function ResetPasswordPage() {
   async function submit(e) {
     e.preventDefault();
     setError(null);
-    if (password.length < 8) return setError("Password must be at least 8 characters");
+    if (password.length < 8 || password.length > 200) return setError("Password must be 8-200 characters");
     if (password !== confirm) return setError("Passwords don't match");
     setSubmitting(true);
     try {

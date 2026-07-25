@@ -3,7 +3,7 @@ import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { createHash } from "node:crypto";
 import { hasOriAccess } from "../access.js";
 import { geminiGenerateJson, modelTier } from "../geminiJson.js";
-import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
+import { acquireOriQuota, recordOriUsage, releaseOriQuota } from "../oriUsage.js";
 import { getStrategyMarketSignals } from "../strategyMarketSignals.js";
 import { getStrategyContextNames } from "../db.js";
 import { STRATEGY_METRICS } from "../../src/lib/strategies.js";
@@ -199,13 +199,17 @@ function candidatePayload(value) {
 }
 
 async function generateMetered(userId, options) {
-  const quota = checkOriQuota(userId);
+  const quota = acquireOriQuota(userId);
   if (!quota.ok) {
     throw Object.assign(new Error(quota.message), { code: "ori_limit", scope: quota.scope });
   }
-  const result = await geminiGenerateJson(options);
-  await recordOriUsage(userId, { kind: "chat", usage: result.usage, model: result.model });
-  return result;
+  try {
+    const result = await geminiGenerateJson(options);
+    await recordOriUsage(userId, { kind: "chat", usage: result.usage, model: result.model });
+    return result;
+  } finally {
+    releaseOriQuota(quota.reservation);
+  }
 }
 
 function respondGenerationError(res, error) {

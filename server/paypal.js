@@ -19,6 +19,13 @@ const SECRET = process.env.PAYPAL_SECRET || '';
 const PLAN_ID = process.env.PAYPAL_PLAN_ID || '';
 const WEBHOOK_ID = process.env.PAYPAL_WEBHOOK_ID || '';
 
+export function paypalHttpTimeoutMs(env = process.env) {
+  const configured = Number(env.PAYPAL_HTTP_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 1_000 && configured <= 120_000
+    ? Math.round(configured)
+    : 15_000;
+}
+
 export function paypalEnv() {
   return IS_LIVE ? 'live' : 'sandbox';
 }
@@ -53,6 +60,7 @@ async function getAccessToken() {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: 'grant_type=client_credentials',
+    signal: AbortSignal.timeout(paypalHttpTimeoutMs()),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
@@ -73,6 +81,7 @@ async function papi(path, { method = 'GET', body, headers } = {}) {
       ...(headers || {}),
     },
     body: body != null ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(paypalHttpTimeoutMs()),
   });
 }
 
@@ -86,15 +95,33 @@ export async function getSubscription(subscriptionId) {
   return res.json();
 }
 
-// Cancel a subscription. 204 = cancelled; 422 = already inactive (treat as done).
+// Cancel a subscription. A 422 can mean several things, so it is safe to treat
+// as success only when a follow-up lookup proves the subscription is terminal.
 export async function cancelSubscription(subscriptionId, reason = 'Customer cancelled from Orizin') {
   const res = await papi(`/v1/billing/subscriptions/${encodeURIComponent(subscriptionId)}/cancel`, {
     method: 'POST',
     body: { reason },
   });
   if (res.status === 204) return { ok: true };
-  if (res.status === 422) return { ok: true, alreadyInactive: true };
   const t = await res.text().catch(() => '');
+  if (res.status === 422) {
+    let subscription;
+    try {
+      subscription = await getSubscription(subscriptionId);
+    } catch (error) {
+      throw new Error(
+        `PayPal cancel 422 and terminal state could not be verified: ${error.message}`,
+        { cause: error },
+      );
+    }
+    const status = String(subscription?.status || '').toUpperCase();
+    if (status === 'CANCELLED' || status === 'EXPIRED') {
+      return { ok: true, alreadyInactive: true };
+    }
+    throw new Error(
+      `PayPal cancel 422 but subscription remains ${status || 'UNKNOWN'}: ${t.slice(0, 200)}`,
+    );
+  }
   throw new Error(`PayPal cancel ${res.status}: ${t.slice(0, 200)}`);
 }
 

@@ -315,6 +315,10 @@ export default function UsersModal({
       setError("A valid email address is required");
       return;
     }
+    if (newPassword.length < 8 || newPassword.length > 200) {
+      setError("Password must be 8-200 characters");
+      return;
+    }
     setAdding(true);
     setError("");
     try {
@@ -382,6 +386,10 @@ export default function UsersModal({
 
   async function changeMyPassword() {
     if (!currentPw || !newPw) return;
+    if (newPw.length < 8 || newPw.length > 200) {
+      setError("New password must be 8-200 characters");
+      return;
+    }
     setChangingPassword(true);
     setError("");
     try {
@@ -468,7 +476,7 @@ export default function UsersModal({
                 />
                 <input
                   type="password"
-                  placeholder="Password"
+                  placeholder="Password (8+ characters)"
                   value={newPassword}
                   onChange={e => setNewPassword(e.target.value)}
                   className="flex-1 min-w-0 bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"
@@ -870,7 +878,7 @@ export default function UsersModal({
             />
             <input
               type="password"
-              placeholder="New password"
+              placeholder="New password (8+ characters)"
               value={newPw}
               onChange={e => setNewPw(e.target.value)}
               className="w-full bg-gray-950 border border-gray-700 rounded px-3 py-1.5 text-sm"

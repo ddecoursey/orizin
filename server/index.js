@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import express from 'express';
-import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
 import zlib from 'zlib';
@@ -19,15 +18,18 @@ import billingRouter from './routes/billing.js';
 import strategiesRouter from './routes/strategies.js';
 import { sendEmail, welcomeEmail, resetPasswordEmail, deletedAccountEmail } from './email.js';
 import * as db from './db.js';
-import * as paypal from './paypal.js';
+import { cancelLinkedSubscription, cancellationErrorResponse } from './subscriptionLifecycle.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
 import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 import { displayNameFor, emailForNotifications } from './userProfile.js';
 import { pruneOldOriUsage } from './oriUsage.js';
 import { ensureChatContextCaches, startChatContextCacheRefresh } from './geminiContextCache.js';
+import { isDeployedRuntime, productionConfigurationErrors } from './productionConfig.js';
+import { isTrustedMutationRequest } from './requestOrigin.js';
 import {
   COOKIE_NAME,
+  SESSION_MAX_AGE_MS,
   buildCookie,
   verifyToken,
   validateSessionPayload,
@@ -50,26 +52,32 @@ import * as fmp from './fmp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
+const deployedRuntime = isDeployedRuntime();
+
+const configurationErrors = productionConfigurationErrors();
+if (configurationErrors.length) {
+  for (const error of configurationErrors) console.error(`[FATAL] ${error}.`);
+  process.exit(1);
+}
 
 const app = express();
+let server = null;
+let shuttingDown = false;
 
 app.set('trust proxy', true); // honor X-Forwarded-Proto from Railway's edge
 
 // ── Crash safety ────────────────────────────────────────────────────────────
-// Node's default is to CRASH the whole server on an unhandled promise rejection
-// or uncaught exception. Those almost always originate from a single bad request
-// or background task (FMP fetch, enrichment), not a corrupted process — so log
-// them (console + in-app error log) and keep serving instead of dropping every
-// user. Genuinely fatal errors will still surface in the logs for triage.
-process.on('unhandledRejection', (reason) => {
+// An uncaught error can leave shared caches, queues, or SQLite transactions in an
+// unknown state. Log it, then let Railway replace the process in deployed/live
+// environments; local development remains inspectable without a restart loop.
+function handleFatalError(kind, reason) {
   const msg = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
-  console.error('[unhandledRejection]', msg);
-  try { logError('Unhandled promise rejection', { error: msg }); } catch { /* ignore */ }
-});
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err?.stack || err);
-  try { logError('Uncaught exception', { error: err?.stack || String(err) }); } catch { /* ignore */ }
-});
+  console.error(`[${kind}]`, msg);
+  try { logError(kind, { error: msg }); } catch { /* ignore */ }
+  if (deployedRuntime) shutdown(kind, 1);
+}
+process.on('unhandledRejection', (reason) => handleFatalError('unhandledRejection', reason));
+process.on('uncaughtException', (error) => handleFatalError('uncaughtException', error));
 
 // Security headers
 app.use(helmet({
@@ -105,8 +113,19 @@ app.use(helmet({
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
 }));
 
-app.use(cors());
 app.use(express.json({ limit: '2mb' }));
+
+// The production UI and API are same-origin. Do not grant arbitrary websites
+// browser access to cookie-authenticated mutations; PayPal's webhook is a
+// server-to-server call and carries neither Origin nor Sec-Fetch-Site.
+app.use('/api', (req, res, next) => {
+  if (!deployedRuntime) return next();
+  if (isTrustedMutationRequest(req)) return next();
+  return res.status(403).json({
+    error: 'Cross-origin request rejected',
+    code: 'origin_rejected',
+  });
+});
 
 // Gzip JSON API responses (no extra dependency). /api/stocks alone is several
 // MB of JSON for a large universe; gzip cuts the transfer ~8-10x. Only res.json
@@ -159,6 +178,8 @@ const loginLimiter = rateLimit({
 // via the in-app User Management modal (no more env var changes or redeploys needed).
 const AUTH_USER = process.env.AUTH_USER || 'admin';
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || '';
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 200;
 
 // Bootstrap users from AUTH_USERS_JSON into DB (one-time on first run)
 function bootstrapUsersFromEnv() {
@@ -169,19 +190,19 @@ function bootstrapUsersFromEnv() {
     if (count === 0) {
       console.log('[auth] Bootstrapping users from AUTH_USERS_JSON into database...');
       const arr = JSON.parse(process.env.AUTH_USERS_JSON);
+      let created = 0;
+      let failed = 0;
       if (Array.isArray(arr)) {
         for (const entry of arr) {
           if (entry?.user && entry?.password) {
             const isAdmin = ['dylan', 'admin'].includes(String(entry.user).toLowerCase());
             const result = db.createUser(entry.user, entry.password, isAdmin);
-            if (result.success) {
-              console.log(`[auth]   Created user: ${entry.user}${isAdmin ? ' (admin)' : ''}`);
-            } else {
-              console.log(`[auth]   Failed to create ${entry.user}: ${result.error}`);
-            }
+            if (result.success) created++;
+            else failed++;
           }
         }
       }
+      console.log(`[auth] Bootstrap complete: ${created} account(s) created, ${failed} failed`);
     }
   } catch (err) {
     console.error('[auth] Failed to bootstrap users:', err.message);
@@ -196,7 +217,7 @@ function promoteDesignatedAdmins() {
       const user = db.getUserByUsername ? db.getUserByUsername(name) : null;
       if (user && !user.is_admin) {
         db.default.prepare('UPDATE users SET is_admin = 1 WHERE username = ?').run(name);
-        console.log(`[auth] Promoted ${name} to admin`);
+        console.log('[auth] Promoted a designated account to admin');
       }
     }
   } catch (err) {
@@ -210,24 +231,31 @@ promoteDesignatedAdmins();
 
 // Note: We intentionally compute "has users" dynamically in most places now
 // so that the first-admin setup flow works without requiring a server restart.
-const hasDbUsersAtStartup = db.userCount() > 0;
-
-if ((process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') && !process.env.AUTH_SECRET) {
-  console.error('[FATAL] AUTH_SECRET must be set in production deployments.');
-  process.exit(1);
-}
-
 // Logical deployment environment, surfaced to the UI so QA (sandbox) and
 // production (live) are never confused when both run at once. Set APP_ENV
 // explicitly per Railway environment ('qa' / 'production'); otherwise it's
 // inferred from PAYPAL_ENV. Anything other than 'production' shows a UI badge.
 const APP_ENV = process.env.APP_ENV || (process.env.PAYPAL_ENV === 'live' ? 'production' : 'development');
+const authMustFailClosed =
+  isProd || APP_ENV === 'production' || String(process.env.PAYPAL_ENV || '').toLowerCase() === 'live';
+const FIRST_ADMIN_SETUP_TOKEN = String(process.env.FIRST_ADMIN_SETUP_TOKEN || '');
+const firstAdminSetupConfigured = Buffer.byteLength(FIRST_ADMIN_SETUP_TOKEN) >= 24;
+const hasDbUsersAtStartup = db.userCount() > 0;
+
+if (authMustFailClosed && !hasDbUsersAtStartup && !firstAdminSetupConfigured) {
+  console.error(
+    '[auth] No users exist and FIRST_ADMIN_SETUP_TOKEN is not configured with at least 24 characters. ' +
+      'Authentication is locked until the setup token is configured.',
+  );
+}
 
 // Legacy single-user mode still supported via AUTH_PASSWORD
 const legacyAuthEnabled = !!AUTH_PASSWORD;
 
 // Dynamic helper: is auth required right now?
 function isAuthEnabled() {
+  // Never turn an empty deployed database into an anonymous admin session.
+  if (authMustFailClosed) return true;
   // If we have DB users, auth is always on.
   // Otherwise fall back to legacy AUTH_PASSWORD mode.
   try {
@@ -261,7 +289,10 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   if (!currentlyAuthEnabled) return res.json({ ok: true, user: 'default', authEnabled: false });
 
   const username = String(req.body?.user || '').trim();
-  const password = String(req.body?.password || '');
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  if (!username || username.length > 320 || password.length > PASSWORD_MAX_LENGTH) {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
 
   let match = null;
 
@@ -304,13 +335,13 @@ app.post('/api/auth/signup', loginLimiter, (req, res) => {
   }
 
   const email = String(req.body?.email || '').trim().toLowerCase();
-  const password = String(req.body?.password || '');
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
   if (!EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'A valid email address is required' });
   }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+    return res.status(400).json({ error: 'Password must be 8-200 characters' });
   }
   if (db.getUserByEmail(email) || db.getUserByUsername(email)) {
     return res.status(400).json({ error: 'An account with that email already exists' });
@@ -370,16 +401,15 @@ app.post('/api/auth/forgot-password', loginLimiter, (req, res) => {
 // Complete a reset with the emailed token. Validates the single-use, 1-hour,
 // constant-time-compared token, sets the new password (which clears the token),
 // then issues this device a fresh session cookie.
-// NOTE: main has no session-epoch revocation, so any OTHER existing sessions stay
-// valid until their 30-day TTL. Acceptable for a forgot-password flow (token is
-// single-use + short-lived); revisit if we add "log out everywhere".
+// setUserPassword bumps the session epoch, invalidating every older session;
+// establishSession below signs this device back in with the new epoch.
 app.post('/api/auth/reset-password', loginLimiter, (req, res) => {
   const username = String(req.body?.u || req.body?.user || '').trim();
   const token = String(req.body?.token || '');
-  const newPassword = String(req.body?.password || '');
+  const newPassword = typeof req.body?.password === 'string' ? req.body.password : '';
   if (!username || !token) return res.status(400).json({ error: 'Invalid or missing reset token' });
-  if (newPassword.length < 8 || newPassword.length > 200) {
-    return res.status(400).json({ error: 'Password must be 8–200 characters' });
+  if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH) {
+    return res.status(400).json({ error: 'Password must be 8-200 characters' });
   }
 
   const user = db.getUserByUsername(username);
@@ -404,10 +434,36 @@ app.post('/api/auth/reset-password', loginLimiter, (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
+  let revocationFailed = false;
+  try {
+    const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    const payload = verifyToken(token);
+    if (payload?.user && payload.sid) {
+      // Idempotent: an already-revoked session is still successfully logged out.
+      db.revokeAuthSession(payload.user, payload.sid);
+    } else if (payload?.user) {
+      // Transitional path for cookies issued before per-device session ids.
+      // Hash this exact cookie so other legacy devices remain signed in.
+      db.revokeLegacyAuthToken(
+        payload.user,
+        token,
+        Number.isFinite(payload.exp) ? payload.exp : Date.now() + SESSION_MAX_AGE_MS,
+      );
+    }
+  } catch (error) {
+    revocationFailed = true;
+    console.error('[auth] Session revocation failed during logout:', error.message);
+  }
   res.set('Set-Cookie', buildCookie(COOKIE_NAME, '', {
     maxAgeMs: 0,
     secure: req.secure,
   }));
+  if (revocationFailed) {
+    return res.status(503).json({
+      error: 'The local session was cleared, but server-side logout could not be confirmed.',
+      code: 'logout_unconfirmed',
+    });
+  }
   res.json({ ok: true });
 });
 
@@ -420,13 +476,31 @@ app.get('/api/auth/me', (req, res) => {
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ authenticated: false, authEnabled: true });
 
-  const session = validateSessionPayload(payload);
+  const session = validateSessionPayload(payload, token);
   if (!session.ok) {
     return res.status(session.status).json({ authenticated: false, authEnabled: true, ...session.body });
   }
   // The client polls this endpoint + hits it on tab focus; roll the cookie here
   // too so a tab that's only polling (no other API calls) still stays signed in.
-  if (touchUserActivity(payload.user)) refreshSessionCookie(res, req, session.user);
+  const activityAdvanced = touchUserActivity(payload.user);
+  if (
+    (session.needsSessionUpgrade || activityAdvanced) &&
+    !refreshSessionCookie(
+      res,
+      req,
+      session.user,
+      payload.sid || null,
+      payload.sid ? null : token,
+      payload.exp,
+    )
+  ) {
+    return res.status(401).json({
+      authenticated: false,
+      authEnabled: true,
+      error: 'This session was signed out. Please sign in again.',
+      code: 'session_revoked',
+    });
+  }
 
   // Admin flag is always reconciled from the DB so demotions take effect
   // immediately. Legacy env-password mode (no DB users) is the only case where
@@ -480,6 +554,8 @@ app.get('/api/auth/status', (req, res) => {
     needsSetup: userCount === 0,
     authEnabled: isAuthEnabled(),
     hasUsers: userCount > 0,
+    setupTokenRequired: authMustFailClosed && userCount === 0,
+    setupAvailable: userCount > 0 || !authMustFailClosed || firstAdminSetupConfigured,
     signupsEnabled: process.env.SIGNUPS_ENABLED !== 'false' && userCount > 0,
     env: APP_ENV,
   });
@@ -489,19 +565,41 @@ app.get('/api/auth/status', (req, res) => {
 // cheap (no DB write) — reports basic liveness. Defined before the /api auth
 // gate so it stays reachable without a session.
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, env: APP_ENV, uptime: Math.round(process.uptime()) });
+  res.json({
+    ok: true,
+    env: APP_ENV,
+    uptime: Math.round(process.uptime()),
+    // Railway exposes the source commit to the running container. Returning it
+    // lets post-deploy checks prove they reached the deployment that triggered
+    // them instead of an older instance still answering at the same hostname.
+    deploymentSha: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+  });
 });
 
-// One-time setup endpoint: create the very first admin user when the database is empty.
-// This is unauthenticated and only works if there are currently zero users.
+// One-time setup endpoint: create the very first admin user when the database is
+// empty. Deployed/live environments additionally require a secret configured by
+// the operator so the first internet visitor cannot claim the instance.
 app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
   const userCount = db.userCount ? db.userCount() : 0;
   if (userCount > 0) {
     return res.status(400).json({ error: 'Setup is only allowed when there are no users yet' });
   }
 
+  if (authMustFailClosed) {
+    if (!firstAdminSetupConfigured) {
+      return res.status(503).json({
+        error: 'First-admin setup is locked. Configure FIRST_ADMIN_SETUP_TOKEN and restart the server.',
+        code: 'setup_not_configured',
+      });
+    }
+    const suppliedToken = String(req.body?.setupToken || req.get('x-setup-token') || '');
+    if (!safeEqual(suppliedToken, FIRST_ADMIN_SETUP_TOKEN)) {
+      return res.status(403).json({ error: 'Invalid setup token', code: 'invalid_setup_token' });
+    }
+  }
+
   const email = String(req.body?.user || req.body?.email || '').trim().toLowerCase();
-  const password = String(req.body?.password || '');
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
@@ -509,8 +607,8 @@ app.post('/api/auth/setup-first-admin', loginLimiter, (req, res) => {
   if (!EMAIL_RE.test(email)) {
     return res.status(400).json({ error: 'A valid email address is required' });
   }
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+    return res.status(400).json({ error: 'Password must be 8-200 characters' });
   }
 
   const result = db.createUser(email, password, true, email); // first user is always admin
@@ -536,13 +634,29 @@ app.use('/api', (req, res, next) => {
   const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
   const payload = verifyToken(token);
   if (!payload) return res.status(401).json({ error: 'Unauthorized', code: 'unauthorized' });
-  const session = validateSessionPayload(payload);
+  const session = validateSessionPayload(payload, token);
   if (!session.ok) return res.status(session.status).json(session.body);
   // Rolling session: when activity advances (throttled to ~2 min), re-issue the
   // cookie with a fresh 30-day window so an actively-used session never expires
   // mid-use. Idle/abandoned sessions still lapse after inactivityMs, and explicit
   // revokes (epoch bump) still apply on the next request.
-  if (touchUserActivity(payload.user)) refreshSessionCookie(res, req, session.user);
+  const activityAdvanced = touchUserActivity(payload.user);
+  if (
+    (session.needsSessionUpgrade || activityAdvanced) &&
+    !refreshSessionCookie(
+      res,
+      req,
+      session.user,
+      payload.sid || null,
+      payload.sid ? null : token,
+      payload.exp,
+    )
+  ) {
+    return res.status(401).json({
+      error: 'This session was signed out. Please sign in again.',
+      code: 'session_revoked',
+    });
+  }
   req.userId = payload.user;
   next();
 });
@@ -567,9 +681,15 @@ app.delete('/api/users/me', async (req, res) => {
   if (user.is_admin && db.adminCount() <= 1) {
     return res.status(400).json({ error: 'You are the only admin — promote another admin before deleting your account.' });
   }
-  if (user.paypal_subscription_id && paypal.isConfigured()) {
-    try { await paypal.cancelSubscription(user.paypal_subscription_id); }
-    catch (e) { console.error('[account] subscription cancel on delete failed:', e.message); }
+  try {
+    await cancelLinkedSubscription(user);
+  } catch (error) {
+    console.error(
+      '[account] subscription cancellation blocked account deletion:',
+      error.cause?.message || error.message,
+    );
+    const failure = cancellationErrorResponse(error);
+    return res.status(failure.status).json(failure.body);
   }
   // Capture the address BEFORE the row is gone, then confirm the deletion by
   // email (fire-and-forget; no-op if email isn't configured).
@@ -732,37 +852,31 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(distPath, 'index.html'));
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
+server = app.listen(PORT, '0.0.0.0', () => {
   const fmpSet = process.env.FMP_API_KEY && process.env.FMP_API_KEY !== 'your_fmp_api_key_here';
   const chatSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
   console.log(`Server running on http://0.0.0.0:${PORT} (accessible on all interfaces)`);
   console.log(`FMP API key: ${fmpSet ? 'set ✓' : 'NOT SET — add FMP_API_KEY to .env'}`);
+  console.log(`FMP MCP for Ori: ${fmpSet && process.env.FMP_MCP_ENABLED !== 'false' ? 'enabled ✓' : 'disabled'}`);
   console.log(`Gemini API key: ${chatSet ? 'set ✓' : 'NOT SET — add GEMINI_API_KEY to .env for AI chat'}`);
   console.log(`DB path: ${process.env.DB_PATH || './data/screener.db'}`);
-  let userList = 'none';
+  let accountCount = 0;
   try {
     if (hasDbUsersAtStartup) {
-      const users = db.listUsers ? db.listUsers() : [];
-      userList = users.map(u => u.username).join(', ') || 'none';
+      accountCount = db.userCount();
     } else if (AUTH_PASSWORD) {
-      userList = AUTH_USER;
+      accountCount = 1;
     }
   } catch {}
 
   console.log(
     `Auth: ${
       isAuthEnabled()
-        ? `enabled (cookie sessions, users: ${userList})`
+        ? `enabled (cookie sessions, accounts: ${accountCount})`
         : 'DISABLED — set AUTH_PASSWORD or AUTH_USERS_JSON to enable'
     }`,
   );
   console.log(`Environment: ${APP_ENV}${process.env.PAYPAL_ENV ? ` (PayPal: ${process.env.PAYPAL_ENV})` : ''}`);
-  if (!process.env.AUTH_SECRET && (process.env.APP_ENV || process.env.PAYPAL_ENV)) {
-    console.warn(
-      '[auth] WARNING: AUTH_SECRET is not set — using the shared dev default. ' +
-        'Set a UNIQUE AUTH_SECRET per environment (QA vs prod) so sessions are isolated and not forgeable.',
-    );
-  }
 
   // Bootstrap the server-wide Gemini context cache for Ori chat's static system
   // prompt. (The Game Plan system prompt is ~500 tokens — far below Gemini's
@@ -800,10 +914,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   // The same sweep prunes stale Ori-usage ledger rows (kept ~3 months).
   try { db.expireLapsedPro(); } catch (e) { console.error('[billing] startup expire failed:', e.message); }
   try { pruneOldOriUsage(); } catch (e) { console.error('[oriUsage] startup prune failed:', e.message); }
+  try { db.pruneExpiredAuthSessions(); } catch (e) { console.error('[auth] startup session prune failed:', e.message); }
   setInterval(() => {
     try { db.expireLapsedPro(); } catch (e) { console.error('[billing] expire sweep failed:', e.message); }
     try { pruneOldOriUsage(); } catch (e) { console.error('[oriUsage] prune sweep failed:', e.message); }
     try { db.pruneLoginEvents(Date.now() - 90 * 24 * 60 * 60 * 1000); } catch (e) { console.error('[auth] login-event prune failed:', e.message); }
+    try { db.pruneExpiredAuthSessions(); } catch (e) { console.error('[auth] session prune failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
 
   // Shared baseline for screener intangibles: a deliberately SLOW, CHEAP, lite-only
@@ -842,12 +958,12 @@ const server = app.listen(PORT, '0.0.0.0', () => {
 });
 
 // Graceful shutdown (important for clean Ctrl+C and stopping long-running enrich)
-function shutdown(signal) {
+function shutdown(signal, exitCode = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
   console.log(`\n${signal} received. Shutting down gracefully...`);
 
-  server.close(() => {
-    console.log('HTTP server closed.');
-
+  const finish = () => {
     // best-sqlite3 connections are usually fine to just let GC, but we can be explicit.
     // `db` is a namespace import, so the Database instance (with .close) is db.default —
     // db.close itself is undefined and the old call silently did nothing.
@@ -858,13 +974,26 @@ function shutdown(signal) {
       // ignore
     }
 
-    process.exit(0);
-  });
+    process.exit(exitCode);
+  };
+
+  try { enrichmentManager.stop(); } catch { /* ignore */ }
+  try { fmp.abortAllOngoingFetches?.(); } catch { /* ignore */ }
+
+  if (server?.listening) {
+    server.close(() => {
+      console.log('HTTP server closed.');
+      finish();
+    });
+  } else {
+    finish();
+    return;
+  }
 
   // Force exit after 5 seconds if something is stuck (e.g. long FMP calls)
   setTimeout(() => {
     console.log('Forcing shutdown after timeout.');
-    process.exit(1);
+    process.exit(exitCode || 1);
   }, 5000);
 }
 

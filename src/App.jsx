@@ -100,23 +100,59 @@ export default function App() {
     }
   }
 
-  // PayPal redirect fallback: if the checkout popup was blocked, PayPal sends the
-  // buyer back to /?subscribed=1 after approval. onApprove never ran (we navigated
-  // away), so Pro is granted server-side by the webhook — poll the session a few
-  // times so it shows up, then clean the URL. (?subscribe=cancelled just clears.)
+  // PayPal redirect fallback: if the popup was blocked, PayPal returns the buyer
+  // with a subscription id. Verify and activate it directly; webhook recovery is
+  // the fallback, so poll briefly afterward before cleaning up.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const subscribed = params.get("subscribed") === "1";
     const cancelled = params.get("subscribe") === "cancelled";
     if (!subscribed && !cancelled) return;
-    window.history.replaceState({}, "", window.location.pathname);
+
+    const subscriptionId =
+      params.get("subscription_id") ||
+      params.get("subscriptionID") ||
+      params.get("subscriptionId");
+    const cleanUrl = new URL(window.location.href);
+    for (const key of ["subscribed", "subscribe", "subscription_id", "subscriptionID", "subscriptionId", "ba_token"]) {
+      cleanUrl.searchParams.delete(key);
+    }
+    window.history.replaceState(
+      {},
+      "",
+      `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`,
+    );
     if (!subscribed) return;
-    let n = 0;
-    const id = setInterval(() => {
-      refreshAuth();
-      if (++n >= 4) clearInterval(id);
-    }, 2500);
-    return () => clearInterval(id);
+
+    let stopped = false;
+    let timeoutId;
+    const wait = (ms) => new Promise((resolve) => { timeoutId = setTimeout(resolve, ms); });
+    (async () => {
+      if (subscriptionId) {
+        try {
+          const res = await fetch("/api/billing/activate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subscriptionID: subscriptionId }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            console.error("PayPal redirect activation failed:", body.error || res.status);
+          }
+        } catch (error) {
+          console.error("PayPal redirect activation failed:", error);
+        }
+      }
+
+      for (let attempt = 0; attempt < 4 && !stopped; attempt += 1) {
+        if (attempt > 0) await wait(2500);
+        if (!stopped) await refreshAuth();
+      }
+    })();
+    return () => {
+      stopped = true;
+      clearTimeout(timeoutId);
+    };
   }, []);
 
   const handleLogout = useCallback(async () => {

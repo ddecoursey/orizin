@@ -3,8 +3,11 @@ import * as db from "../db.js";
 import { EMAIL_RE, displayNameFor } from "../userProfile.js";
 import { refreshSessionCookie } from "../session.js";
 import { getOriUsageSummary } from "../oriUsage.js";
+import { cancelLinkedSubscription, cancellationErrorResponse } from "../subscriptionLifecycle.js";
 
 const router = Router();
+const PASSWORD_MIN_LENGTH = 8;
+const PASSWORD_MAX_LENGTH = 200;
 
 // All routes below require authentication (middleware is applied in index.js)
 
@@ -102,8 +105,8 @@ router.post("/users", (req, res) => {
       return res.status(400).json({ error: "A valid email address is required" });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({ error: "Password must be at least 6 characters" });
+    if (typeof password !== "string" || password.length < PASSWORD_MIN_LENGTH || password.length > PASSWORD_MAX_LENGTH) {
+      return res.status(400).json({ error: "Password must be 8-200 characters" });
     }
 
     const result = db.createUser(email, password, !!isAdmin, email);
@@ -169,7 +172,7 @@ router.patch("/users/:username", (req, res) => {
 });
 
 // DELETE /api/users/:username - Remove a user (admin only)
-router.delete("/users/:username", (req, res) => {
+router.delete("/users/:username", async (req, res) => {
   try {
     const currentUser = db.getUserByUsername(req.userId);
     if (!currentUser || !currentUser.is_admin) {
@@ -177,6 +180,10 @@ router.delete("/users/:username", (req, res) => {
     }
 
     const username = req.params.username;
+    const target = db.getUserByUsername(username);
+    if (!target) {
+      return res.status(404).json({ error: "User not found" });
+    }
 
     // Prevent deleting the last user (would lock everyone out)
     if (db.userCount() <= 1) {
@@ -185,18 +192,26 @@ router.delete("/users/:username", (req, res) => {
 
     // Prevent deleting the last admin (would leave the app with no one who can
     // manage users / trigger refreshes — same lockout the demote path guards).
-    const target = db.getUserByUsername(username);
-    if (target && target.is_admin && db.adminCount() <= 1) {
+    if (target.is_admin && db.adminCount() <= 1) {
       return res.status(400).json({ error: "Cannot delete the last remaining admin" });
+    }
+
+    try {
+      await cancelLinkedSubscription(target);
+    } catch (error) {
+      console.error(
+        "[users] subscription cancellation blocked account deletion:",
+        error.cause?.message || error.message,
+      );
+      const failure = cancellationErrorResponse(error);
+      return res.status(failure.status).json(failure.body);
     }
 
     const deleted = db.deleteUserCascade(username);
 
     if (deleted.changes > 0) {
       res.json({ ok: true });
-    } else {
-      res.status(404).json({ error: "User not found" });
-    }
+    } else res.status(404).json({ error: "User not found" });
   } catch (err) {
     console.error("[users] DELETE error:", err);
     res.status(500).json({ error: "Failed to delete user" });
@@ -213,8 +228,12 @@ router.post("/users/change-password", (req, res) => {
       return res.status(400).json({ error: "Current and new password are required" });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ error: "New password must be at least 6 characters" });
+    if (
+      typeof currentPassword !== "string" || currentPassword.length > PASSWORD_MAX_LENGTH ||
+      typeof newPassword !== "string" ||
+      newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH
+    ) {
+      return res.status(400).json({ error: "New password must be 8-200 characters" });
     }
 
     // Verify current password

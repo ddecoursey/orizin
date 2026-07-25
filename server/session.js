@@ -75,7 +75,7 @@ export function verifyToken(token) {
  * Validate a signed token payload against DB session state (epoch + inactivity).
  * @returns {{ ok: true, user: object } | { ok: false, status: number, body: object }}
  */
-export function validateSessionPayload(payload) {
+export function validateSessionPayload(payload, rawToken = null) {
   if (!payload?.user) {
     return { ok: false, status: 401, body: { error: "Unauthorized", code: "unauthorized" } };
   }
@@ -92,6 +92,20 @@ export function validateSessionPayload(payload) {
       body: { error: "Your session was ended — please sign in again.", code: "session_revoked" },
     };
   }
+  if (payload.sid && !db.isAuthSessionActive(payload.user, payload.sid)) {
+    return {
+      ok: false,
+      status: 401,
+      body: { error: "This session was signed out. Please sign in again.", code: "session_revoked" },
+    };
+  }
+  if (!payload.sid && rawToken && db.isLegacyAuthTokenRevoked(payload.user, rawToken)) {
+    return {
+      ok: false,
+      status: 401,
+      body: { error: "This session was signed out. Please sign in again.", code: "session_revoked" },
+    };
+  }
   const lastActive = user.last_active_at || payload.iat || 0;
   const idle = Date.now() - lastActive;
   if (idle > inactivityMs()) {
@@ -105,7 +119,11 @@ export function validateSessionPayload(payload) {
       },
     };
   }
-  return { ok: true, user };
+  return { ok: true, user, needsSessionUpgrade: !payload.sid };
+}
+
+function newSessionId() {
+  return crypto.randomBytes(32).toString("base64url");
 }
 
 /** Record login + issue a fresh session cookie. */
@@ -113,18 +131,24 @@ export function establishSession(res, req, { user, isAdmin, plan }, kind = "logi
   const dbUser = db.getUserByUsername(user);
   const epoch = dbUser?.session_epoch ?? 0;
   const now = Date.now();
+  const expiresAt = now + SESSION_MAX_AGE_MS;
+  const sid = newSessionId();
   db.recordUserLogin(user, {
     ip: clientIp(req),
     userAgent: req.get("user-agent"),
     kind,
   });
+  if (!db.createAuthSession(user, sid, expiresAt, now)) {
+    throw new Error("Could not establish server-side session");
+  }
 
   const tokenPayload = {
     user,
     isAdmin: !!isAdmin,
-    exp: now + SESSION_MAX_AGE_MS,
+    exp: expiresAt,
     iat: now,
     epoch,
+    sid,
   };
   const token = signToken(tokenPayload);
   res.set("Set-Cookie", buildCookie(COOKIE_NAME, token, {
@@ -136,22 +160,54 @@ export function establishSession(res, req, { user, isAdmin, plan }, kind = "logi
 
 /** Throttled last-seen update on authenticated API traffic. */
 export function touchUserActivity(userId) {
-  db.touchUserActivity(userId);
+  return db.touchUserActivity(userId);
 }
 
 /** Re-issue cookie after password change so the current device keeps its session. */
-export function refreshSessionCookie(res, req, user) {
+export function refreshSessionCookie(
+  res,
+  req,
+  user,
+  currentSessionId = null,
+  legacyToken = null,
+  legacyExpiresAt = null,
+) {
   const now = Date.now();
+  const expiresAt = now + SESSION_MAX_AGE_MS;
+  const sid = currentSessionId || newSessionId();
+  const persisted = currentSessionId
+    ? db.extendAuthSession(user.username, sid, expiresAt, now)
+    : db.createAuthSession(user.username, sid, expiresAt, now);
+  // Never re-create a session id that was concurrently revoked by logout.
+  if (!persisted) return false;
+  if (legacyToken) {
+    try {
+      const legacyRevoked = db.revokeLegacyAuthToken(
+        user.username,
+        legacyToken,
+        Number.isFinite(legacyExpiresAt) ? legacyExpiresAt : expiresAt,
+      );
+      if (!legacyRevoked) {
+        db.revokeAuthSession(user.username, sid);
+        return false;
+      }
+    } catch (error) {
+      db.revokeAuthSession(user.username, sid);
+      throw error;
+    }
+  }
   const tokenPayload = {
     user: user.username,
     isAdmin: !!user.is_admin,
-    exp: now + SESSION_MAX_AGE_MS,
+    exp: expiresAt,
     iat: now,
     epoch: user.session_epoch ?? 0,
+    sid,
   };
   const token = signToken(tokenPayload);
   res.set("Set-Cookie", buildCookie(COOKIE_NAME, token, {
     maxAgeMs: SESSION_MAX_AGE_MS,
     secure: req.secure,
   }));
+  return true;
 }

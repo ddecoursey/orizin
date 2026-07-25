@@ -111,6 +111,15 @@ test('setup-first-admin rejects non-email identifiers', async () => {
   assert.equal(res.status, 400);
 });
 
+test('setup-first-admin rejects passwords shorter than eight characters', async () => {
+  const res = await fetch(api('/api/auth/setup-first-admin'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: ADMIN_EMAIL, password: 'short7!' }),
+  });
+  assert.equal(res.status, 400);
+});
+
 test('setup-first-admin creates an admin and logs them in', async () => {
   const res = await fetch(api('/api/auth/setup-first-admin'), {
     method: 'POST',
@@ -192,6 +201,31 @@ test('admin can create a non-admin user; non-admin cannot manage users', async (
 
   const list = await fetch(api('/api/users'), { headers: { cookie: userCookie } });
   assert.equal(list.status, 403);
+});
+
+test('logout revokes only the current device session', async () => {
+  const copiedCookie = userCookie;
+  const secondLogin = await fetch(api('/api/auth/login'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: VIEWER_EMAIL, password: 'viewer123' }),
+  });
+  const otherDeviceCookie = cookieFrom(secondLogin);
+  assert.ok(otherDeviceCookie.startsWith('orizin_auth='));
+
+  const logout = await fetch(api('/api/auth/logout'), {
+    method: 'POST',
+    headers: { cookie: copiedCookie },
+  });
+  assert.equal(logout.status, 200);
+
+  const replay = await fetch(api('/api/auth/me'), { headers: { cookie: copiedCookie } });
+  assert.equal(replay.status, 401);
+  assert.equal((await json(replay)).code, 'session_revoked');
+
+  const otherDevice = await fetch(api('/api/auth/me'), { headers: { cookie: otherDeviceCookie } });
+  assert.equal(otherDevice.status, 200);
+  userCookie = otherDeviceCookie;
 });
 
 test('cannot demote or delete the last admin', async () => {

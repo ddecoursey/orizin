@@ -17,6 +17,13 @@ const APP_URL = process.env.APP_URL || '';
 const EMAIL_DAILY_LIMIT = Math.max(1, Number(process.env.EMAIL_DAILY_LIMIT) || 100);
 const EMAIL_CRITICAL_RESERVE = Math.max(0, Number(process.env.EMAIL_CRITICAL_RESERVE) || 25);
 
+export function emailHttpTimeoutMs(env = process.env) {
+  const configured = Number(env.EMAIL_HTTP_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 1_000 && configured <= 120_000
+    ? Math.round(configured)
+    : 10_000;
+}
+
 export function emailDeliveryDisabled(env = process.env) {
   return env.NODE_ENV === 'test' || String(env.EMAIL_DISABLED || '').toLowerCase() === 'true';
 }
@@ -56,6 +63,7 @@ async function sendViaResend({ to, subject, html, text }) {
     method: 'POST',
     headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ from: FROM, to: [to], subject, html, text }),
+    signal: AbortSignal.timeout(emailHttpTimeoutMs()),
   });
   if (!res.ok) throw new Error(`Resend ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }
@@ -76,6 +84,7 @@ async function sendViaSendgrid({ to, subject, html, text }) {
         { type: 'text/html', value: html },
       ],
     }),
+    signal: AbortSignal.timeout(emailHttpTimeoutMs()),
   });
   if (!res.ok) throw new Error(`SendGrid ${res.status}: ${(await res.text().catch(() => '')).slice(0, 200)}`);
 }
@@ -91,7 +100,7 @@ export async function sendEmail({ to, subject, html, text, priority = 'optional'
     const sent = dailyEmailSentCount();
     console.warn(
       `[email] daily quota reached (${sent}/${EMAIL_DAILY_LIMIT}, reserve ${EMAIL_CRITICAL_RESERVE}); `
-      + `skipped ${priority} "${subject}" to ${to}`,
+      + `skipped ${priority} email`,
     );
     return { skipped: true, reason: 'quota' };
   }
@@ -110,7 +119,7 @@ export async function sendEmail({ to, subject, html, text, priority = 'optional'
     console.error('[email] send failed:', e.message);
     return { error: e.message };
   }
-  console.log(`[email] (not configured) would send "${subject}" to ${to}`);
+  console.log(`[email] provider not configured; skipped ${priority} email`);
   return { skipped: true };
 }
 

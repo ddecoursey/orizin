@@ -50,7 +50,7 @@ import {
   gamePlanMaxOutputTokens,
   liteGamePlanCacheKey,
 } from "../gamePlanCache.js";
-import { checkOriQuota, recordOriUsage } from "../oriUsage.js";
+import { acquireOriQuota, recordOriUsage, releaseOriQuota } from "../oriUsage.js";
 import { execCompAllowed } from "../fmpPlanLimits.js";
 
 // Rate limiters for expensive operations (per user or IP)
@@ -987,6 +987,7 @@ function aggregateSmartMoney(symbol, senate, house, insider) {
   const congressRecent = [...congress].sort(byDateDesc).slice(0, 12).map((t) => ({
     date: t.transactionDate, name: t.name, chamber: t.chamber, district: t.district,
     type: isBuy(t.type) ? "buy" : isSell(t.type) ? "sell" : "other", amount: t.amount,
+    senateId: t.senateId, houseId: t.houseId,
   }));
 
   // Insiders — open-market only (P-Purchase / S-Sale; exclude awards/options/gifts).
@@ -1346,15 +1347,23 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
 
     if (refreshLite) {
       // Explicit "refresh" is a deliberate, always-regenerating action → metered.
-      const quota = checkOriQuota(req.userId);
+      const quota = acquireOriQuota(req.userId);
       if (!quota.ok) return res.status(429).json({ error: quota.message, code: "ori_limit", scope: quota.scope });
-      const ori = await generateLiteIntangibles(symbol, {
-        stats, verdict, force: true,
-        onUsage: (usage, model) => {
-          recordOriUsage(req.userId, { kind: "plan", usage, model }).catch(() => {});
-        },
-      });
-      return res.json({ symbol, ori, tier: ori?.modelTier || "lite" });
+      try {
+        let genUsage = null;
+        let genModel = null;
+        const ori = await generateLiteIntangibles(symbol, {
+          stats, verdict, force: true,
+          onUsage: (usage, model) => {
+            genUsage = usage;
+            genModel = model;
+          },
+        });
+        if (genModel) await recordOriUsage(req.userId, { kind: "plan", usage: genUsage, model: genModel });
+        return res.json({ symbol, ori, tier: ori?.modelTier || "lite" });
+      } finally {
+        releaseOriQuota(quota.reservation);
+      }
     }
 
     // Pro take (frontier) is cached in memory + SQLite and always wins over lite.
@@ -1365,45 +1374,49 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     }
 
     // Cache miss → this request will generate, so meter it up front.
-    const quota = checkOriQuota(req.userId);
+    const quota = acquireOriQuota(req.userId);
     if (!quota.ok) return res.status(429).json({ error: quota.message, code: "ori_limit", scope: quota.scope });
 
-    // Capture usage from the generator closure. didGenerate guards against a
-    // coalesced waiter (which shares an in-flight promise) double-counting.
-    let genUsage = null;
-    let didGenerate = false;
-    const data = await cachedDetail(`gameplan:${symbol}`, gamePlanFrontierTtlMs(), async () => {
-      // Profile/news are enrichment for the prompt, not hard requirements — a
-      // transient fetch failure shouldn't sink the whole Game Plan, so degrade
-      // to null and let Ori reason from the stats it already has.
-      const [profile, news] = await Promise.all([
-        cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
-        cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
-      ]);
-      // Model ladder per the request mode. Because this whole block is cached ~1 week
-      // per symbol (frontier), Pro is hit at most once per stock per week. Frontier
-      // leads the ladder and is retried on the backup key only when the primary
-      // key's whole ladder is "too busy" — and Gemini bills only on success, so a
-      // single generation never pays for the scarce frontier tier twice.
-      const { data: raw, model, usage } = await geminiGenerateJson({
-        system: GAME_PLAN_SYSTEM,
-        prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
-        schema: GAME_PLAN_SCHEMA,
-        // Headroom for thinking + the rich JSON (thinking bills against this cap).
-        maxOutputTokens: gamePlanMaxOutputTokens(),
-        thinkingLevel: gamePlanThinkingLevel(),
-        ...ladder,
-      });
-      genUsage = usage;
-      didGenerate = true;
-      const sane = sanitizeGamePlan(raw);
-      if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
-      return sane;
-    }, false);
-    if (didGenerate) {
-      await recordOriUsage(req.userId, { kind: "plan", usage: genUsage, model: data?.model });
+    try {
+      // Capture usage from the generator closure. didGenerate guards against a
+      // coalesced waiter (which shares an in-flight promise) double-counting.
+      let genUsage = null;
+      let didGenerate = false;
+      const data = await cachedDetail(`gameplan:${symbol}`, gamePlanFrontierTtlMs(), async () => {
+        // Profile/news are enrichment for the prompt, not hard requirements — a
+        // transient fetch failure shouldn't sink the whole Game Plan, so degrade
+        // to null and let Ori reason from the stats it already has.
+        const [profile, news] = await Promise.all([
+          cachedDetail(`profile:${symbol}`, 24 * 60 * 60 * 1000, () => fetchProfile(symbol)).catch(() => null),
+          cachedDetail(`stocknews:${symbol}`, 30 * 60 * 1000, () => fetchStockNews(symbol, { limit: 20 })).catch(() => null),
+        ]);
+        // Model ladder per the request mode. Because this whole block is cached ~1 week
+        // per symbol (frontier), Pro is hit at most once per stock per week. Frontier
+        // leads the ladder and is retried on the backup key only when the primary
+        // key's whole ladder is "too busy" — and Gemini bills only on success, so a
+        // single generation never pays for the scarce frontier tier twice.
+        const { data: raw, model, usage } = await geminiGenerateJson({
+          system: GAME_PLAN_SYSTEM,
+          prompt: buildGamePlanPrompt({ symbol, profile, news, stats, verdict }),
+          schema: GAME_PLAN_SCHEMA,
+          // Headroom for thinking + the rich JSON (thinking bills against this cap).
+          maxOutputTokens: gamePlanMaxOutputTokens(),
+          thinkingLevel: gamePlanThinkingLevel(),
+          ...ladder,
+        });
+        genUsage = usage;
+        didGenerate = true;
+        const sane = sanitizeGamePlan(raw);
+        if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
+        return sane;
+      }, false);
+      if (didGenerate) {
+        await recordOriUsage(req.userId, { kind: "plan", usage: genUsage, model: data?.model });
+      }
+      res.json({ symbol, ori: data, tier: data?.modelTier || "frontier" });
+    } finally {
+      releaseOriQuota(quota.reservation);
     }
-    res.json({ symbol, ori: data, tier: data?.modelTier || "frontier" });
   } catch (e) {
     if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
     if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });

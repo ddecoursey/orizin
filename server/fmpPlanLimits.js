@@ -5,6 +5,7 @@
 
 let allowSet = null;
 let parsed = false;
+const deniedExecCompSymbols = new Set();
 
 function execCompAllowSet() {
   if (parsed) return allowSet;
@@ -26,8 +27,10 @@ function execCompAllowSet() {
 /** True when this symbol may call FMP executive-compensation. Default: all symbols. */
 export function execCompAllowed(symbol) {
   const set = execCompAllowSet();
+  const normalized = String(symbol || "").toUpperCase();
+  if (deniedExecCompSymbols.has(normalized)) return false;
   if (!set) return true;
-  return set.has(String(symbol || "").toUpperCase());
+  return set.has(normalized);
 }
 
 /** True when an allowlist is configured (starter-style plan gate). */
@@ -35,8 +38,19 @@ export function execCompRestricted() {
   return execCompAllowSet() != null;
 }
 
+/**
+ * Remember symbol-level Starter-plan denials for this process. FMP returns 402
+ * for executive-compensation on a small, changing subset of tickers; once a
+ * symbol is denied, avoid spending another API call on every detail refresh.
+ */
+export function markExecCompUnavailable(symbol) {
+  const normalized = String(symbol || "").toUpperCase();
+  if (normalized) deniedExecCompSymbols.add(normalized);
+}
+
 /** Test hook */
 export function _resetFmpPlanLimitsForTests() {
   allowSet = null;
   parsed = false;
+  deniedExecCompSymbols.clear();
 }

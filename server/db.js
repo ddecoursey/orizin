@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import { resolveDatabaseLocation } from './dbPath.js';
 import {
@@ -179,6 +180,37 @@ try {
     last_active_at INTEGER,
     session_epoch INTEGER DEFAULT 0      -- bumped on password change to revoke other sessions
   );
+
+  -- Opaque PayPal checkout ownership tokens. Only the hash is persisted; the
+  -- raw token is sent to PayPal as custom_id and proves which signed-in user
+  -- initiated a subscription when approval/webhook callbacks arrive.
+  CREATE TABLE IF NOT EXISTS billing_checkout_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+
+  -- Per-device server-side session registry. Tokens carry the random session id,
+  -- while SQLite stores only its hash so logout can revoke one copied token
+  -- without ending every other device's session.
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    session_hash TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL,
+    created_at   INTEGER NOT NULL,
+    expires_at   INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions(expires_at);
+
+  -- One-release bridge for cookies issued before auth_sessions existed. Once a
+  -- legacy cookie is upgraded or logged out, its hash is denied until expiry.
+  CREATE TABLE IF NOT EXISTS revoked_auth_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_revoked_auth_tokens_expiry ON revoked_auth_tokens(expires_at);
 
   CREATE TABLE IF NOT EXISTS login_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -416,6 +448,10 @@ try {
   // Partial unique index: many NULL emails are fine (legacy username-only
   // accounts), but a real email may belong to only one account.
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;`);
+  db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_paypal_subscription
+           ON users(paypal_subscription_id) WHERE paypal_subscription_id IS NOT NULL;`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_billing_checkout_tokens_user
+           ON billing_checkout_tokens(user_id, created_at DESC);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_linked_accounts_user ON linked_accounts(user_id);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_brokerage_orders_user ON brokerage_orders(user_id, created_at DESC);`);
 } catch (e) {
@@ -1446,6 +1482,9 @@ export function setUserPlan(username, plan) {
 // username/email signs up again). Returns the users-row delete result (.changes).
 export function deleteUserCascade(username) {
   const tx = db.transaction((u) => {
+    db.prepare('DELETE FROM billing_checkout_tokens WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM auth_sessions WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM revoked_auth_tokens WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM chat_sessions WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM linked_accounts WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM brokerage_orders WHERE user_id = ?').run(u);
@@ -1453,6 +1492,7 @@ export function deleteUserCascade(username) {
     db.prepare('DELETE FROM ori_usage WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM ori_usage_events WHERE user_id = ?').run(u);
     db.prepare('DELETE FROM login_events WHERE user_id = ?').run(u);
+    db.prepare('DELETE FROM watchlist_alert_state WHERE user_id = ?').run(u);
     return db.prepare('DELETE FROM users WHERE username = ?').run(u);
   });
   return tx(username);
@@ -1467,9 +1507,8 @@ export function setResetToken(username, tokenHash, expiresMs) {
     .run(tokenHash, expiresMs, username).changes > 0;
 }
 
-// Set a new password from a plaintext value and clear any pending reset token so
-// the link can't be replayed. (Existing session cookies remain valid until they
-// expire — main has no session-epoch revocation; see note in reset-password.)
+// Set a new password from a plaintext value, clear any pending reset token, and
+// bump the epoch so every previously issued session token is invalidated.
 export function setUserPassword(username, plainPassword) {
   const hash = bcrypt.hashSync(plainPassword, 10);
   return db
@@ -1481,6 +1520,86 @@ export function setUserPassword(username, plainPassword) {
 export function bumpSessionEpoch(username) {
   db.prepare('UPDATE users SET session_epoch = COALESCE(session_epoch, 0) + 1 WHERE username = ?').run(username);
   return getUserByUsername(username)?.session_epoch ?? 0;
+}
+
+// ── Per-device session revocation ───────────────────────────────────────────
+const insertAuthSessionStmt = db.prepare(`
+  INSERT INTO auth_sessions (session_hash, user_id, created_at, expires_at)
+  VALUES (?, ?, ?, ?)
+`);
+const activeAuthSessionStmt = db.prepare(`
+  SELECT 1 FROM auth_sessions
+  WHERE session_hash = ? AND user_id = ? AND expires_at > ?
+`);
+const extendAuthSessionStmt = db.prepare(`
+  UPDATE auth_sessions SET expires_at = ?
+  WHERE session_hash = ? AND user_id = ? AND expires_at > ?
+`);
+const revokeAuthSessionStmt = db.prepare(`
+  DELETE FROM auth_sessions WHERE session_hash = ? AND user_id = ?
+`);
+const revokeLegacyAuthTokenStmt = db.prepare(`
+  INSERT INTO revoked_auth_tokens (token_hash, user_id, expires_at)
+  VALUES (?, ?, ?)
+  ON CONFLICT(token_hash) DO UPDATE SET expires_at = MAX(expires_at, excluded.expires_at)
+`);
+const isLegacyAuthTokenRevokedStmt = db.prepare(`
+  SELECT 1 FROM revoked_auth_tokens
+  WHERE token_hash = ? AND user_id = ? AND expires_at > ?
+`);
+
+function authSessionHash(sessionId) {
+  if (typeof sessionId !== 'string' || sessionId.length < 16 || sessionId.length > 200) return null;
+  return crypto.createHash('sha256').update(sessionId).digest('hex');
+}
+
+function legacyAuthTokenHash(token) {
+  if (typeof token !== 'string' || token.length < 16 || token.length > 4096) return null;
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+export function createAuthSession(userId, sessionId, expiresAt, createdAt = Date.now()) {
+  const hash = authSessionHash(sessionId);
+  if (!hash || !userId || !Number.isFinite(expiresAt)) return false;
+  insertAuthSessionStmt.run(hash, userId, createdAt, expiresAt);
+  return true;
+}
+
+export function isAuthSessionActive(userId, sessionId, now = Date.now()) {
+  const hash = authSessionHash(sessionId);
+  return !!(hash && activeAuthSessionStmt.get(hash, userId, now));
+}
+
+export function extendAuthSession(userId, sessionId, expiresAt, now = Date.now()) {
+  const hash = authSessionHash(sessionId);
+  if (!hash || !Number.isFinite(expiresAt)) return false;
+  return extendAuthSessionStmt.run(expiresAt, hash, userId, now).changes > 0;
+}
+
+export function revokeAuthSession(userId, sessionId) {
+  const hash = authSessionHash(sessionId);
+  if (!hash) return false;
+  return revokeAuthSessionStmt.run(hash, userId).changes > 0;
+}
+
+export function revokeLegacyAuthToken(userId, token, expiresAt) {
+  const hash = legacyAuthTokenHash(token);
+  if (!hash || !userId || !Number.isFinite(expiresAt)) return false;
+  revokeLegacyAuthTokenStmt.run(hash, userId, expiresAt);
+  return true;
+}
+
+export function isLegacyAuthTokenRevoked(userId, token, now = Date.now()) {
+  const hash = legacyAuthTokenHash(token);
+  return !!(hash && isLegacyAuthTokenRevokedStmt.get(hash, userId, now));
+}
+
+export function pruneExpiredAuthSessions(now = Date.now()) {
+  const prune = db.transaction(() => ({
+    sessions: db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(now).changes,
+    legacyTokens: db.prepare('DELETE FROM revoked_auth_tokens WHERE expires_at <= ?').run(now).changes,
+  }));
+  return prune();
 }
 
 const recordLoginStmt = db.prepare(`
@@ -1567,6 +1686,68 @@ export function pruneLoginEvents(beforeMs) {
 // `proUntil` (ms) is PayPal's billing_info.next_billing_time (end of the paid
 // period). Pass `undefined` to keep the stored value; pass null to clear it.
 const ACTIVE_SUB_STATUSES = new Set(['ACTIVE', 'APPROVED']);
+
+const BILLING_CHECKOUT_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_BILLING_CHECKOUT_TOKENS_PER_USER = 5;
+
+function hashBillingCheckoutToken(token) {
+  return crypto.createHash('sha256').update(String(token)).digest('hex');
+}
+
+const insertBillingCheckoutTokenStmt = db.prepare(`
+  INSERT INTO billing_checkout_tokens (token_hash, user_id, created_at, expires_at)
+  VALUES (?, ?, ?, ?)
+`);
+const pruneBillingCheckoutTokensStmt = db.prepare(
+  'DELETE FROM billing_checkout_tokens WHERE expires_at <= ?',
+);
+const trimBillingCheckoutTokensStmt = db.prepare(`
+  DELETE FROM billing_checkout_tokens
+   WHERE user_id = ?
+     AND token_hash NOT IN (
+       SELECT token_hash
+         FROM billing_checkout_tokens
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+     )
+`);
+const issueBillingCheckoutToken = db.transaction((userId, now) => {
+  pruneBillingCheckoutTokensStmt.run(now);
+  const token = crypto.randomBytes(24).toString('base64url');
+  insertBillingCheckoutTokenStmt.run(
+    hashBillingCheckoutToken(token),
+    userId,
+    now,
+    now + BILLING_CHECKOUT_TTL_MS,
+  );
+  trimBillingCheckoutTokensStmt.run(
+    userId,
+    userId,
+    MAX_BILLING_CHECKOUT_TOKENS_PER_USER,
+  );
+  return token;
+});
+
+/** Issue a short-lived opaque token that binds a PayPal checkout to a user. */
+export function createBillingCheckoutToken(userId) {
+  if (!getUserByUsername(userId)) throw new Error('Cannot create checkout token for an unknown user');
+  return issueBillingCheckoutToken(userId, Date.now());
+}
+
+/** Resolve an unexpired raw checkout token back to its owning user. */
+export function getUserByBillingCheckoutToken(token) {
+  const raw = typeof token === 'string' ? token.trim() : '';
+  if (raw.length < 20 || raw.length > 200) return undefined;
+  const now = Date.now();
+  pruneBillingCheckoutTokensStmt.run(now);
+  return db.prepare(`
+    SELECT u.*
+      FROM billing_checkout_tokens AS t
+      JOIN users AS u ON u.username = t.user_id
+     WHERE t.token_hash = ? AND t.expires_at > ?
+  `).get(hashBillingCheckoutToken(raw), now);
+}
 
 export function setUserSubscription(username, { subscriptionId, status = null, proUntil } = {}) {
   const u = getUserByUsername(username);
@@ -1861,6 +2042,16 @@ const oldestOriUsageEventSinceStmt = db.prepare(
 /** Record a single billable Ori action for rolling-window limits. */
 export function insertOriUsageEvent(userId, kind, at = Date.now()) {
   insertOriUsageEventStmt.run(userId, at, kind);
+}
+
+const recordOriUsageLedgerTransaction = db.transaction((userId, day, delta, kind, at) => {
+  incrementOriUsage(userId, day, delta);
+  insertOriUsageEvent(userId, kind, at);
+});
+
+/** Keep calendar totals and the rolling-window event in one SQLite commit. */
+export function recordOriUsageLedger(userId, day, delta, kind, at = Date.now()) {
+  recordOriUsageLedgerTransaction(userId, day, delta, kind, at);
 }
 
 /** Count billable Ori actions since `sinceMs` (5-hour session window). */

@@ -140,7 +140,13 @@ export function contentsWithDynamicContext(dynamicContext, geminiContents) {
  * Build the Gemini stream body for one chat model. Uses explicit cachedContent when
  * bootstrapped; otherwise falls back to the two-part system_instruction split.
  */
-export function buildChatGeminiBody(model, dynamicContext, geminiContents, view = "screener") {
+export function buildChatGeminiBody(
+  model,
+  dynamicContext,
+  geminiContents,
+  view = "screener",
+  functionDeclarations = [],
+) {
   const generationConfig = { maxOutputTokens: chatMaxOutputTokens(view) };
   // Cap reasoning on the chat tier (default low) so thinking tokens don't dominate
   // the per-turn output bill. Applies to both the cached and fallback bodies below.
@@ -148,11 +154,18 @@ export function buildChatGeminiBody(model, dynamicContext, geminiContents, view 
   if (tc) Object.assign(generationConfig, tc);
   const staticText = oriStaticForView(view);
   const cacheName = getChatContextCacheName(model, view);
+  const toolFields = Array.isArray(functionDeclarations) && functionDeclarations.length
+    ? {
+        tools: [{ functionDeclarations }],
+        toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+      }
+    : {};
   if (cacheName) {
     return {
       cachedContent: cacheName,
       contents: contentsWithDynamicContext(dynamicContext, geminiContents),
       generationConfig,
+      ...toolFields,
     };
   }
   return {
@@ -161,6 +174,7 @@ export function buildChatGeminiBody(model, dynamicContext, geminiContents, view 
     },
     contents: geminiContents,
     generationConfig,
+    ...toolFields,
   };
 }
 

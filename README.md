@@ -13,6 +13,7 @@
   - Moonshot / High-Risk High-Reward opportunities
   - Valuation analysis
   - Hold duration recommendations
+- **Live FMP tools for Ori** - Ori can selectively verify quotes, filings, earnings, analyst data, statements, technicals, news, and other Starter-plan data through FMP's hosted MCP server
 - **Multi-Tab Portfolio Organization** - Create and manage multiple stock lists/tabs
 - **Favorite Pinning** - Pin your watchlist stocks for quick access
 - **Local Database** - SQLite for fast, persistent data storage
@@ -56,6 +57,7 @@
    ```
    FMP_API_KEY=your_fmp_api_key_here
    GEMINI_API_KEY=your_gemini_api_key_here
+   FMP_MCP_ENABLED=true
    PORT=3001
    DB_PATH=./data/screener.db
    ```
@@ -75,6 +77,29 @@
 npm run build
 npm run server       # Serves the built app at http://localhost:3001
 ```
+
+### Automated Verification
+
+```bash
+npm test             # API, security, billing, strategy, migration, and cost-control regressions
+npm run test:e2e     # Build and run isolated Chromium flows against a temporary SQLite database
+npm run test:ci      # The same lint, regression, build, and browser gate used by CI
+npm run audit:prod   # Audit runtime dependencies only
+```
+
+The E2E harness disables FMP, Gemini, PayPal, background enrichment, and email delivery. It never reads or writes the configured application database.
+
+To verify a deployed Railway service without credentials or data changes:
+
+```bash
+SMOKE_BASE_URL=https://orizin.io npm run test:smoke
+```
+
+The scheduled workflow checks `https://orizin.io` every six hours; set the GitHub repository variable `SMOKE_BASE_URL` only to override that target. Railway also checks `/api/health` before activating each deployment.
+
+Railway QA can also run hands-off role-based Playwright journeys after every
+successful deployment, using disposable accounts that are always removed. See
+[Railway QA deployment and user-journey testing](docs/railway-qa-testing.md).
 
 ## Project Structure
 
@@ -115,6 +140,12 @@ Chat with Ori using different analysis modes:
 - **Valuation Check** - Rigorous valuation analysis
 - **Hold Duration** - Analyze by investment time horizon
 - **General** - Open discussion about your stocks
+
+Ori automatically discovers FMP's hosted MCP tools when `FMP_API_KEY` is set.
+Only a curated Starter-safe subset is offered to Gemini for each question, and
+results are cached, row-limited, and counted against the same `FMP_MAX_RPM`
+budget as the app's direct FMP requests. Set `FMP_MCP_ENABLED=false` to disable
+live tool use without affecting the rest of FMP-backed stock data.
 
 ## License
 
