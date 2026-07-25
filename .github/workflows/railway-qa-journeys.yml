@@ -73,7 +73,7 @@ jobs:
       - name: Provision disposable QA journey accounts
         run: npm run test:qa:provision
         env:
-          QA_E2E_ADMIN_EMAIL: ${{ secrets.QA_E2E_ADMIN_EMAIL }}
+          QA_E2E_ADMIN_EMAIL: ${{ vars.QA_E2E_ADMIN_EMAIL }}
           QA_E2E_ADMIN_PASSWORD: ${{ secrets.QA_E2E_ADMIN_PASSWORD }}
       - name: Walk anonymous, free, Voyager, admin, and mobile journeys
         run: npm run test:e2e:deployed
@@ -81,7 +81,7 @@ jobs:
         if: ${{ always() }}
         run: npm run test:qa:cleanup
         env:
-          QA_E2E_ADMIN_EMAIL: ${{ secrets.QA_E2E_ADMIN_EMAIL }}
+          QA_E2E_ADMIN_EMAIL: ${{ vars.QA_E2E_ADMIN_EMAIL }}
           QA_E2E_ADMIN_PASSWORD: ${{ secrets.QA_E2E_ADMIN_PASSWORD }}
       - name: Upload browser diagnostics
         if: ${{ !cancelled() }}

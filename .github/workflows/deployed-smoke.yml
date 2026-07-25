@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      SMOKE_BASE_URL: ${{ inputs.base_url || vars.SMOKE_BASE_URL || 'https://orizin.io' }}
+      SMOKE_BASE_URL: ${{ inputs.base_url || vars.SMOKE_BASE_URL || 'https://www.orizin.io' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v6

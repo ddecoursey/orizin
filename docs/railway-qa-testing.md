@@ -10,6 +10,20 @@ Orizin has three complementary automated gates:
 3. `.github/workflows/deployed-smoke.yml` checks the live deployment every six
    hours without credentials or data changes.
 
+## Domain contract
+
+- Production web origin: `https://www.orizin.io` (Wix-managed domain).
+- Persistent QA web origin: `https://orizin.app` (Cloudflare-managed domain).
+- QA automation origin: `https://orizen-qa.up.railway.app` (Railway-managed
+  domain). GitHub-hosted journeys use this direct origin to avoid Cloudflare
+  bot/WAF rules; the legacy spelling in Railway's generated hostname is
+  intentional.
+- Resend sender domain: `orizin.app` in both QA and production. Production
+  email must continue using an address such as `noreply@orizin.app`; the sender
+  domain does not follow the production web origin.
+- `APP_URL` is environment-specific because it controls links: use
+  `https://www.orizin.io` in production and `https://orizin.app` in QA.
+
 The persistent-QA workflow never resets the QA database. It creates accounts
 under the reserved `qa-e2e-…@example.invalid` namespace, tests them, and removes
 them in an `always()` cleanup step. A later run also garbage-collects reserved
