@@ -141,7 +141,9 @@ test.describe("Railway QA deployed user journeys", () => {
     // Live Gemini calls are opt-in so ordinary QA deploys remain deterministic
     // and do not consume paid quota. A manual workflow run can enable the canary.
     if (liveAi) {
-      const prompt = `Railway QA canary ${manifest.runLabel}: reply with QA OK.`;
+      // Ask for live data so this exercises the Gemini function-tool request
+      // shape and FMP MCP loop, not only an ordinary cached chat response.
+      const prompt = `Railway QA canary ${manifest.runLabel}: what is AAPL's current stock price? Reply briefly.`;
       await input.fill(prompt);
       await input.press("Enter");
       const userMessage = page.getByText(prompt, { exact: true });
@@ -149,6 +151,9 @@ test.describe("Railway QA deployed user journeys", () => {
       const userRow = userMessage.locator("xpath=ancestor::div[contains(@class,'justify-end')][1]");
       const assistantRow = userRow.locator("xpath=following-sibling::div[contains(@class,'justify-start')][1]");
       await expect(assistantRow.locator("p").first()).toHaveText(/\S+/, { timeout: 180_000 });
+      await expect(assistantRow).not.toContainText(
+        /Gemini API error|CachedContent can not be used|INVALID_ARGUMENT/i,
+      );
     }
 
     await page.getByTitle("Close", { exact: true }).click();
