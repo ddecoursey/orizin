@@ -14,6 +14,10 @@ Orizin has three complementary automated gates:
 
 - Production web origin: `https://www.orizin.io` (Wix-managed domain).
 - Persistent QA web origin: `https://orizin.app` (Cloudflare-managed domain).
+- QA automation origin: `https://orizen-qa.up.railway.app` (Railway-managed
+  domain). GitHub-hosted journeys use this direct origin to avoid Cloudflare
+  bot/WAF rules; the legacy spelling in Railway's generated hostname is
+  intentional.
 - Resend sender domain: `orizin.app` in both QA and production. Production
   email must continue using an address such as `noreply@orizin.app`; the sender
   domain does not follow the production web origin.
