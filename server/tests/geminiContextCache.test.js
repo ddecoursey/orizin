@@ -90,7 +90,7 @@ test("buildChatGeminiBody applies the configured chat thinking level (cached + f
   }
 });
 
-test("buildChatGeminiBody adds optional function tools to cached and fallback requests", () => {
+test("buildChatGeminiBody bypasses cachedContent when request-level tools are present", () => {
   const model = valueModel();
   const declarations = [{
     name: "fmp_quote",
@@ -107,7 +107,10 @@ test("buildChatGeminiBody adds optional function tools to cached and fallback re
   assert.equal(fallback.toolConfig.functionCallingConfig.mode, "AUTO");
 
   _setChatContextCacheForTests(model, "cachedContents/test-cache");
-  const cached = buildChatGeminiBody(model, "ctx", [], "screener", declarations);
-  assert.deepEqual(cached.tools, [{ functionDeclarations: declarations }]);
-  assert.equal(cached.system_instruction, undefined);
+  const toolEnabled = buildChatGeminiBody(model, "ctx", [], "screener", declarations);
+  assert.equal(toolEnabled.cachedContent, undefined);
+  assert.equal(toolEnabled.system_instruction.parts[0].text, ORI_SYSTEM_STATIC);
+  assert.equal(toolEnabled.system_instruction.parts[1].text, "ctx");
+  assert.deepEqual(toolEnabled.tools, [{ functionDeclarations: declarations }]);
+  assert.equal(toolEnabled.toolConfig.functionCallingConfig.mode, "AUTO");
 });

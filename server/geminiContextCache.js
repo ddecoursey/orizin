@@ -138,7 +138,13 @@ export function contentsWithDynamicContext(dynamicContext, geminiContents) {
 
 /**
  * Build the Gemini stream body for one chat model. Uses explicit cachedContent when
- * bootstrapped; otherwise falls back to the two-part system_instruction split.
+ * bootstrapped and no per-request tools are needed; otherwise falls back to the
+ * two-part system_instruction split.
+ *
+ * Gemini rejects GenerateContent requests that combine cachedContent with
+ * request-level system_instruction, tools, or tool_config. Ori's FMP declarations
+ * are selected dynamically for each question, so they cannot live in the immutable
+ * server-wide cache. Tool-enabled turns therefore use the uncached request shape.
  */
 export function buildChatGeminiBody(
   model,
@@ -154,13 +160,15 @@ export function buildChatGeminiBody(
   if (tc) Object.assign(generationConfig, tc);
   const staticText = oriStaticForView(view);
   const cacheName = getChatContextCacheName(model, view);
-  const toolFields = Array.isArray(functionDeclarations) && functionDeclarations.length
+  const hasFunctionDeclarations = Array.isArray(functionDeclarations)
+    && functionDeclarations.length > 0;
+  const toolFields = hasFunctionDeclarations
     ? {
         tools: [{ functionDeclarations }],
         toolConfig: { functionCallingConfig: { mode: "AUTO" } },
       }
     : {};
-  if (cacheName) {
+  if (cacheName && !hasFunctionDeclarations) {
     return {
       cachedContent: cacheName,
       contents: contentsWithDynamicContext(dynamicContext, geminiContents),
