@@ -6,7 +6,7 @@ Audit date: 2026-07-24 UTC
 
 - The live FMP documentation exposed 263 sample API cards representing 230 unique `/stable` paths.
 - This account returned HTTP 200 for 158 unique documented paths and HTTP 402 for 72 paths.
-- Orizen currently references 41 FMP paths:
+- Orizin currently references 41 FMP paths:
   - 40 documented paths returned HTTP 200.
   - The undocumented fallback `/stable/stock/list` returned HTTP 404 with `[]`.
 - Therefore, 118 currently callable documented paths are not used by the project.
@@ -51,13 +51,13 @@ after this implementation batch.
 
 The full sweep produced no HTTP 429 responses. The API key and raw response bodies are not stored in this report.
 
-## Latest changelog items Orizen can use
+## Latest changelog items Orizin can use
 
 ### June 5, 2026
 
 1. Stock Screener pagination
 
-   FMP added `page` to `/stable/company-screener`. A live check with `limit=3` returned different symbols on pages 0 and 1. Orizen currently sends a large `limit` but no page, so a capped response can silently truncate the universe.
+   FMP added `page` to `/stable/company-screener`. A live check with `limit=3` returned different symbols on pages 0 and 1. Orizin currently sends a large `limit` but no page, so a capped response can silently truncate the universe.
 
 2. Earnings Calendar report timing
 
@@ -70,11 +70,11 @@ The full sweep produced no HTTP 429 responses. The API key and raw response bodi
    - `confirmed`
    - `lastUpdated`
 
-   Orizen currently uses the per-symbol `/stable/earnings` endpoint and drops these timing/confirmation fields. A cached daily calendar pull could add pre-market/after-market timing and confirmed-versus-estimated status without one calendar request per symbol.
+   Orizin currently uses the per-symbol `/stable/earnings` endpoint and drops these timing/confirmation fields. A cached daily calendar pull could add pre-market/after-market timing and confirmed-versus-estimated status without one calendar request per symbol.
 
 3. Stable legislator identity
 
-   FMP added `senateID` to Senate and House trade data. Live Senate and House responses both contained it. Orizen's `fetchCongressTrades` mapper currently drops the field, retaining only the name, district, transaction type, and amount. Keeping `senateID` would improve grouping, deduplication, and longitudinal tracking.
+   FMP added `senateID` to Senate and House trade data. Live Senate and House responses both contained it. Orizin's `fetchCongressTrades` mapper currently drops the field, retaining only the name, district, transaction type, and amount. Keeping `senateID` would improve grouping, deduplication, and longitudinal tracking.
 
 ### Other useful recent changes
 
@@ -83,7 +83,7 @@ The full sweep produced no HTTP 429 responses. The API key and raw response bodi
 - October 28, 2025: delisted-company synchronization was improved. `/stable/delisted-companies` is callable and returned recent 2026 removals.
 - October 9, 2025: CUSIP matching was improved. `/stable/search-cusip` is callable.
 - August 27, 2025: legacy routes became auth-gated for eligible accounts. This explains why `/api/v3/changelog` returns 403 for this key while stable APIs work.
-- April 17, 2025: `dividendPerShareTTM` was restored to TTM ratios. The live AAPL response also contains `forwardPriceToEarningsGrowthRatioTTM`; Orizen's ratio mapper currently drops both.
+- April 17, 2025: `dividendPerShareTTM` was restored to TTM ratios. The live AAPL response also contains `forwardPriceToEarningsGrowthRatioTTM`; Orizin's ratio mapper currently drops both.
 
 ## Highest-value next integrations
 
@@ -159,7 +159,7 @@ That is 8,785 returned records per uncached symbol merely to select seven values
 
 Both stock and ETF/fund screener calls send `limit` but no `page`, despite the June 2026 pagination addition.
 
-## FMP paths currently used by Orizen
+## FMP paths currently used by Orizin
 
 All paths below returned HTTP 200 unless explicitly noted. The 29 broadly useful per-symbol paths tested with ORCL and FICO also returned 200; executive compensation was the only tested symbol-limited exception.
 
@@ -498,7 +498,7 @@ These returned HTTP 402, "Restricted Endpoint," with the current key and documen
 - Executive compensation demonstrably has symbol-level restrictions.
 - Some 200 responses can legitimately be empty because no matching event/data exists.
 - Access can change if FMP changes plan enforcement or the subscription.
-- FMP's public pricing page currently states a 20 GB rolling 30-day bandwidth allowance for Starter. This is important because several accessible endpoints return large histories even when Orizen only needs one row.
+- FMP's public pricing page currently states a 20 GB rolling 30-day bandwidth allowance for Starter. This is important because several accessible endpoints return large histories even when Orizin only needs one row.
 
 ## Official references
 

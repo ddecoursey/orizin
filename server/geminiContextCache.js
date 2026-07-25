@@ -6,7 +6,7 @@ import { geminiKeys, valueModel, liteModel, thinkingConfigFor, chatThinkingLevel
 import { oriStaticForView } from "./oriSystemStatic.js";
 
 const CACHE_URL = "https://generativelanguage.googleapis.com/v1beta/cachedContents";
-const CACHE_DISPLAY = "orizen-ori-chat-static-v3";
+const CACHE_DISPLAY = "orizin-ori-chat-static-v3";
 
 /** @type {Map<string, { name: string, expireTime?: string }>} */
 const chatCachesByModel = new Map();
