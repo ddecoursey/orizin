@@ -37,6 +37,7 @@ import {
   refreshSessionCookie,
   touchUserActivity,
   inactivityMs,
+  clientIp,
 } from './session.js';
 
 // Import logger for local route handlers + re-export for other modules that do `import { logError } from './index.js'`
@@ -64,7 +65,9 @@ const app = express();
 let server = null;
 let shuttingDown = false;
 
-app.set('trust proxy', true); // honor X-Forwarded-Proto from Railway's edge
+// Railway is the single proxy hop directly in front of this service. Trusting
+// every hop lets a caller-controlled X-Forwarded-For value influence req.ip.
+app.set('trust proxy', 1);
 
 // ── Crash safety ────────────────────────────────────────────────────────────
 // An uncaught error can leave shared caches, queues, or SQLite transactions in an
@@ -160,6 +163,9 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
+  keyGenerator: (req) => ipKeyGenerator(
+    clientIp(req) || req.ip || req.socket?.remoteAddress || "unknown",
+  ),
   validate: {
     trustProxy: false, // We intentionally set trust proxy for Railway
   },

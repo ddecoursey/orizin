@@ -109,6 +109,20 @@ function validSymbol(raw) {
   return SYM_RE.test(sym) ? sym : null;
 }
 
+function guardFmpDetailRequest(req, res, next) {
+  if (req.params?.symbol && !validSymbol(req.params.symbol)) {
+    return res.status(400).json({ error: "Invalid symbol" });
+  }
+  const force = req.query.force === "1" || req.query.force === "true";
+  if (force && !getUserByUsername(req.userId)?.is_admin) {
+    return res.status(403).json({
+      error: "Only admins may bypass the shared market-data cache",
+      code: "force_refresh_forbidden",
+    });
+  }
+  return next();
+}
+
 function sparklinePricesFromRow(row) {
   if (!row?.data) return null;
   try {
@@ -914,9 +928,9 @@ router.post("/stocks/add", enrichLimiter, requireAdmin, async (req, res) => {
 
 // ── GET /api/stocks/rsi/:symbol ────────────────────────────────────────────
 // RSI technical indicator (0–100) for the detail chart overlay.
-router.get("/stocks/rsi/:symbol", async (req, res) => {
+router.get("/stocks/rsi/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
-  const periodLength = parseInt(req.query.periodLength) || 10;
+  const periodLength = Math.max(2, Math.min(250, parseInt(req.query.periodLength, 10) || 10));
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
     const rsi = await cachedDetail(`rsi:${symbol}:${periodLength}`, 6 * 60 * 60 * 1000, () =>
@@ -932,7 +946,7 @@ router.get("/stocks/rsi/:symbol", async (req, res) => {
 // Batched technical indicators for the Deep Research "Technical Analysis" panel
 // (moving averages, ADX trend strength, Williams %R, volatility). Cached ~6h —
 // 1-day indicators only change daily — to bound FMP cost; rate-limited.
-router.get("/stocks/technicals/:symbol", aiDetailLimiter, async (req, res) => {
+router.get("/stocks/technicals/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
   try {
@@ -1149,7 +1163,7 @@ async function warmSymbolDetailForForce(symbol, { profileBackfilled = false, enr
 // ── GET /api/stocks/smart-money/:symbol ────────────────────────────────────
 // Congressional (Senate + House) + insider (open-market Form 4) trades, rolled
 // up into a buy/sell signal + recent activity. Cached ~6h; rate-limited.
-router.get("/stocks/smart-money/:symbol", aiDetailLimiter, async (req, res) => {
+router.get("/stocks/smart-money/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
   try {
@@ -1519,7 +1533,7 @@ router.post("/stocks/intangibles/:symbol", aiDetailLimiter, readIntangiblesCache
 
 // ── GET /api/stocks/earnings/:symbol ───────────────────────────────────────
 // Next earnings date + recent EPS/revenue beat-or-miss history. Cached ~12h.
-router.get("/stocks/earnings/:symbol", async (req, res) => {
+router.get("/stocks/earnings/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   if (!/^[A-Z0-9.-]{1,12}$/.test(symbol)) return res.status(400).json({ error: "Invalid symbol" });
   try {
@@ -1535,7 +1549,7 @@ router.get("/stocks/earnings/:symbol", async (req, res) => {
 
 // ── GET /api/stocks/ratings/:symbol ────────────────────────────────────────
 // Ratings snapshot (letter grade + 1–5 sub-scores) for the detail pane.
-router.get("/stocks/ratings/:symbol", async (req, res) => {
+router.get("/stocks/ratings/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
@@ -1551,7 +1565,7 @@ router.get("/stocks/ratings/:symbol", async (req, res) => {
 
 // ── GET /api/stocks/grades/:symbol ─────────────────────────────────────────
 // Recent analyst grading actions (upgrades / downgrades / maintains).
-router.get("/stocks/grades/:symbol", async (req, res) => {
+router.get("/stocks/grades/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
@@ -1567,7 +1581,7 @@ router.get("/stocks/grades/:symbol", async (req, res) => {
 // ── GET /api/stocks/profile/:symbol ────────────────────────────────────────
 // Full company profile from FMP (description, CEO, website, employees, etc.)
 // for the detail overview modal.
-router.get("/stocks/profile/:symbol", async (req, res) => {
+router.get("/stocks/profile/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const force = req.query.force === '1' || req.query.force === 'true';
   try {
@@ -1584,7 +1598,7 @@ router.get("/stocks/profile/:symbol", async (req, res) => {
 // ── GET /api/stocks/insider/:symbol ────────────────────────────────────────
 // Recent insider trading activity (Form 4 buys/sells). Cached 6h like the
 // other per-symbol detail lookups.
-router.get("/stocks/insider/:symbol", async (req, res) => {
+router.get("/stocks/insider/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
@@ -1599,7 +1613,7 @@ router.get("/stocks/insider/:symbol", async (req, res) => {
 
 // ── GET /api/stocks/intraday/:symbol ───────────────────────────────────────
 // Intraday 5-min price series for the chart's "1D" timeframe. Cached ~5m.
-router.get("/stocks/intraday/:symbol", async (req, res) => {
+router.get("/stocks/intraday/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
@@ -1614,7 +1628,7 @@ router.get("/stocks/intraday/:symbol", async (req, res) => {
 
 // ── GET /api/stocks/news/:symbol ───────────────────────────────────────────
 // Latest news for a single company (the News tab in the overview). Cached 30m.
-router.get("/stocks/news/:symbol", async (req, res) => {
+router.get("/stocks/news/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const force = req.query.force === '1' || req.query.force === 'true';
@@ -1629,9 +1643,9 @@ router.get("/stocks/news/:symbol", async (req, res) => {
 
 // ── GET /api/news ──────────────────────────────────────────────────────────
 // Latest general market news for the footer ticker + Ori context. Cached 10m.
-router.get("/news", async (req, res) => {
+router.get("/news", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(req.query.limit) || 30, 60);
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 30, 60));
     const force = req.query.force === '1' || req.query.force === 'true';
     const news = await cachedDetail(`news:general:${limit}`, 10 * 60 * 1000, () =>
       fetchGeneralNews({ limit }), force
@@ -1648,7 +1662,7 @@ router.get("/news", async (req, res) => {
 // detail cache (memory + SQLite) so reopening a stock costs zero FMP calls.
 
 // GET /api/stocks/statements/:symbol?period=annual|quarter
-router.get("/stocks/statements/:symbol", async (req, res) => {
+router.get("/stocks/statements/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const period = req.query.period === "quarter" ? "quarter" : "annual";
   const force = req.query.force === '1' || req.query.force === 'true';
@@ -1666,7 +1680,7 @@ router.get("/stocks/statements/:symbol", async (req, res) => {
 });
 
 // GET /api/stocks/filings/:symbol — recent SEC filings with links. Cached 12h.
-router.get("/stocks/filings/:symbol", async (req, res) => {
+router.get("/stocks/filings/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const force = req.query.force === '1' || req.query.force === 'true';
   try {
@@ -1680,7 +1694,7 @@ router.get("/stocks/filings/:symbol", async (req, res) => {
 });
 
 // GET /api/stocks/exec-comp/:symbol — named-executive pay. Cached 7d (annual data).
-router.get("/stocks/exec-comp/:symbol", async (req, res) => {
+router.get("/stocks/exec-comp/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const force = req.query.force === '1' || req.query.force === 'true';
   const allowed = execCompAllowed(symbol);
@@ -1698,7 +1712,7 @@ router.get("/stocks/exec-comp/:symbol", async (req, res) => {
 // GET /api/stocks/peers/:symbol — peer list enriched with local screener
 // metrics (P/E, mcap, sector) when the peer is in our universe. Peer list
 // cached 7d; the metric join is a free local read so it's always current.
-router.get("/stocks/peers/:symbol", async (req, res) => {
+router.get("/stocks/peers/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const force = req.query.force === '1' || req.query.force === 'true';
   try {
@@ -1729,7 +1743,7 @@ router.get("/stocks/peers/:symbol", async (req, res) => {
 });
 
 // GET /api/stocks/growth-history/:symbol — multi-year growth table. Cached 24h.
-router.get("/stocks/growth-history/:symbol", async (req, res) => {
+router.get("/stocks/growth-history/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   const force = req.query.force === '1' || req.query.force === 'true';
   try {
@@ -1747,7 +1761,7 @@ router.get("/stocks/growth-history/:symbol", async (req, res) => {
 // analyst price targets, and owner earnings. Cached 24h in SQLite so reopening
 // a stock is free and we don't hammer FMP. Degrades gracefully if any single
 // FMP endpoint isn't available on the current plan.
-router.get("/stocks/ai/:symbol", aiDetailLimiter, async (req, res) => {
+router.get("/stocks/ai/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => {
   const symbol = req.params.symbol.toUpperCase();
   try {
     const force = req.query.force === '1' || req.query.force === 'true';

@@ -1056,6 +1056,15 @@ test('email signup creates a free account and logs it in', async () => {
 
 // ── Deep Research endpoints (degrade cleanly without an FMP key) ────────────
 
+test('non-admin users cannot bypass shared FMP caches', async () => {
+  const res = await fetch(api('/api/stocks/profile/AAPL?force=1'), {
+    headers: { cookie: userCookie },
+  });
+  const body = await json(res);
+  assert.equal(res.status, 403);
+  assert.equal(body.code, 'force_refresh_forbidden');
+});
+
 test('deep research endpoints return empty datasets without an FMP key', async () => {
   const stmts = await json(await fetch(api('/api/stocks/statements/AAPL'), { headers: { cookie: userCookie } }));
   assert.deepEqual(stmts.income, []);

@@ -10,10 +10,51 @@ process.env.DB_PATH = path.join(tmpDir, "screener.db");
 process.env.SESSION_INACTIVITY_MS = "60000";
 
 const db = await import("../db.js");
-const { validateSessionPayload, inactivityMs, signToken, touchUserActivity } = await import("../session.js");
+const {
+  clientIp,
+  validateSessionPayload,
+  inactivityMs,
+  signToken,
+  touchUserActivity,
+} = await import("../session.js");
 
 test("inactivityMs reads env override", () => {
   assert.equal(inactivityMs(), 60000);
+});
+
+test("clientIp ignores caller-supplied forwarding headers outside Railway", () => {
+  const previous = process.env.RAILWAY_ENVIRONMENT;
+  delete process.env.RAILWAY_ENVIRONMENT;
+  try {
+    assert.equal(clientIp({
+      headers: { "x-forwarded-for": "203.0.113.99" },
+      ip: "127.0.0.1",
+      socket: {},
+    }), "127.0.0.1");
+  } finally {
+    if (previous === undefined) delete process.env.RAILWAY_ENVIRONMENT;
+    else process.env.RAILWAY_ENVIRONMENT = previous;
+  }
+});
+
+test("clientIp uses Railway's validated edge-supplied address", () => {
+  const previous = process.env.RAILWAY_ENVIRONMENT;
+  process.env.RAILWAY_ENVIRONMENT = "qa";
+  try {
+    assert.equal(clientIp({
+      headers: { "x-real-ip": "203.0.113.8", "x-forwarded-for": "198.51.100.7" },
+      ip: "10.0.0.2",
+      socket: {},
+    }), "203.0.113.8");
+    assert.equal(clientIp({
+      headers: { "x-real-ip": "not-an-ip", "x-forwarded-for": "198.51.100.7" },
+      ip: "10.0.0.2",
+      socket: {},
+    }), "10.0.0.2");
+  } finally {
+    if (previous === undefined) delete process.env.RAILWAY_ENVIRONMENT;
+    else process.env.RAILWAY_ENVIRONMENT = previous;
+  }
 });
 
 test("touchUserActivity reports whether the rolling cookie should refresh", () => {
