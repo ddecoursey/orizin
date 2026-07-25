@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Reset a user's password in the local SQLite DB.
 // Usage: node scripts/reset-password.mjs <username> <new-password>
-// Example: node scripts/reset-password.mjs admin OrizenDev1
+// Example: node scripts/reset-password.mjs admin OrizinDev1
 
 import 'dotenv/config';
 import bcrypt from 'bcryptjs';
