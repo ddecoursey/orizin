@@ -834,7 +834,8 @@ router.post("/chat", chatLimiter, async (req, res) => {
     const geminiContents = toGeminiContents(historyForGemini);
 
     // Discover FMP schemas only for explicit live-data intent. Ordinary chat gets
-    // no declarations at all and therefore stays on Gemini's cached-input path.
+    // no declarations at all and stays eligible for explicit caching if the
+    // operator has deliberately opted into it.
     let fmpToolset = { functionDeclarations: [], offeredNames: new Set() };
     try {
       fmpToolset = await getFmpToolsetForTurn({
@@ -930,13 +931,12 @@ ${JSON.stringify(liveRows).slice(0, 6_000)}`;
       }
     }
 
-    // The only user-facing generation is always a normal no-tools chat request,
-    // so it can reference the explicit static cache.
+    // The only user-facing generation is always a normal no-tools chat request.
     const finalAttempt = await fetchGeminiWithRetry({
       keys,
-      // Keep the user-facing turn on the value model. Falling through to Lite
-      // would resend the full dynamic prompt without a Lite context cache and
-      // make one chat action appear as spend on both model tiers.
+      // Keep the user-facing turn on the evaluated chat model. The cheaper 3.1
+      // Lite tier is reserved for bounded planning/structured work; it missed
+      // chat-specific behaviors in evaluation and is not a final-answer fallback.
       models: [valueModel()],
       buildBody: (model) => buildChatGeminiBody(
         model,

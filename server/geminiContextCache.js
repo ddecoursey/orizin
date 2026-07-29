@@ -19,10 +19,13 @@ const CACHE_DISPLAY = "orizin-ori-chat-static-v4";
 // pre-rename deployments used "orizen", while later v3 deployments used "orizin".
 // Restrict cleanup to this allowlist so we never delete another application's
 // cached content—or a future Orizin cache version during a rolling deployment.
-const LEGACY_CACHE_PREFIXES = [
+const RETIRED_CACHE_PREFIXES = [
   "orizen-ori-chat-static-v2-",
   "orizen-ori-chat-static-v3-",
   "orizin-ori-chat-static-v3-",
+  // v4 used the former 3.5 Flash value model. With 3.5 Flash-Lite's much lower
+  // uncached input price, its fixed storage only breaks even at high chat volume.
+  "orizin-ori-chat-static-v4-gemini-3.5-flash",
 ];
 
 /** @type {Map<string, { name: string, expireTime?: string }>} */
@@ -33,8 +36,15 @@ function envInt(name, dflt) {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
+function boundedEnvInt(name, dflt, min, max) {
+  return Math.min(max, Math.max(min, envInt(name, dflt)));
+}
+
 export function chatContextCacheEnabled() {
-  return process.env.GEMINI_CONTEXT_CACHE_ENABLED !== "false";
+  // The old GEMINI_CONTEXT_CACHE_ENABLED flag defaulted on and may still be
+  // present as "true" in Railway. Require this new explicit opt-in so deploying
+  // the cost-control release cannot silently keep extending paid storage.
+  return process.env.GEMINI_CONTEXT_CACHE_OPT_IN === "true";
 }
 
 /** QA/dev stay storage-free unless explicitly opted in. */
@@ -73,13 +83,17 @@ export function chatCacheViews() {
 }
 
 export function chatMaxOutputTokens(view = "screener") {
-  if (view === "deep-research") return envInt("ORI_CHAT_MAX_OUTPUT_DR", 3000);
-  if (view === "portfolio-goals") return envInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 2000);
-  return envInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 2000);
+  if (view === "deep-research") return boundedEnvInt("ORI_CHAT_MAX_OUTPUT_DR", 3000, 256, 4000);
+  if (view === "portfolio-goals") return boundedEnvInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 2000, 256, 3000);
+  return boundedEnvInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 2000, 256, 3000);
 }
 
 export function fmpPlanningMaxOutputTokens() {
-  return envInt("ORI_FMP_PLANNING_MAX_OUTPUT", 384);
+  return boundedEnvInt("ORI_FMP_PLANNING_MAX_OUTPUT", 384, 128, 512);
+}
+
+export function chatDynamicContextMaxChars() {
+  return boundedEnvInt("ORI_CHAT_DYNAMIC_CONTEXT_MAX_CHARS", 40_000, 10_000, 80_000);
 }
 
 function cacheDisplayName(model, view) {
@@ -160,9 +174,35 @@ function matchingCaches(caches, model, view) {
     .sort((a, b) => Date.parse(b.expireTime || 0) - Date.parse(a.expireTime || 0));
 }
 
-function isKnownLegacyCache(cache) {
+function activeCacheDisplayNames() {
+  if (!chatContextCacheEnabled()) return new Set();
+  return new Set(
+    chatCacheModels().flatMap((model) =>
+      chatCacheViews().map((view) => cacheDisplayName(model, view))),
+  );
+}
+
+function isKnownRetiredCache(cache) {
   const displayName = String(cache?.displayName || "");
-  return LEGACY_CACHE_PREFIXES.some((prefix) => displayName.startsWith(prefix));
+  if (activeCacheDisplayNames().has(displayName)) return false;
+  return RETIRED_CACHE_PREFIXES.some((prefix) => displayName.startsWith(prefix));
+}
+
+/** Delete only allowlisted Orizin cache generations; never another app's cache. */
+export async function cleanupRetiredChatContextCaches() {
+  if (!chatContextCacheEnvironmentEnabled()) return;
+  const keys = geminiKeys();
+  if (!keys.length) return;
+  const apiKey = keys[0];
+  const existing = await listChatCaches(apiKey);
+  for (const retired of existing.filter(isKnownRetiredCache)) {
+    try {
+      await deleteChatCache(apiKey, retired);
+      console.log(`[geminiCache] removed retired cache ${retired.displayName}`);
+    } catch (e) {
+      console.warn(`[geminiCache] ${e.message}`);
+    }
+  }
 }
 
 /**
@@ -188,7 +228,7 @@ export async function ensureChatContextCaches({ cleanupLegacy = false } = {}) {
     // only the known historical Orizin names so stopped containers cannot leave
     // paid storage behind until TTL expiry. Startup deliberately delays this:
     // a retiring container may still need its v3 cache during traffic handoff.
-    for (const legacy of existing.filter(isKnownLegacyCache)) {
+    for (const legacy of existing.filter(isKnownRetiredCache)) {
       try {
         await deleteChatCache(apiKey, legacy);
         console.log(`[geminiCache] removed legacy cache ${legacy.displayName}`);
@@ -231,17 +271,21 @@ export async function ensureChatContextCaches({ cleanupLegacy = false } = {}) {
 
 /** Refresh caches before TTL expiry so chat never falls back mid-session. */
 export function startChatContextCacheRefresh() {
-  if (!chatContextCacheEnabled() || !chatContextCacheEnvironmentEnabled()) return;
-  const ttlSec = cacheTtlSeconds();
-  const refreshMs = Math.max(5 * 60_000, Math.floor(ttlSec * 0.8) * 1000);
+  if (!chatContextCacheEnvironmentEnabled()) return;
   // Recheck after the normal Railway rolling-deploy overlap. An old container
   // can create its legacy caches after the new container's startup cleanup but
   // before traffic is fully switched and the old process is terminated.
   setTimeout(() => {
-    ensureChatContextCaches({ cleanupLegacy: true }).catch((e) => {
+    const cleanup = chatContextCacheEnabled()
+      ? ensureChatContextCaches({ cleanupLegacy: true })
+      : cleanupRetiredChatContextCaches();
+    cleanup.catch((e) => {
       console.warn("[geminiCache] post-deploy cleanup failed:", e.message);
     });
   }, 10 * 60_000).unref?.();
+  if (!chatContextCacheEnabled()) return;
+  const ttlSec = cacheTtlSeconds();
+  const refreshMs = Math.max(5 * 60_000, Math.floor(ttlSec * 0.8) * 1000);
   setInterval(() => {
     ensureChatContextCaches({ cleanupLegacy: true }).catch((e) => {
       console.warn("[geminiCache] refresh failed:", e.message);
@@ -253,7 +297,7 @@ export function startChatContextCacheRefresh() {
  * Cheap, isolated FMP routing request. It intentionally excludes Ori's large
  * static prompt, user history, and screen context. Its only job is to select one
  * bounded live-data call; the final user-facing answer is generated separately
- * through the normal cached chat body.
+ * through the normal chat body.
  */
 export function buildFmpPlanningGeminiBody(
   model,
@@ -327,11 +371,15 @@ export function buildChatGeminiBody(
   functionDeclarations = [],
 ) {
   const generationConfig = { maxOutputTokens: chatMaxOutputTokens(view) };
-  // Cap reasoning on the chat tier (default low) so thinking tokens don't dominate
+  // Cap reasoning on the chat tier (default minimal) so thinking tokens don't dominate
   // the per-turn output bill. Applies to both the cached and fallback bodies below.
   const tc = thinkingConfigFor(model, chatThinkingLevel());
   if (tc) Object.assign(generationConfig, tc);
   const staticText = oriStaticForView(view);
+  // Context is normally much smaller, but it originates in the browser request.
+  // Bound it here (the final request builder) so a malformed client payload or
+  // oversized config cannot turn one cheap chat request into a huge input bill.
+  const boundedDynamicContext = String(dynamicContext || "").slice(0, chatDynamicContextMaxChars());
   const cacheName = getChatContextCacheName(model, view);
   const hasFunctionDeclarations = Array.isArray(functionDeclarations)
     && functionDeclarations.length > 0;
@@ -344,14 +392,14 @@ export function buildChatGeminiBody(
   if (cacheName && !hasFunctionDeclarations) {
     return {
       cachedContent: cacheName,
-      contents: contentsWithDynamicContext(dynamicContext, geminiContents),
+      contents: contentsWithDynamicContext(boundedDynamicContext, geminiContents),
       generationConfig,
       ...toolFields,
     };
   }
   return {
     system_instruction: {
-      parts: [{ text: staticText }, { text: dynamicContext }],
+      parts: [{ text: staticText }, { text: boundedDynamicContext }],
     },
     contents: geminiContents,
     generationConfig,

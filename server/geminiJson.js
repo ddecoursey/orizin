@@ -6,14 +6,34 @@
 // Errors carry a `code` so callers can map them to friendly HTTP responses.
 
 // ── Model tiers (env-overridable so we can re-point without a deploy) ─────────
-//   frontier — top-quality, used VERY sparingly (Deep Research Game Plan only,
-//              and only once per stock per week thanks to the per-symbol cache).
-//   value    — the workhorse for chat + everything else.
-//   lite     — cheap, high-throughput backup for both.
+//   frontier — best cost/quality for Deep Research (one 3.6 Flash generation per
+//              stock per week thanks to the per-symbol cache).
+//   value    — the interactive chat workhorse (3.5 Flash-Lite).
+//   lite     — cheapest reliable structured model (3.1 Flash-Lite).
 // The ladder tries these in order, per key, falling through on "too busy".
-export const frontierModel = () => process.env.GEMINI_FRONTIER_MODEL || "gemini-3.1-pro-preview";
-export const valueModel = () => process.env.GEMINI_VALUE_MODEL || "gemini-3.5-flash";
-export const liteModel = () => process.env.GEMINI_LITE_MODEL || "gemini-3.1-flash-lite";
+//
+// Former Orizin defaults are redirected even if a stale Railway variable still
+// contains them. A different, deliberate custom model id remains supported.
+function configuredModel(envName, selected, retiredDefaults = []) {
+  const configured = String(process.env[envName] || "").trim();
+  return !configured || retiredDefaults.includes(configured) ? selected : configured;
+}
+
+export const frontierModel = () => configuredModel(
+  "GEMINI_FRONTIER_MODEL",
+  "gemini-3.6-flash",
+  ["gemini-3.1-pro-preview", "gemini-2.5-pro"],
+);
+export const valueModel = () => configuredModel(
+  "GEMINI_VALUE_MODEL",
+  "gemini-3.5-flash-lite",
+  ["gemini-3.5-flash", "gemini-2.5-flash"],
+);
+export const liteModel = () => configuredModel(
+  "GEMINI_LITE_MODEL",
+  "gemini-3.1-flash-lite",
+  ["gemini-2.5-flash-lite"],
+);
 
 // True only on a real production deploy. Explicit deployment labels must win
 // over NODE_ENV: Railway QA/staging also runs optimized Node builds with
@@ -265,7 +285,19 @@ export async function geminiGenerateJson({
 }
 
 function bodyForModel(baseBody, model, { system, cachedContent, getCachedContent, thinkingLevel }) {
-  const body = { ...baseBody, contents: baseBody.contents.map((c) => ({ ...c, parts: c.parts.map((p) => ({ ...p })) })) };
+  const generationConfig = { ...baseBody.generationConfig };
+  // Gemini 3.5/3.6 no longer accept the legacy sampling knobs. Keep them for
+  // older/custom models, but strip them from the current 3.5/3.6 request shape.
+  if (/^gemini-3\.(5|6)-/.test(model)) {
+    delete generationConfig.temperature;
+    delete generationConfig.topP;
+    delete generationConfig.topK;
+  }
+  const body = {
+    ...baseBody,
+    generationConfig,
+    contents: baseBody.contents.map((c) => ({ ...c, parts: c.parts.map((p) => ({ ...p })) })),
+  };
   const cacheName = getCachedContent?.(model) || cachedContent || null;
   if (cacheName) {
     body.cachedContent = cacheName;
@@ -275,7 +307,7 @@ function bodyForModel(baseBody, model, { system, cachedContent, getCachedContent
   // Per-model thinking control (3.x level / 2.5 budget). Fresh generationConfig
   // only when it applies, so the shared baseBody.generationConfig is never mutated.
   const tc = thinkingConfigFor(model, thinkingLevel);
-  if (tc) body.generationConfig = { ...baseBody.generationConfig, ...tc };
+  if (tc) body.generationConfig = { ...generationConfig, ...tc };
   return body;
 }
 

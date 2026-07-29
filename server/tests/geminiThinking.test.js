@@ -8,18 +8,27 @@ import {
   geminiGenerateJson,
   isProductionEnv,
   backgroundLiteIntangiblesEnabled,
+  frontierModel,
+  valueModel,
+  liteModel,
 } from "../geminiJson.js";
 import { chatModelsForRequest } from "../routes/chat.js";
 
 // Drive geminiGenerateJson with a stubbed fetch and return the captured outgoing
 // request body, so we can assert what the structured (Game Plan / trickle) path
 // actually sends to Gemini.
-async function captureStructuredBody({ thinkingLevel }) {
+async function captureStructuredBody({
+  thinkingLevel,
+  model = "gemini-3.5-flash-lite",
+  temperature = 0.45,
+}) {
   const prevKey = process.env.GEMINI_API_KEY;
   const prevBackup = process.env.GEMINI_API_KEY_BACKUP;
+  const prevAllowPaid = process.env.GEMINI_ALLOW_PAID_NONPROD;
   const realFetch = global.fetch;
   process.env.GEMINI_API_KEY = "test-key";
   delete process.env.GEMINI_API_KEY_BACKUP; // single combo → single capture
+  process.env.GEMINI_ALLOW_PAID_NONPROD = "1";
   let captured = null;
   global.fetch = async (_url, opts) => {
     captured = JSON.parse(opts.body);
@@ -38,7 +47,8 @@ async function captureStructuredBody({ thinkingLevel }) {
       schema: { type: "OBJECT", properties: { ok: { type: "BOOLEAN" } } },
       maxOutputTokens: 900,
       thinkingLevel,
-      models: ["gemini-3.5-flash"],
+      temperature,
+      models: [model],
     });
     return { captured, res };
   } finally {
@@ -46,6 +56,8 @@ async function captureStructuredBody({ thinkingLevel }) {
     if (prevKey == null) delete process.env.GEMINI_API_KEY;
     else process.env.GEMINI_API_KEY = prevKey;
     if (prevBackup != null) process.env.GEMINI_API_KEY_BACKUP = prevBackup;
+    if (prevAllowPaid == null) delete process.env.GEMINI_ALLOW_PAID_NONPROD;
+    else process.env.GEMINI_ALLOW_PAID_NONPROD = prevAllowPaid;
   }
 }
 
@@ -85,6 +97,25 @@ test("geminiGenerateJson injects thinkingConfig into the structured request body
   assert.equal(captured.systemInstruction.parts[0].text, "sys");
 });
 
+test("current 3.5/3.6 models omit deprecated sampling controls", async () => {
+  for (const model of ["gemini-3.5-flash-lite", "gemini-3.6-flash"]) {
+    const { captured } = await captureStructuredBody({
+      model,
+      thinkingLevel: "minimal",
+      temperature: 0.2,
+    });
+    assert.equal(captured.generationConfig.temperature, undefined);
+    assert.equal(captured.generationConfig.topP, undefined);
+    assert.equal(captured.generationConfig.topK, undefined);
+  }
+  const { captured: older } = await captureStructuredBody({
+    model: "gemini-3.1-flash-lite",
+    thinkingLevel: "minimal",
+    temperature: 0.2,
+  });
+  assert.equal(older.generationConfig.temperature, 0.2);
+});
+
 test("geminiGenerateJson sends no thinkingConfig for the 'default' sentinel", async () => {
   const { captured } = await captureStructuredBody({ thinkingLevel: "default" });
   assert.equal(captured.generationConfig.thinkingConfig, undefined);
@@ -108,6 +139,29 @@ test("per-journey level getters default minimal / medium / minimal and honor env
     assert.equal(liteThinkingLevel(), "default");
   } finally {
     keys.forEach((k) => (prev[k] == null ? delete process.env[k] : (process.env[k] = prev[k])));
+  }
+});
+
+test("cost-optimized model defaults replace stale former-default environment values", () => {
+  const keys = ["GEMINI_FRONTIER_MODEL", "GEMINI_VALUE_MODEL", "GEMINI_LITE_MODEL"];
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    keys.forEach((key) => delete process.env[key]);
+    assert.equal(frontierModel(), "gemini-3.6-flash");
+    assert.equal(valueModel(), "gemini-3.5-flash-lite");
+    assert.equal(liteModel(), "gemini-3.1-flash-lite");
+
+    process.env.GEMINI_FRONTIER_MODEL = "gemini-3.1-pro-preview";
+    process.env.GEMINI_VALUE_MODEL = "gemini-3.5-flash";
+    process.env.GEMINI_LITE_MODEL = "gemini-2.5-flash-lite";
+    assert.equal(frontierModel(), "gemini-3.6-flash");
+    assert.equal(valueModel(), "gemini-3.5-flash-lite");
+    assert.equal(liteModel(), "gemini-3.1-flash-lite");
+
+    process.env.GEMINI_VALUE_MODEL = "custom-gemini-model";
+    assert.equal(valueModel(), "custom-gemini-model");
+  } finally {
+    keys.forEach((key) => (prev[key] == null ? delete process.env[key] : (process.env[key] = prev[key])));
   }
 });
 
@@ -171,11 +225,11 @@ test("malformed structured output exposes its already-billable generation", asyn
         system: "system",
         prompt: "prompt",
         schema: { type: "OBJECT" },
-        models: ["gemini-3.5-flash"],
+        models: ["gemini-3.5-flash-lite"],
       }),
       (error) => {
         assert.equal(error.code, "bad_json");
-        assert.equal(error.billableGeneration.model, "gemini-3.5-flash");
+        assert.equal(error.billableGeneration.model, "gemini-3.5-flash-lite");
         assert.equal(error.billableGeneration.usage.promptTokenCount, 20);
         assert.equal(error.billableGeneration.fallback.outputText, '{"broken":');
         return true;

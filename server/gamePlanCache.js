@@ -1,4 +1,4 @@
-/** Shared Ori Game Plan cache helpers (frontier Pro vs flash-lite). */
+/** Shared Ori Game Plan cache helpers (frontier Deep Research vs flash-lite). */
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -40,13 +40,15 @@ function envInt(name, defaultValue) {
  * tight, thinking eats the budget, the JSON truncates (finishReason MAX_TOKENS),
  * and geminiJson's runLadder throws bad_json — a HARD, already-billed failure,
  * since malformed JSON does not fail over to the next model. Default 4000 (≈2× the
- * old 2000) leaves comfortable headroom; tune via GAME_PLAN_MAX_OUTPUT.
+ * old 2000) leaves comfortable headroom. Clamp configuration to 4000–6000:
+ * lower values risk an already-billed truncation, while a runaway upper value
+ * weakens the cost ceiling.
  */
 export function gamePlanMaxOutputTokens() {
-  return envInt("GAME_PLAN_MAX_OUTPUT", 4000);
+  return Math.min(6000, Math.max(4000, envInt("GAME_PLAN_MAX_OUTPUT", 4000)));
 }
 
-/** Pro/frontier Deep Research Game Plan (gemini-3.1-pro) — default 1 week. */
+/** Frontier Deep Research Game Plan (Gemini 3.6 Flash) — default 1 week. */
 export function gamePlanFrontierTtlMs() {
   return envDays("GAME_PLAN_FRONTIER_TTL_DAYS", 7) * DAY_MS;
 }
@@ -108,10 +110,10 @@ export function readFreshDetail(key, ttlMs, { detailCache, kvGet, promote }) {
   return null;
 }
 
-// Tier-aware freshness. A real frontier (Pro) take is authoritative for the full
+// Tier-aware freshness. A real frontier take is authoritative for the full
 // frontier TTL (~7d). A SUB-frontier take only lands under this key because the
 // frontier model was busy at first-open; pinning it for a week would serve a
-// degraded "Pro" review (and feed the shared screener intangibles) the whole time
+// degraded review (and feed the shared screener intangibles) the whole time
 // with no upgrade path. So treat a non-frontier entry as fresh for just the lite
 // window (~24h) — the next open then re-attempts frontier and it self-heals. An
 // explicit ttlMs (callers/tests) overrides and keeps the old single-TTL behavior.
@@ -120,14 +122,14 @@ export function readFreshFrontierGamePlan(symbol, deps, ttlMs) {
   if (ttlMs != null) return readFreshDetail(key, ttlMs, deps);
   const data = readFreshDetail(key, gamePlanFrontierTtlMs(), deps);
   if (!data) return null;
-  if (isFrontierGamePlan(data)) return data; // real Pro take — fresh for the full ~7d
+  if (isFrontierGamePlan(data)) return data; // real frontier take — fresh for the full ~7d
   // Sub-frontier (value/lite) take: only honor it for the lite window so frontier
   // gets re-attempted soon instead of being pinned for the whole frontier TTL.
   return readFreshDetail(key, gamePlanLiteTtlMs(), deps);
 }
 
 // Default lite TTL stays the SHORT window (24h): resolveCachedGamePlan uses this to
-// decide DR's lite fallback, and a stale lite there must NOT block frontier (Pro)
+// decide DR's lite fallback, and a stale lite there must NOT block frontier
 // generation — otherwise Deep Research would keep serving the cheap trickle take.
 // SCREENER serving (db.getAllStocks, the intangibles GET) passes the long
 // screenerLiteTtlMs explicitly so trickled names stay covered for weeks.
@@ -145,7 +147,7 @@ export function readFreshLiteGamePlan(symbol, deps, ttlMs = gamePlanLiteTtlMs())
 }
 
 /**
- * Normal DR load: frontier Pro first, lite placeholder only when Pro missing.
+ * Normal DR load: frontier first, lite placeholder only when frontier is missing.
  * Explicit refresh=lite is handled separately and never clobbers frontier.
  */
 /** True when a kv_cache `updated_at` is still inside the entry TTL. */
@@ -160,7 +162,7 @@ export function isFreshGamePlanCacheEntry(ori, cachedAt, now = Date.now()) {
   return isFreshDetailCache(cachedAt, ttlMs, now);
 }
 
-/** False when a fresh frontier Pro cache makes lite generation wasteful. */
+/** False when a fresh frontier cache makes lite generation wasteful. */
 export function shouldRunLiteIntangiblesGeneration(symbol, deps, { force = false } = {}) {
   if (force) return true;
   return !readFreshFrontierGamePlan(symbol, deps);

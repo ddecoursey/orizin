@@ -143,8 +143,8 @@ Chat with Ori using different analysis modes:
 
 Ori discovers FMP's hosted MCP tools when `FMP_API_KEY` is set, but offers a
 curated Starter-safe subset only for questions with explicit live-data intent.
-A bounded Flash-Lite planner may select one cached, row-limited FMP result; the
-user-facing answer then returns to Ori's normal cached Gemini path. Calls share
+A bounded Gemini 3.1 Flash-Lite planner may select one cached, row-limited FMP
+result; the user-facing answer then returns through Gemini 3.5 Flash-Lite. Calls share
 the app's `FMP_MAX_RPM` budget. Set `FMP_MCP_ENABLED=false` to disable live tool
 use without affecting the rest of FMP-backed stock data.
 
@@ -154,11 +154,17 @@ budgeting for the hourly large-cap scoring sweep. QA/staging deployment labels
 override `NODE_ENV=production`, so they stay Lite-only and do not create paid
 context caches or run autonomous Gemini jobs.
 
+The cost-optimized model routing is Gemini 3.1 Flash-Lite for trickle/FMP
+planning, Gemini 3.5 Flash-Lite for interactive chat, and Gemini 3.6 Flash at
+medium thinking for weekly cached Deep Research. Explicit Gemini chat context
+caching is off by default because its fixed storage cost does not break even at
+normal traffic; enabling it requires `GEMINI_CONTEXT_CACHE_OPT_IN=true`.
+
 ## Release identification
 
 The account menu's **About Orizin** section shows the semantic app version and
 the first eight characters of the deployed source commit (for example,
-`v0.1.0 · 53a32bb`). Bump `package.json` with `npm version patch --no-git-tag-version`
+`v0.1.1 · 53a32bb`). Bump `package.json` with `npm version patch --no-git-tag-version`
 for a planned release; every deployment remains uniquely identifiable by its
 commit even when the semantic version is unchanged.
 

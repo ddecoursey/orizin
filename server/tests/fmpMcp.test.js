@@ -24,6 +24,16 @@ test("FMP MCP routing offers no tools without explicit live-data intent", () => 
   assert.deepEqual(selectFmpFamilies("Help me understand my goals", "portfolio-goals"), []);
 });
 
+test("FMP planning tool schemas retain a hard upper bound", () => {
+  const manyIntents = [
+    "current quote price chart history",
+    "analyst target earnings calendar dividend",
+    "company executives DCF GDP rates ETF holdings",
+    "insider trades market hours news SEC filing revenue statement",
+  ].join(" ");
+  assert.equal(selectFmpFamilies(manyIntents, "deep-research", 999).length, 6);
+});
+
 test("sanitizeFmpArguments enforces Starter-safe endpoint, symbols, and row limits", () => {
   const schema = {
     properties: {

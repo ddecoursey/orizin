@@ -884,9 +884,9 @@ server = app.listen(PORT, '0.0.0.0', () => {
   );
   console.log(`Environment: ${APP_ENV}${process.env.PAYPAL_ENV ? ` (PayPal: ${process.env.PAYPAL_ENV})` : ''}`);
 
-  // Bootstrap the server-wide Gemini context cache for Ori chat's static system
-  // prompt. (The Game Plan system prompt is ~500 tokens — far below Gemini's
-  // context-cache minimum — so it is sent inline, not cached.)
+  // Explicit chat caching is opt-in because 3.5 Flash-Lite's low input price
+  // rarely repays fixed cache storage. The refresh helper still runs its delayed,
+  // allowlisted cleanup so caches from retired deployments stop billing.
   if (chatSet) {
     ensureChatContextCaches()
       .catch((e) => console.warn('[geminiCache] chat boot failed:', e.message))
@@ -935,7 +935,7 @@ server = app.listen(PORT, '0.0.0.0', () => {
   // have one — working down from the biggest above the $10B floor
   // (SCREENER_INTANGIBLES_MIN_MCAP, stocks only, no ETFs). It is CACHE-AWARE: a name
   // is skipped while it holds a lite review inside the long screener TTL (≈30d) or a
-  // fresh frontier Pro cache, so the job advances to the next uncovered name, covers
+  // fresh frontier cache, so the job advances to the next uncovered name, covers
   // the bounded large-cap set, then idles — only re-spending as ≈30d reviews age
   // out. NO bursting: the calls run one at a time through the cap-1 lite lane (never
   // starves chat/DR), and geminiGenerateJson backs off rather than hammering on a

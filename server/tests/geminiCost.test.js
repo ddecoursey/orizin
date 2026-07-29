@@ -7,6 +7,7 @@ import {
   tokensFromUsage,
   costBreakdownFromTotals,
   microsToUsd,
+  pricingForModel,
 } from '../geminiTokens.js';
 import { valueModel, frontierModel } from '../geminiJson.js';
 
@@ -75,6 +76,24 @@ test('frontier plan tokens cost more than flash chat tokens at same volume', () 
   const flash = estimateCostUsd(valueModel(), tokens).totalUsd;
   const frontier = estimateCostUsd(frontierModel(), tokens).totalUsd;
   assert.ok(frontier > flash);
+});
+
+test('selected models use current standard token prices', () => {
+  assert.deepEqual(pricingForModel('gemini-3.1-flash-lite'), {
+    inputPer1M: 0.25,
+    cachedPer1M: 0.025,
+    outputPer1M: 1.5,
+  });
+  assert.deepEqual(pricingForModel('gemini-3.5-flash-lite'), {
+    inputPer1M: 0.3,
+    cachedPer1M: 0.03,
+    outputPer1M: 2.5,
+  });
+  assert.deepEqual(pricingForModel('gemini-3.6-flash'), {
+    inputPer1M: 1.5,
+    cachedPer1M: 0.15,
+    outputPer1M: 7.5,
+  });
 });
 
 test('costBreakdownFromTotals uses stored micros when present', () => {

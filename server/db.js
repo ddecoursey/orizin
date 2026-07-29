@@ -743,7 +743,7 @@ export function getAllStocks() {
 // excluded) that still need a lite intangibles review: NEVER-scored names first so
 // coverage works down the cap ladder before anything is refreshed, then the stalest.
 // A name counts as "covered" (and is skipped) while it has a lite review inside the
-// long screener TTL OR a fresh frontier Pro review (frontier TTL is longer than
+// long screener TTL OR a fresh frontier review (frontier TTL is longer than
 // lite). So as each stock gets its score it drops out of the backlog and the trickle
 // advances to the next-biggest uncovered name — covering the large/mid-cap set, then
 // idling until reviews age past the screener TTL and slowly refresh. The mcap floor

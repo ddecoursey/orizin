@@ -275,6 +275,11 @@ test('gamePlanMaxOutputTokens defaults to 4000 and honors GAME_PLAN_MAX_OUTPUT',
     process.env.GAME_PLAN_MAX_OUTPUT = '6000';
     assert.equal(gamePlanMaxOutputTokens(), 6000);
 
+    process.env.GAME_PLAN_MAX_OUTPUT = '2000';
+    assert.equal(gamePlanMaxOutputTokens(), 4000);
+    process.env.GAME_PLAN_MAX_OUTPUT = '9000';
+    assert.equal(gamePlanMaxOutputTokens(), 6000);
+
     // Garbage / non-positive falls back to the default rather than truncating to 0.
     process.env.GAME_PLAN_MAX_OUTPUT = 'nope';
     assert.equal(gamePlanMaxOutputTokens(), 4000);

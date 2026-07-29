@@ -503,10 +503,13 @@ export function selectFmpFamilies(message, _view = "screener", maxTools = envInt
     && selected.every((family) => ["economics", "marketHours", "indexes", "crypto", "forex", "commodity"].includes(family));
   if (matched && !nonEquityOnly) addUnique(selected, ["quote"]);
   // No lexical live-data intent means no tools. The on-screen Orizin context is
-  // already rich enough for general analysis, and omitting declarations keeps
-  // ordinary chat on Gemini's cached-input path.
+  // already rich enough for general analysis, and omitting declarations avoids
+  // a separate planning generation for ordinary chat.
   if (!matched) return [];
-  return selected.slice(0, Math.max(1, maxTools));
+  // A stale/mistyped env value must not attach the full remote catalog: schemas
+  // are input tokens on the planning generation. Six is an absolute ceiling;
+  // normal routing remains four.
+  return selected.slice(0, Math.min(6, Math.max(1, maxTools)));
 }
 
 function supportedSchema(node) {

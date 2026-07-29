@@ -5,7 +5,9 @@ import {
   clipMessageContent,
   toGeminiContents,
   historyContextNote,
+  chatHistoryMaxMessages,
   chatHistoryMaxMessagesForView,
+  chatHistoryMsgChars,
 } from "../chatHistory.js";
 
 test("truncateChatHistory keeps full history when under the cap", () => {
@@ -65,4 +67,22 @@ test("chatHistoryMaxMessagesForView uses shorter cap for deep-research", () => {
   assert.equal(chatHistoryMaxMessagesForView("deep-research"), 10);
   assert.equal(chatHistoryMaxMessagesForView("screener"), chatHistoryMaxMessagesForView());
   if (prev != null) process.env.ORI_CHAT_HISTORY_MAX_DR = prev;
+});
+
+test("history environment overrides cannot remove cost ceilings", () => {
+  const keys = ["ORI_CHAT_HISTORY_MAX", "ORI_CHAT_HISTORY_MAX_DR", "ORI_CHAT_HISTORY_MSG_CHARS"];
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    process.env.ORI_CHAT_HISTORY_MAX = "9999";
+    process.env.ORI_CHAT_HISTORY_MAX_DR = "9999";
+    process.env.ORI_CHAT_HISTORY_MSG_CHARS = "999999";
+    assert.equal(chatHistoryMaxMessages(), 24);
+    assert.equal(chatHistoryMaxMessagesForView("deep-research"), 16);
+    assert.equal(chatHistoryMsgChars(), 8000);
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

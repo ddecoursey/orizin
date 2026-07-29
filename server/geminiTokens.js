@@ -7,6 +7,21 @@ import { frontierModel, liteModel, valueModel } from "./geminiJson.js";
 const COUNT_URL = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:countTokens`;
 
+const STANDARD_PRICING = {
+  "gemini-3.1-flash-lite": { inputPer1M: 0.25, cachedPer1M: 0.025, outputPer1M: 1.5 },
+  "gemini-3.5-flash-lite": { inputPer1M: 0.3, cachedPer1M: 0.03, outputPer1M: 2.5 },
+  "gemini-3.5-flash": { inputPer1M: 1.5, cachedPer1M: 0.15, outputPer1M: 9 },
+  "gemini-3.6-flash": { inputPer1M: 1.5, cachedPer1M: 0.15, outputPer1M: 7.5 },
+  "gemini-3.1-pro-preview": { inputPer1M: 2, cachedPer1M: 0.2, outputPer1M: 12 },
+  "gemini-2.5-flash-lite": { inputPer1M: 0.1, cachedPer1M: 0.01, outputPer1M: 0.4 },
+  "gemini-2.5-flash": { inputPer1M: 0.3, cachedPer1M: 0.03, outputPer1M: 2.5 },
+  "gemini-2.5-pro": { inputPer1M: 1.25, cachedPer1M: 0.125, outputPer1M: 10 },
+};
+
+function standardPricing(model, fallback) {
+  return STANDARD_PRICING[model] || fallback;
+}
+
 /** Paid-tier USD per 1M tokens (Gemini API standard pricing). Env-overridable. */
 export function geminiPricingTable() {
   const n = (key, dflt) => {
@@ -17,21 +32,24 @@ export function geminiPricingTable() {
   const value = valueModel();
   const lite = liteModel();
   const frontier = frontierModel();
+  const valueDefault = standardPricing(value, STANDARD_PRICING["gemini-3.5-flash-lite"]);
+  const liteDefault = standardPricing(lite, STANDARD_PRICING["gemini-3.1-flash-lite"]);
+  const frontierDefault = standardPricing(frontier, STANDARD_PRICING["gemini-3.6-flash"]);
   return {
     [value]: row(
-      n("GEMINI_VALUE_INPUT_PER_1M", 1.5),
-      n("GEMINI_VALUE_CACHED_PER_1M", 0.15),
-      n("GEMINI_VALUE_OUTPUT_PER_1M", 9),
+      n("GEMINI_VALUE_INPUT_PER_1M", valueDefault.inputPer1M),
+      n("GEMINI_VALUE_CACHED_PER_1M", valueDefault.cachedPer1M),
+      n("GEMINI_VALUE_OUTPUT_PER_1M", valueDefault.outputPer1M),
     ),
     [lite]: row(
-      n("GEMINI_LITE_INPUT_PER_1M", 0.25),
-      n("GEMINI_LITE_CACHED_PER_1M", 0.025),
-      n("GEMINI_LITE_OUTPUT_PER_1M", 1.5),
+      n("GEMINI_LITE_INPUT_PER_1M", liteDefault.inputPer1M),
+      n("GEMINI_LITE_CACHED_PER_1M", liteDefault.cachedPer1M),
+      n("GEMINI_LITE_OUTPUT_PER_1M", liteDefault.outputPer1M),
     ),
     [frontier]: row(
-      n("GEMINI_FRONTIER_INPUT_PER_1M", 2),
-      n("GEMINI_FRONTIER_CACHED_PER_1M", 0.2),
-      n("GEMINI_FRONTIER_OUTPUT_PER_1M", 12),
+      n("GEMINI_FRONTIER_INPUT_PER_1M", frontierDefault.inputPer1M),
+      n("GEMINI_FRONTIER_CACHED_PER_1M", frontierDefault.cachedPer1M),
+      n("GEMINI_FRONTIER_OUTPUT_PER_1M", frontierDefault.outputPer1M),
     ),
   };
 }
@@ -39,6 +57,7 @@ export function geminiPricingTable() {
 export function pricingForModel(model) {
   const table = geminiPricingTable();
   if (table[model]) return table[model];
+  if (STANDARD_PRICING[model]) return STANDARD_PRICING[model];
   if (model?.includes("flash-lite")) return table[liteModel()];
   if (model?.includes("pro")) return table[frontierModel()];
   return table[valueModel()];
