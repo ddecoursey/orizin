@@ -2,11 +2,19 @@
 // model + view holds the byte-stable Ori static block so per-request dynamic
 // context is billed at the cached-input rate for that prefix.
 
-import { geminiKeys, valueModel, liteModel, thinkingConfigFor, chatThinkingLevel } from "./geminiJson.js";
+import {
+  geminiKeys,
+  valueModel,
+  liteModel,
+  thinkingConfigFor,
+  chatThinkingLevel,
+  liteThinkingLevel,
+  isProductionEnv,
+} from "./geminiJson.js";
 import { oriStaticForView } from "./oriSystemStatic.js";
 
 const CACHE_URL = "https://generativelanguage.googleapis.com/v1beta/cachedContents";
-const CACHE_DISPLAY = "orizin-ori-chat-static-v3";
+const CACHE_DISPLAY = "orizin-ori-chat-static-v4";
 
 /** @type {Map<string, { name: string, expireTime?: string }>} */
 const chatCachesByModel = new Map();
@@ -18,6 +26,11 @@ function envInt(name, dflt) {
 
 export function chatContextCacheEnabled() {
   return process.env.GEMINI_CONTEXT_CACHE_ENABLED !== "false";
+}
+
+/** QA/dev stay storage-free unless explicitly opted in. */
+export function chatContextCacheEnvironmentEnabled() {
+  return isProductionEnv() || process.env.GEMINI_CONTEXT_CACHE_NONPROD_ENABLED === "true";
 }
 
 export function cacheTtlSeconds() {
@@ -36,14 +49,32 @@ export function getChatContextCacheName(model, view = "screener") {
   return chatCachesByModel.get(cacheKey(model, view))?.name || null;
 }
 
-function chatModels() {
-  return [valueModel(), liteModel()];
+export function chatCacheModels() {
+  return process.env.GEMINI_CONTEXT_CACHE_LITE_ENABLED === "true"
+    ? [valueModel(), liteModel()]
+    : [valueModel()];
+}
+
+export function chatCacheViews() {
+  const configured = String(process.env.GEMINI_CONTEXT_CACHE_VIEWS || "screener")
+    .split(",")
+    .map((view) => view.trim())
+    .filter((view) => ["screener", "deep-research"].includes(view));
+  return configured.length ? [...new Set(configured)] : ["screener"];
 }
 
 export function chatMaxOutputTokens(view = "screener") {
-  if (view === "deep-research") return envInt("ORI_CHAT_MAX_OUTPUT_DR", 4500);
-  if (view === "portfolio-goals") return envInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 3500);
-  return envInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 3500);
+  if (view === "deep-research") return envInt("ORI_CHAT_MAX_OUTPUT_DR", 3000);
+  if (view === "portfolio-goals") return envInt("ORI_CHAT_MAX_OUTPUT_PORTFOLIO", 2000);
+  return envInt("ORI_CHAT_MAX_OUTPUT_SCREENER", 2000);
+}
+
+export function fmpPlanningMaxOutputTokens() {
+  return envInt("ORI_FMP_PLANNING_MAX_OUTPUT", 384);
+}
+
+function cacheDisplayName(model, view) {
+  return `${CACHE_DISPLAY}-${cacheKey(model, view)}`;
 }
 
 async function createChatCache(apiKey, model, view) {
@@ -54,7 +85,7 @@ async function createChatCache(apiKey, model, view) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: `models/${model}`,
-      displayName: `${CACHE_DISPLAY}-${cacheKey(model, view)}`,
+      displayName: cacheDisplayName(model, view),
       systemInstruction: {
         parts: [{ text: staticText }],
       },
@@ -68,20 +99,70 @@ async function createChatCache(apiKey, model, view) {
   return res.json();
 }
 
+async function listChatCaches(apiKey) {
+  const found = [];
+  let pageToken = "";
+  do {
+    const url = new URL(CACHE_URL);
+    url.searchParams.set("key", apiKey);
+    url.searchParams.set("pageSize", "100");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`list caches failed ${res.status}`);
+    const data = await res.json();
+    found.push(...(Array.isArray(data?.cachedContents) ? data.cachedContents : []));
+    pageToken = String(data?.nextPageToken || "");
+  } while (pageToken);
+  return found;
+}
+
+async function extendChatCache(apiKey, cache) {
+  const url = new URL(`${CACHE_URL}/${cache.name.replace(/^cachedContents\//, "")}`);
+  url.searchParams.set("key", apiKey);
+  url.searchParams.set("updateMask", "ttl");
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ttl: `${cacheTtlSeconds()}s` }),
+  });
+  if (!res.ok) throw new Error(`refresh ${cache.name} failed ${res.status}`);
+  return res.json();
+}
+
+function matchingCache(caches, model, view) {
+  const displayName = cacheDisplayName(model, view);
+  return caches
+    .filter((cache) =>
+      cache?.displayName === displayName
+      && String(cache?.model || "").replace(/^models\//, "") === model)
+    .sort((a, b) => Date.parse(b.expireTime || 0) - Date.parse(a.expireTime || 0))[0] || null;
+}
+
 /**
- * Create (or refresh) explicit context caches for each chat model × view on the primary key.
+ * Reuse and extend explicit caches instead of creating a fresh paid resource on
+ * every process start/refresh. Production caches only the value-model screener
+ * prompt by default; QA/dev and the rare lite fallback are opt-in.
  */
 export async function ensureChatContextCaches() {
-  if (!chatContextCacheEnabled()) return;
+  if (!chatContextCacheEnabled() || !chatContextCacheEnvironmentEnabled()) return;
   const keys = geminiKeys();
   if (!keys.length) return;
 
   const apiKey = keys[0];
-  const views = ["screener", "deep-research"];
-  for (const model of chatModels()) {
-    for (const view of views) {
+  let existing;
+  try {
+    existing = await listChatCaches(apiKey);
+  } catch (error) {
+    console.warn(`[geminiCache] ${error.message}; cache creation skipped to avoid duplicates`);
+    return;
+  }
+  for (const model of chatCacheModels()) {
+    for (const view of chatCacheViews()) {
       try {
-        const data = await createChatCache(apiKey, model, view);
+        const current = matchingCache(existing, model, view);
+        const data = current
+          ? await extendChatCache(apiKey, current)
+          : await createChatCache(apiKey, model, view);
         if (data?.name) {
           const key = cacheKey(model, view);
           chatCachesByModel.set(key, { name: data.name, expireTime: data.expireTime });
@@ -101,7 +182,7 @@ export async function ensureChatContextCaches() {
 
 /** Refresh caches before TTL expiry so chat never falls back mid-session. */
 export function startChatContextCacheRefresh() {
-  if (!chatContextCacheEnabled()) return;
+  if (!chatContextCacheEnabled() || !chatContextCacheEnvironmentEnabled()) return;
   const ttlSec = cacheTtlSeconds();
   const refreshMs = Math.max(5 * 60_000, Math.floor(ttlSec * 0.8) * 1000);
   setInterval(() => {
@@ -109,6 +190,41 @@ export function startChatContextCacheRefresh() {
       console.warn("[geminiCache] refresh failed:", e.message);
     });
   }, refreshMs).unref?.();
+}
+
+/**
+ * Cheap, isolated FMP routing request. It intentionally excludes Ori's large
+ * static prompt, user history, and screen context. Its only job is to select one
+ * bounded live-data call; the final user-facing answer is generated separately
+ * through the normal cached chat body.
+ */
+export function buildFmpPlanningGeminiBody(
+  model,
+  { message, view = "screener", activeSymbol = "", focusSymbols = [] } = {},
+  functionDeclarations = [],
+) {
+  const generationConfig = { maxOutputTokens: fmpPlanningMaxOutputTokens() };
+  const tc = thinkingConfigFor(model, liteThinkingLevel());
+  if (tc) Object.assign(generationConfig, tc);
+  const symbols = [...new Set(
+    [activeSymbol, ...(Array.isArray(focusSymbols) ? focusSymbols : [])]
+      .map((symbol) => String(symbol || "").trim().toUpperCase())
+      .filter(Boolean),
+  )].slice(0, 5);
+  return {
+    system_instruction: {
+      parts: [{
+        text: `You are a cost-controlled financial-data router. Choose exactly one offered FMP function that best supplies the live fact explicitly requested by the user. Never answer the user, never call multiple functions, and never request unrelated background research. Current view: ${view}. Screen symbols: ${symbols.join(", ") || "none"}.`,
+      }],
+    },
+    contents: [{
+      role: "user",
+      parts: [{ text: String(message || "").slice(0, 2000) }],
+    }],
+    generationConfig,
+    tools: [{ functionDeclarations }],
+    toolConfig: { functionCallingConfig: { mode: "ANY" } },
+  };
 }
 
 /**

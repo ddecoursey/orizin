@@ -813,7 +813,7 @@ export default function UsersModal({
                   </p>
                 )}
                 <HelperText className="text-gray-600">
-                  One request = one Ori chat reply or one Deep Research Game Plan. Browsing the screener doesn't count. Longer chats use more of your allowance, so start fresh threads when you can.
+                  One unit = one Gemini generation. Ordinary Ori chat and a new Deep Research Game Plan use one; an explicit live-data lookup uses two (a small planner plus the final answer). Browsing the screener doesn't count.
                 </HelperText>
               </>
             )}

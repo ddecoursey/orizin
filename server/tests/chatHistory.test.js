@@ -62,7 +62,7 @@ test("historyContextNote is empty when nothing dropped", () => {
 test("chatHistoryMaxMessagesForView uses shorter cap for deep-research", () => {
   const prev = process.env.ORI_CHAT_HISTORY_MAX_DR;
   delete process.env.ORI_CHAT_HISTORY_MAX_DR;
-  assert.equal(chatHistoryMaxMessagesForView("deep-research"), 12);
+  assert.equal(chatHistoryMaxMessagesForView("deep-research"), 10);
   assert.equal(chatHistoryMaxMessagesForView("screener"), chatHistoryMaxMessagesForView());
   if (prev != null) process.env.ORI_CHAT_HISTORY_MAX_DR = prev;
 });
