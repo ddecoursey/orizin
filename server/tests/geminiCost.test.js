@@ -96,6 +96,19 @@ test('selected models use current standard token prices', () => {
   });
 });
 
+test('Flex prices the selected background model at half Standard', () => {
+  assert.deepEqual(pricingForModel('gemini-3.1-flash-lite', { serviceTier: 'flex' }), {
+    inputPer1M: 0.125,
+    cachedPer1M: 0.0125,
+    outputPer1M: 0.75,
+  });
+  const tokens = { promptTokens: 10_000, cachedTokens: 0, outputTokens: 1_000 };
+  const standard = estimateCostUsd('gemini-3.1-flash-lite', tokens);
+  const flex = estimateCostUsd('gemini-3.1-flash-lite', tokens, { serviceTier: 'flex' });
+  assert.equal(flex.totalUsd, standard.totalUsd / 2);
+  assert.equal(flex.serviceTier, 'flex');
+});
+
 test('costBreakdownFromTotals uses stored micros when present', () => {
   const b = costBreakdownFromTotals({
     prompt_tokens: 100,

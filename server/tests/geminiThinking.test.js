@@ -11,6 +11,8 @@ import {
   frontierModel,
   valueModel,
   liteModel,
+  backgroundGeminiOptions,
+  backgroundTrickleSchedule,
 } from "../geminiJson.js";
 import { chatModelsForRequest } from "../routes/chat.js";
 
@@ -21,6 +23,9 @@ async function captureStructuredBody({
   thinkingLevel,
   model = "gemini-3.5-flash-lite",
   temperature = 0.45,
+  serviceTier = null,
+  requestTimeoutMs,
+  budgetMs,
 }) {
   const prevKey = process.env.GEMINI_API_KEY;
   const prevBackup = process.env.GEMINI_API_KEY_BACKUP;
@@ -30,8 +35,10 @@ async function captureStructuredBody({
   delete process.env.GEMINI_API_KEY_BACKUP; // single combo → single capture
   process.env.GEMINI_ALLOW_PAID_NONPROD = "1";
   let captured = null;
+  let capturedHeaders = null;
   global.fetch = async (_url, opts) => {
     captured = JSON.parse(opts.body);
+    capturedHeaders = opts.headers;
     return {
       ok: true,
       json: async () => ({
@@ -49,8 +56,11 @@ async function captureStructuredBody({
       thinkingLevel,
       temperature,
       models: [model],
+      serviceTier,
+      requestTimeoutMs,
+      budgetMs,
     });
-    return { captured, res };
+    return { captured, capturedHeaders, res };
   } finally {
     global.fetch = realFetch;
     if (prevKey == null) delete process.env.GEMINI_API_KEY;
@@ -120,6 +130,91 @@ test("geminiGenerateJson sends no thinkingConfig for the 'default' sentinel", as
   const { captured } = await captureStructuredBody({ thinkingLevel: "default" });
   assert.equal(captured.generationConfig.thinkingConfig, undefined);
   assert.equal(captured.generationConfig.maxOutputTokens, 900);
+});
+
+test("Flex is explicit in REST while user-facing Standard remains omitted", async () => {
+  const standard = await captureStructuredBody({ thinkingLevel: "minimal" });
+  assert.equal(standard.captured.service_tier, undefined);
+  assert.equal(standard.capturedHeaders["X-Server-Timeout"], undefined);
+
+  const flex = await captureStructuredBody({
+    model: "gemini-3.1-flash-lite",
+    thinkingLevel: "minimal",
+    serviceTier: "flex",
+    requestTimeoutMs: 600_000,
+    budgetMs: 900_000,
+  });
+  assert.equal(flex.captured.service_tier, "flex");
+  assert.equal(flex.capturedHeaders["X-Server-Timeout"], "600");
+});
+
+test("background inference defaults to bounded Flex and cannot select Priority", () => {
+  const keys = [
+    "GEMINI_BACKGROUND_SERVICE_TIER",
+    "GEMINI_FLEX_REQUEST_TIMEOUT_MS",
+    "GEMINI_FLEX_BUDGET_MS",
+    "GEMINI_FLEX_MAX_ATTEMPTS",
+  ];
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    keys.forEach((key) => delete process.env[key]);
+    assert.deepEqual(backgroundGeminiOptions(), {
+      serviceTier: "flex",
+      requestTimeoutMs: 600_000,
+      budgetMs: 900_000,
+      maxAttempts: 3,
+    });
+
+    process.env.GEMINI_BACKGROUND_SERVICE_TIER = "priority";
+    process.env.GEMINI_FLEX_REQUEST_TIMEOUT_MS = "99999999";
+    process.env.GEMINI_FLEX_BUDGET_MS = "99999999";
+    process.env.GEMINI_FLEX_MAX_ATTEMPTS = "999";
+    assert.deepEqual(backgroundGeminiOptions(), {
+      serviceTier: "flex",
+      requestTimeoutMs: 900_000,
+      budgetMs: 1_200_000,
+      maxAttempts: 3,
+    });
+
+    process.env.GEMINI_BACKGROUND_SERVICE_TIER = "standard";
+    assert.deepEqual(backgroundGeminiOptions(), {});
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("background trickle schedule has a hard hourly cost envelope", () => {
+  const keys = ["SCREENER_INTANGIBLES_TICK_MS", "SCREENER_INTANGIBLES_BATCH"];
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  try {
+    keys.forEach((key) => delete process.env[key]);
+    assert.deepEqual(backgroundTrickleSchedule(), {
+      tickMs: 3_600_000,
+      batch: 1,
+    });
+
+    process.env.SCREENER_INTANGIBLES_TICK_MS = "1";
+    process.env.SCREENER_INTANGIBLES_BATCH = "-1";
+    assert.deepEqual(backgroundTrickleSchedule(), {
+      tickMs: 3_600_000,
+      batch: 1,
+    });
+
+    process.env.SCREENER_INTANGIBLES_TICK_MS = "999999999";
+    process.env.SCREENER_INTANGIBLES_BATCH = "999";
+    assert.deepEqual(backgroundTrickleSchedule(), {
+      tickMs: 86_400_000,
+      batch: 5,
+    });
+  } finally {
+    for (const [key, value] of Object.entries(prev)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });
 
 test("per-journey level getters default minimal / medium / minimal and honor env", () => {
@@ -230,6 +325,7 @@ test("malformed structured output exposes its already-billable generation", asyn
       (error) => {
         assert.equal(error.code, "bad_json");
         assert.equal(error.billableGeneration.model, "gemini-3.5-flash-lite");
+        assert.equal(error.billableGeneration.serviceTier, "standard");
         assert.equal(error.billableGeneration.usage.promptTokenCount, 20);
         assert.equal(error.billableGeneration.fallback.outputText, '{"broken":');
         return true;

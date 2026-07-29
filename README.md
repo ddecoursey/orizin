@@ -159,6 +159,12 @@ planning, Gemini 3.5 Flash-Lite for interactive chat, and Gemini 3.6 Flash at
 medium thinking for weekly cached Deep Research. Explicit Gemini chat context
 caching is off by default because its fixed storage cost does not break even at
 normal traffic; enabling it requires `GEMINI_CONTEXT_CACHE_OPT_IN=true`.
+User-facing requests use Standard inference. If the autonomous trickle is
+enabled, it alone uses Flex inference (half-price, best-effort) with longer
+timeouts, a hard ceiling of five names per hour, and spend recorded under the
+reserved background ledger. Batch is
+reserved for a future bulk/nightly workflow; the current one-item/hour trickle
+gets the same discount from Flex without asynchronous job state.
 
 ## Release identification
 

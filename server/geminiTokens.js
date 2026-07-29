@@ -18,6 +18,14 @@ const STANDARD_PRICING = {
   "gemini-2.5-pro": { inputPer1M: 1.25, cachedPer1M: 0.125, outputPer1M: 10 },
 };
 
+const FLEX_PRICING = {
+  "gemini-3.1-flash-lite": { inputPer1M: 0.125, cachedPer1M: 0.0125, outputPer1M: 0.75 },
+  "gemini-3.5-flash-lite": { inputPer1M: 0.15, cachedPer1M: 0.02, outputPer1M: 1.25 },
+  "gemini-3.5-flash": { inputPer1M: 0.75, cachedPer1M: 0.08, outputPer1M: 4.5 },
+  "gemini-3.6-flash": { inputPer1M: 0.75, cachedPer1M: 0.075, outputPer1M: 3.75 },
+  "gemini-3.1-pro-preview": { inputPer1M: 1, cachedPer1M: 0.1, outputPer1M: 6 },
+};
+
 function standardPricing(model, fallback) {
   return STANDARD_PRICING[model] || fallback;
 }
@@ -54,7 +62,8 @@ export function geminiPricingTable() {
   };
 }
 
-export function pricingForModel(model) {
+export function pricingForModel(model, { serviceTier = "standard" } = {}) {
+  if (serviceTier === "flex" && FLEX_PRICING[model]) return FLEX_PRICING[model];
   const table = geminiPricingTable();
   if (table[model]) return table[model];
   if (STANDARD_PRICING[model]) return STANDARD_PRICING[model];
@@ -85,18 +94,19 @@ export function hasTokenCounts(tokens) {
  * Estimate USD cost from token counts and model pricing.
  * Uncached input = prompt − cached (cached subset billed at cache rate).
  */
-export function estimateCostUsd(model, tokens) {
+export function estimateCostUsd(model, tokens, { serviceTier = "standard" } = {}) {
   const t = tokens || {};
   const prompt = Math.max(0, t.promptTokens || 0);
   const cached = Math.min(prompt, Math.max(0, t.cachedTokens || 0));
   const uncached = Math.max(0, prompt - cached);
   const output = Math.max(0, t.outputTokens || 0);
-  const p = pricingForModel(model);
+  const p = pricingForModel(model, { serviceTier });
   const inputCost = (uncached / 1e6) * p.inputPer1M + (cached / 1e6) * p.cachedPer1M;
   const outputCost = (output / 1e6) * p.outputPer1M;
   const total = inputCost + outputCost;
   return {
     model: model || valueModel(),
+    serviceTier,
     promptTokens: prompt,
     cachedTokens: cached,
     uncachedTokens: uncached,

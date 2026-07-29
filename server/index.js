@@ -7,7 +7,10 @@ import { fileURLToPath } from 'url';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import stocksRouter, { getDetailCacheStats, generateLiteIntangibles } from './routes/stocks.js';
-import { backgroundLiteIntangiblesEnabled } from './geminiJson.js';
+import {
+  backgroundLiteIntangiblesEnabled,
+  backgroundTrickleSchedule,
+} from './geminiJson.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import adminRouter from './routes/admin.js';
@@ -23,7 +26,11 @@ import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichm
 import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 import { displayNameFor, emailForNotifications } from './userProfile.js';
-import { pruneOldOriUsage } from './oriUsage.js';
+import {
+  pruneOldOriUsage,
+  recordOriUsage,
+  BACKGROUND_ORI_USAGE_ID,
+} from './oriUsage.js';
 import { ensureChatContextCaches, startChatContextCacheRefresh } from './geminiContextCache.js';
 import { isDeployedRuntime, productionConfigurationErrors } from './productionConfig.js';
 import { isTrustedMutationRequest } from './requestOrigin.js';
@@ -946,15 +953,33 @@ server = app.listen(PORT, '0.0.0.0', () => {
   // background job, even when NODE_ENV=production.
   const trickleEnabled = backgroundLiteIntangiblesEnabled();
   if (trickleEnabled) {
-    const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60 * 60 * 1000; // hourly
-    const BATCH = Number(process.env.SCREENER_INTANGIBLES_BATCH) || 1; // names generated per tick
+    const { tickMs: TICK_MS, batch: BATCH } = backgroundTrickleSchedule();
     const geminiSet = process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'your_gemini_api_key_here';
     if (geminiSet) {
       setInterval(async () => {
         try {
           const backlog = db.nextIntangiblesBacklog(Date.now(), BATCH);
           for (const sym of backlog) {
-            await generateLiteIntangibles(sym, {}); // lite-only, long-cached, one at a time
+            try {
+              await generateLiteIntangibles(sym, {
+                // Background spend is never charged to a customer, but it still
+                // belongs in the global admin cost total under a reserved ledger id.
+                onUsage: (usage, model, serviceTier) => recordOriUsage(
+                  BACKGROUND_ORI_USAGE_ID,
+                  { kind: 'plan', usage, model, serviceTier },
+                ),
+              }); // Flex Lite, long-cached, one at a time
+            } catch (e) {
+              // A 2xx response with invalid JSON is still billable. The normal
+              // callback did not run, so preserve that failed generation too.
+              if (e?.billableGeneration) {
+                await recordOriUsage(BACKGROUND_ORI_USAGE_ID, {
+                  kind: 'plan',
+                  generations: [e.billableGeneration],
+                });
+              }
+              throw e;
+            }
           }
         } catch (e) {
           console.error('[intangibles] baseline trickle failed:', e.message);

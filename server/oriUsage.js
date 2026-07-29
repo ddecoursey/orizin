@@ -36,6 +36,7 @@ import {
 // request from the moment it is admitted, not only after Gemini returns, so a
 // burst cannot pass the same stale quota snapshot many times.
 const pendingOriRequests = new Map();
+export const BACKGROUND_ORI_USAGE_ID = "__orizin_background__";
 
 function pendingCount(userId) {
   return pendingOriRequests.get(userId) || 0;
@@ -282,6 +283,7 @@ export async function recordOriUsage(userId, {
   model,
   fallback,
   generations,
+  serviceTier = "standard",
 } = {}) {
   if (!userId) return false;
   try {
@@ -289,7 +291,7 @@ export async function recordOriUsage(userId, {
     const defaultModel = model || (isPlan ? frontierModel() : valueModel());
     const entries = Array.isArray(generations) && generations.length
       ? generations.slice(0, 3)
-      : [{ usage, model: defaultModel, fallback }];
+      : [{ usage, model: defaultModel, fallback, serviceTier }];
     const totals = {
       promptTokens: 0,
       cachedTokens: 0,
@@ -300,12 +302,15 @@ export async function recordOriUsage(userId, {
     let usedCountTokens = false;
     for (const generation of entries) {
       const generationModel = generation?.model || defaultModel;
+      const generationServiceTier = generation?.serviceTier || serviceTier;
       const t = await resolveTokenCounts({
         usage: generation?.usage,
         model: generationModel,
         fallback: generation?.fallback,
       });
-      const cost = estimateCostUsd(generationModel, t);
+      const cost = estimateCostUsd(generationModel, t, {
+        serviceTier: generationServiceTier,
+      });
       totals.promptTokens += t.promptTokens;
       totals.cachedTokens += t.cachedTokens;
       totals.outputTokens += t.outputTokens;

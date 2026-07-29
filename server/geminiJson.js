@@ -119,6 +119,8 @@ export function liteThinkingLevel() {
 const genUrl = (model) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const REQUEST_TIMEOUT_MS = 30000; // don't let a hung LLM call tie up the request + rate-limit slot
+const MAX_REQUEST_TIMEOUT_MS = 15 * 60_000;
+const MAX_LADDER_BUDGET_MS = 20 * 60_000;
 
 // ── Overload-retry budget ────────────────────────────────────────────────────
 // The structured ladder rides out a transient Gemini overload INSIDE a single
@@ -136,10 +138,72 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Equal-jitter exponential backoff (half fixed + half random), capped and clamped
 // to the time left. Equal jitter guarantees real spacing (never a 0ms "burst")
 // while de-syncing concurrent retriers so they don't all re-hit at once.
-function backoffDelay(n, remainingMs) {
-  const cap = Math.min(backoffMaxMs(), backoffBaseMs() * 2 ** n);
+function backoffDelay(n, remainingMs, serviceTier = null) {
+  // Flex is intentionally sheddable. Google's guidance starts retries around
+  // five seconds; the interactive Standard path keeps its shorter backoff.
+  const base = serviceTier === "flex" ? 5_000 : backoffBaseMs();
+  const maximum = serviceTier === "flex" ? 60_000 : backoffMaxMs();
+  const cap = Math.min(maximum, base * 2 ** n);
   const delay = cap / 2 + Math.random() * (cap / 2);
   return Math.max(0, Math.min(delay, remainingMs));
+}
+
+function boundedMs(value, dflt, min, max) {
+  const n = Number(value);
+  return Math.min(max, Math.max(min, Number.isFinite(n) && n > 0 ? n : dflt));
+}
+
+function boundedInt(value, dflt, min, max) {
+  const n = Math.floor(Number(value));
+  return Math.min(max, Math.max(min, Number.isFinite(n) && n > 0 ? n : dflt));
+}
+
+/**
+ * The autonomous trickle is latency-tolerant, so it uses half-price Flex by
+ * default. Interactive refreshes never call this helper and remain Standard.
+ * Only "standard" can opt out; a typo can never select premium Priority.
+ */
+export function backgroundGeminiOptions() {
+  const configured = String(process.env.GEMINI_BACKGROUND_SERVICE_TIER || "flex")
+    .trim()
+    .toLowerCase();
+  if (configured === "standard") return {};
+  const requestTimeoutMs = boundedMs(
+    process.env.GEMINI_FLEX_REQUEST_TIMEOUT_MS,
+    10 * 60_000,
+    60_000,
+    MAX_REQUEST_TIMEOUT_MS,
+  );
+  return {
+    serviceTier: "flex",
+    requestTimeoutMs,
+    budgetMs: Math.max(
+      requestTimeoutMs,
+      boundedMs(
+        process.env.GEMINI_FLEX_BUDGET_MS,
+        15 * 60_000,
+        60_000,
+        MAX_LADDER_BUDGET_MS,
+      ),
+    ),
+    maxAttempts: boundedInt(process.env.GEMINI_FLEX_MAX_ATTEMPTS, 3, 1, 3),
+  };
+}
+
+/**
+ * Hard cost envelope for the autonomous sweep. Environment configuration may
+ * slow the trickle down, but it cannot run more than five names per hour.
+ */
+export function backgroundTrickleSchedule() {
+  return {
+    tickMs: boundedMs(
+      process.env.SCREENER_INTANGIBLES_TICK_MS,
+      60 * 60_000,
+      60 * 60_000,
+      24 * 60 * 60_000,
+    ),
+    batch: boundedInt(process.env.SCREENER_INTANGIBLES_BATCH, 1, 1, 5),
+  };
 }
 
 // Cap concurrent structured (game-plan / intangibles) Gemini calls. Several can
@@ -230,6 +294,9 @@ export function geminiKeys() {
  *                                    ladder is busy, and Gemini bills only on success, so a single
  *                                    generation never pays for the scarce tier twice.
  * @param {number} [opts.maxAttempts] total attempts across the cycled ladder (default 6).
+ * @param {"flex"} [opts.serviceTier] Flex is allowed only for latency-tolerant background work.
+ * @param {number} [opts.requestTimeoutMs] per-attempt HTTP timeout.
+ * @param {number} [opts.budgetMs] total queue + retry wall-clock budget.
  * @param {string}  [opts.thinkingLevel] "minimal"|"low"|"medium"|"high" — applied per model via
  *                                    thinkingConfigFor (3.x thinkingLevel / 2.5 thinkingBudget).
  * @returns {Promise<{ data: object, model: string, usage: object|null }>}
@@ -246,6 +313,9 @@ export async function geminiGenerateJson({
   getCachedContent = null,
   thinkingLevel = null,
   maxAttempts = ladderMaxAttempts(),
+  serviceTier = null,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  budgetMs = ladderBudgetMs(),
 }) {
   const keys = geminiKeys();
   if (!keys.length) throw err("GEMINI_API_KEY not configured", "no_key");
@@ -268,16 +338,31 @@ export async function geminiGenerateJson({
       temperature,
       maxOutputTokens,
     },
+    // REST uses snake_case. Omit Standard so Google applies its default; never
+    // accept Priority here because an environment typo must not add a premium.
+    ...(serviceTier === "flex" ? { service_tier: "flex" } : {}),
   };
 
-  const deadline = Date.now() + ladderBudgetMs();
+  const boundedRequestTimeoutMs = boundedMs(
+    requestTimeoutMs,
+    REQUEST_TIMEOUT_MS,
+    1_000,
+    MAX_REQUEST_TIMEOUT_MS,
+  );
+  const boundedBudgetMs = boundedMs(
+    budgetMs,
+    ladderBudgetMs(),
+    1_000,
+    MAX_LADDER_BUDGET_MS,
+  );
+  const deadline = Date.now() + boundedBudgetMs;
   await acquireSlot(deadline);
   try {
     return await runLadder(
       baseBody,
       combos,
       { system, cachedContent, getCachedContent, thinkingLevel },
-      { deadline, maxAttempts },
+      { deadline, maxAttempts, requestTimeoutMs: boundedRequestTimeoutMs },
     );
   } finally {
     releaseSlot();
@@ -317,7 +402,16 @@ function bodyForModel(baseBody, model, { system, cachedContent, getCachedContent
 // We back off (sleep) only after an OVERLOAD or a network blip — never after a 404
 // (that just moves to the next model at once) and never after the final attempt —
 // so we ride out a "too busy" without bursting the API.
-async function runLadder(baseBody, combos, cacheOpts = {}, { deadline = 0, maxAttempts = ladderMaxAttempts() } = {}) {
+async function runLadder(
+  baseBody,
+  combos,
+  cacheOpts = {},
+  {
+    deadline = 0,
+    maxAttempts = ladderMaxAttempts(),
+    requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  } = {},
+) {
   let lastStatus = 0;
   let overloads = 0; // grows the backoff exponent each time we wait one out
   const limit = Math.max(1, maxAttempts);
@@ -329,11 +423,17 @@ async function runLadder(baseBody, combos, cacheOpts = {}, { deadline = 0, maxAt
     let res = null;
     let transient = false; // network/timeout blip or overload → back off, then retry
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const remainingMs = deadline ? Math.max(1, deadline - Date.now()) : requestTimeoutMs;
+    const attemptTimeoutMs = Math.max(1, Math.min(requestTimeoutMs, remainingMs));
+    const headers = { "Content-Type": "application/json", "X-goog-api-key": apiKey };
+    if (body.service_tier === "flex") {
+      headers["X-Server-Timeout"] = String(Math.max(1, Math.floor(attemptTimeoutMs / 1000)));
+    }
+    const timer = setTimeout(() => controller.abort(), attemptTimeoutMs);
     try {
       res = await fetch(genUrl(model), {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+        headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -348,6 +448,7 @@ async function runLadder(baseBody, combos, cacheOpts = {}, { deadline = 0, maxAt
       const text = (data?.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
       const billableGeneration = {
         model,
+        serviceTier: body.service_tier || "standard",
         usage: data?.usageMetadata || null,
         fallback: {
           contents: body.contents,
@@ -382,7 +483,7 @@ async function runLadder(baseBody, combos, cacheOpts = {}, { deadline = 0, maxAt
     // budget remains — equal jitter so concurrent retriers don't re-burst in sync.
     if (transient && attempt + 1 < limit && (!deadline || Date.now() < deadline)) {
       const remaining = deadline ? deadline - Date.now() : backoffMaxMs();
-      const wait = backoffDelay(overloads++, remaining);
+      const wait = backoffDelay(overloads++, remaining, baseBody.service_tier);
       if (wait > 0) await sleep(wait);
     }
   }

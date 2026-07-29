@@ -31,7 +31,16 @@ import { requireAdmin } from "../auth.js";
 import { hasOriAccess } from "../access.js";
 import { enrichmentManager } from "../enrichment.js";
 import { marketSession } from "../marketHours.js";
-import { geminiGenerateJson, frontierModel, valueModel, liteModel, modelTier, gamePlanThinkingLevel, liteThinkingLevel } from "../geminiJson.js";
+import {
+  geminiGenerateJson,
+  frontierModel,
+  valueModel,
+  liteModel,
+  modelTier,
+  gamePlanThinkingLevel,
+  liteThinkingLevel,
+  backgroundGeminiOptions,
+} from "../geminiJson.js";
 import { GAME_PLAN_SYSTEM } from "../gamePlanPromptShared.js";
 import {
   LITE_TRICKLE_SYSTEM,
@@ -1471,9 +1480,9 @@ function releaseLiteLane() {
 }
 
 // `onUsage(usageMetadata)` fires ONLY inside the generator — i.e. on a real
-// Gemini call, never on a cache hit or a coalesced waiter. Callers that should
-// meter the user (the explicit Game Plan refresh) pass it; the automatic screener
-// sweep and the background trickle pass nothing, so they're never charged.
+// Gemini call, never on a cache hit or a coalesced waiter. The explicit Game
+// Plan refresh uses it for the user's ledger; the autonomous trickle uses a
+// reserved system ledger so its spend is visible without charging a customer.
 export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}, force = false, onUsage } = {}) {
   const deps = gamePlanCacheDeps();
   if (!shouldRunLiteIntangiblesGeneration(symbol, deps, { force })) {
@@ -1495,6 +1504,9 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
         : buildLiteTricklePrompt({ symbol, profile, news, stats: liteStats });
       const schema = useFullPrompt ? GAME_PLAN_SCHEMA : LITE_TRICKLE_SCHEMA;
       const system = useFullPrompt ? GAME_PLAN_SYSTEM : LITE_TRICKLE_SYSTEM;
+      // A forced refresh is user-facing and stays Standard. The autonomous,
+      // latency-tolerant trickle uses half-price Flex with its longer timeout.
+      const serviceOptions = force ? {} : backgroundGeminiOptions();
       // Full-prompt path emits the same rich 15-field schema, so it gets the same
       // headroom; the compact trickle schema (minimal thinking) stays small.
       const maxOutputTokens = useFullPrompt ? gamePlanMaxOutputTokens() : 900;
@@ -1506,9 +1518,12 @@ export async function generateLiteIntangibles(symbol, { stats = {}, verdict = {}
         thinkingLevel: liteThinkingLevel(),
         // Lite-ONLY: background screener trickle + explicit refresh. Never flash/frontier.
         models: [liteModel()],
+        ...serviceOptions,
       });
       if (typeof onUsage === "function") {
-        try { onUsage(usage, model); } catch { /* accounting must not break generation */ }
+        try {
+          await onUsage(usage, model, serviceOptions.serviceTier || "standard");
+        } catch { /* accounting must not break generation */ }
       }
       const sane = useFullPrompt ? sanitizeGamePlan(raw) : sanitizeLiteIntangibles(raw);
       if (sane) { sane.model = model; sane.modelTier = modelTier(model); }

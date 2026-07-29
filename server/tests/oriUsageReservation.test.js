@@ -17,6 +17,7 @@ const {
   getOriUsageSummary,
   recordOriUsage,
   releaseOriQuota,
+  BACKGROUND_ORI_USAGE_ID,
 } = await import("../oriUsage.js");
 
 const USER = "quota@example.com";
@@ -94,6 +95,20 @@ test("tool-assisted chat reserves and records one quota unit per Gemini generati
   assert.equal(summary.session.used, 2);
   assert.equal(summary.day.promptTokens, 250);
   assert.equal(summary.day.cachedTokens, 100);
+});
+
+test("background Flex spend is visible globally at the discounted rate", async () => {
+  const before = db.sumOriCostAllUsers("0000-01-01", "9999-12-31");
+  const recorded = await recordOriUsage(BACKGROUND_ORI_USAGE_ID, {
+    kind: "plan",
+    model: "gemini-3.1-flash-lite",
+    serviceTier: "flex",
+    usage: { promptTokenCount: 1000, candidatesTokenCount: 100 },
+  });
+  assert.equal(recorded, true);
+  const summary = getOriUsageSummary(BACKGROUND_ORI_USAGE_ID);
+  assert.equal(summary.day.cost.totalUsdMicros, 200);
+  assert.equal(db.sumOriCostAllUsers("0000-01-01", "9999-12-31") - before, 200);
 });
 
 test("dollar-denominated guard blocks further generations after the budget is spent", async () => {
