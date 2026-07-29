@@ -2044,14 +2044,17 @@ export function insertOriUsageEvent(userId, kind, at = Date.now()) {
   insertOriUsageEventStmt.run(userId, at, kind);
 }
 
-const recordOriUsageLedgerTransaction = db.transaction((userId, day, delta, kind, at) => {
+const recordOriUsageLedgerTransaction = db.transaction((userId, day, delta, kind, at, eventCount) => {
   incrementOriUsage(userId, day, delta);
-  insertOriUsageEvent(userId, kind, at);
+  for (let index = 0; index < eventCount; index++) {
+    insertOriUsageEvent(userId, kind, at + index);
+  }
 });
 
 /** Keep calendar totals and the rolling-window event in one SQLite commit. */
-export function recordOriUsageLedger(userId, day, delta, kind, at = Date.now()) {
-  recordOriUsageLedgerTransaction(userId, day, delta, kind, at);
+export function recordOriUsageLedger(userId, day, delta, kind, at = Date.now(), eventCount = 1) {
+  const count = Math.max(1, Math.min(10, Math.floor(Number(eventCount) || 1)));
+  recordOriUsageLedgerTransaction(userId, day, delta, kind, at, count);
 }
 
 /** Count billable Ori actions since `sinceMs` (5-hour session window). */

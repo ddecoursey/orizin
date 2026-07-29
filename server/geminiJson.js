@@ -73,7 +73,7 @@ export function thinkingConfigFor(model, level) {
 // minimal, but we set it so re-pointing the lite model can't silently re-enable
 // thinking.
 export function chatThinkingLevel() {
-  return process.env.ORI_CHAT_THINKING_LEVEL || "low";
+  return process.env.ORI_CHAT_THINKING_LEVEL || "minimal";
 }
 export function gamePlanThinkingLevel() {
   return process.env.GAME_PLAN_THINKING_LEVEL || "medium";

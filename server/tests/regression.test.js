@@ -840,18 +840,21 @@ test('screener lite intangibles endpoint is Pro-gated and validates the symbol',
   assert.equal(bad.status, 400);
 });
 
-test('Ori usage endpoint reports limits and is unlimited for admins', async () => {
-  // Admins are never metered.
+test('Ori usage endpoint reports generation and cost limits for admins and users', async () => {
+  // Admins retain access but are metered by default so QA/owner testing cannot
+  // bypass the paid-generation budget.
   const admin = await json(await fetch(api('/api/ori/usage'), { headers: { cookie: adminCookie } }));
-  assert.equal(admin.unlimited, true);
+  assert.equal(admin.unlimited, false);
   assert.ok(admin.limits && admin.limits.session > 0 && admin.limits.daily > 0);
   assert.ok(admin.limits.weekly > 0 && admin.limits.monthly > 0);
+  assert.ok(admin.limits.dailyCostUsd > 0 && admin.limits.monthlyCostUsd > 0);
 
   // A normal (non-admin) account is metered: limits present, fresh usage at zero.
   const viewer = await json(await fetch(api('/api/ori/usage'), { headers: { cookie: userCookie } }));
   assert.equal(viewer.unlimited, false);
   assert.ok(viewer.limits.session > 0 && viewer.limits.daily > 0);
   assert.ok(viewer.limits.weekly > 0 && viewer.limits.monthly > 0);
+  assert.ok(viewer.limits.dailyCostUsd > 0 && viewer.limits.monthlyCostUsd > 0);
   assert.equal(viewer.session.used, 0);
   assert.equal(viewer.day.requests, 0);
   assert.equal(viewer.weekTotals.requests, 0);

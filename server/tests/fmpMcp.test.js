@@ -19,11 +19,9 @@ test("FMP MCP routing selects only relevant families for explicit questions", ()
   assert.deepEqual(macro, ["economics"]);
 });
 
-test("FMP MCP routing supplies a useful default stock research set", () => {
-  assert.deepEqual(
-    selectFmpFamilies("What do you think about AAPL?", "deep-research"),
-    ["quote", "company", "analyst", "calendar", "news", "statements"],
-  );
+test("FMP MCP routing offers no tools without explicit live-data intent", () => {
+  assert.deepEqual(selectFmpFamilies("What do you think about AAPL?", "deep-research"), []);
+  assert.deepEqual(selectFmpFamilies("Help me understand my goals", "portfolio-goals"), []);
 });
 
 test("sanitizeFmpArguments enforces Starter-safe endpoint, symbols, and row limits", () => {

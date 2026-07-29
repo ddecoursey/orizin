@@ -45,6 +45,8 @@ described below to its actual name) and give it:
 - `EMAIL_DISABLED=true` so test signups never consume email quota.
 - `ENABLE_BACKGROUND_ENRICH=false` and a conservative `FMP_MAX_RPM` because QA
   and production can otherwise consume the Starter-plan allowance at once.
+- Keep `GEMINI_CONTEXT_CACHE_NONPROD_ENABLED=false` so deployments and restarts
+  do not create paid explicit-cache storage in the low-volume QA environment.
 - Public signup enabled (omit `SIGNUPS_ENABLED`, or set it to `true`) so the free
   account journey represents the real product.
 

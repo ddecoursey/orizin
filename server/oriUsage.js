@@ -3,12 +3,12 @@
 // Game Plan generation) spends Gemini tokens — which are not free. To keep a
 // single heavy user from costing more than their $10/mo, Pro accounts get a
 // layered allotment similar to Anthropic's Claude Pro: a rolling session window,
-// plus daily / weekly / monthly caps. Admins, the local-dev `default` user, and
-// legacy env-auth instances are unlimited.
+// plus daily / weekly / monthly caps. Local-dev `default` and legacy env-auth
+// instances are unlimited; admin bypass is an explicit operational opt-in.
 //
-// We track BOTH a request count (what the limiter enforces — simple and legible
-// for users) and raw Gemini token counts (input / output / cache-served), so the
-// account panel can show real volume and how much the context cache saved.
+// We track BOTH an upstream generation count (what the limiter enforces) and raw
+// Gemini token counts (input / output / cache-served), so a two-generation live
+// data turn cannot hide behind one user-facing chat action.
 //
 // Limits are env-overridable so the owner can retune without a code change.
 
@@ -48,6 +48,11 @@ function envInt(name, dflt) {
   return Number.isFinite(n) && n > 0 ? n : dflt;
 }
 
+function envUsd(name, dflt) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+
 const SESSION_HOURS_DEFAULT = 5;
 
 // Layered caps modeled on Claude Pro's session + weekly + monthly structure,
@@ -61,6 +66,9 @@ export function oriLimits() {
     daily: envInt("ORI_DAILY_LIMIT", 25),
     weekly: envInt("ORI_WEEKLY_LIMIT", 70),
     monthly: envInt("ORI_MONTHLY_LIMIT", 280),
+    dailyCostUsd: envUsd("ORI_DAILY_COST_LIMIT_USD", 0.75),
+    weeklyCostUsd: envUsd("ORI_WEEKLY_COST_LIMIT_USD", 2.50),
+    monthlyCostUsd: envUsd("ORI_MONTHLY_COST_LIMIT_USD", 6.00),
   };
 }
 
@@ -74,6 +82,9 @@ export function oriLimitsForPlan(plan) {
     daily: envInt("ORI_STARFARER_DAILY_LIMIT", base.daily * 2),
     weekly: envInt("ORI_STARFARER_WEEKLY_LIMIT", base.weekly * 2),
     monthly: envInt("ORI_STARFARER_MONTHLY_LIMIT", base.monthly * 2),
+    dailyCostUsd: envUsd("ORI_STARFARER_DAILY_COST_LIMIT_USD", base.dailyCostUsd * 2),
+    weeklyCostUsd: envUsd("ORI_STARFARER_WEEKLY_COST_LIMIT_USD", base.weeklyCostUsd * 2),
+    monthlyCostUsd: envUsd("ORI_STARFARER_MONTHLY_COST_LIMIT_USD", base.monthlyCostUsd * 2),
   };
 }
 
@@ -97,14 +108,15 @@ function dayKeyDaysAgo(dayKey, n) {
   return etSessionDate(t);
 }
 
-// Admins / local-dev / legacy env-auth never hit the meter. Mirrors the access
-// rules in access.js (hasOriAccess) so "can use Ori" and "is metered" agree.
+// Local-dev / legacy env-auth remain unmetered. Admins retain Ori access but are
+// metered by default so QA/owner testing cannot bypass cost controls; operators
+// can explicitly restore the old behavior with ORI_ADMIN_UNLIMITED=true.
 export function isOriUnlimited(userId) {
   if (!userId || userId === "default") return true; // auth disabled (local dev)
   try {
     const user = getUserByUsername(userId);
     if (!user) return userCount() === 0; // legacy env-password mode
-    return !!user.is_admin;
+    return !!user.is_admin && process.env.ORI_ADMIN_UNLIMITED === "true";
   } catch {
     return false;
   }
@@ -112,10 +124,13 @@ export function isOriUnlimited(userId) {
 
 function limitMessage(scope, limit, used, extra = "") {
   const msgs = {
-    session: `You've reached your ${oriLimits().sessionHours}-hour Ori limit (${limit} requests). ${extra}Try again when the window resets.`,
-    day: `You've reached today's Ori limit (${limit} requests). It resets at midnight ET.`,
-    week: `You've reached your weekly Ori limit (${limit} requests). It resets every 7 days.`,
-    month: `You've reached your monthly Ori limit (${limit} requests). It resets on the 1st.`,
+    session: `You've reached your ${oriLimits().sessionHours}-hour Ori limit (${limit} generation units). ${extra}Try again when the window resets.`,
+    day: `You've reached today's Ori limit (${limit} generation units). It resets at midnight ET.`,
+    week: `You've reached your weekly Ori limit (${limit} generation units). It resets every 7 days.`,
+    month: `You've reached your monthly Ori limit (${limit} generation units). It resets on the 1st.`,
+    cost_day: `You've reached today's Ori compute budget ($${Number(limit).toFixed(2)}). It resets at midnight ET.`,
+    cost_week: `You've reached your weekly Ori compute budget ($${Number(limit).toFixed(2)}).`,
+    cost_month: `You've reached your monthly Ori compute budget ($${Number(limit).toFixed(2)}). It resets on the 1st.`,
   };
   return msgs[scope] || `Ori usage limit reached (${limit}).`;
 }
@@ -130,16 +145,17 @@ function sessionResetsAt(userId, sinceMs) {
  * Is this user allowed to spend another Ori request right now?
  * @returns {{ ok: true, unlimited?: boolean } | { ok: false, scope, limit, used, resetsAt?, message }}
  */
-function checkOriQuotaFromLedger(userId) {
+function checkOriQuotaFromLedger(userId, requestedUnits = 1) {
   if (isOriUnlimited(userId)) return { ok: true, unlimited: true };
   const limits = limitsForUser(userId);
+  const units = Math.max(1, Math.min(3, Math.floor(Number(requestedUnits) || 1)));
   const pending = pendingCount(userId);
   const day = todayKey();
   const windowMs = sessionWindowMs(limits.sessionHours);
   const since = Date.now() - windowMs;
   const sessionUsed = countOriUsageEventsSince(userId, since) + pending;
 
-  if (sessionUsed >= limits.session) {
+  if (sessionUsed + units > limits.session) {
     const resetsAt = sessionResetsAt(userId, since);
     const resetHint = resetsAt
       ? `Resets around ${new Date(resetsAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })} ET. `
@@ -156,7 +172,7 @@ function checkOriQuotaFromLedger(userId) {
 
   const today = getOriUsageDay(userId, day);
   const dailyUsed = today.requests + pending;
-  if (dailyUsed >= limits.daily) {
+  if (dailyUsed + units > limits.daily) {
     return {
       ok: false,
       scope: "day",
@@ -165,11 +181,20 @@ function checkOriQuotaFromLedger(userId) {
       message: limitMessage("day", limits.daily, dailyUsed),
     };
   }
+  if ((today.cost_usd_micros || 0) / 1e6 >= limits.dailyCostUsd) {
+    return {
+      ok: false,
+      scope: "cost_day",
+      limit: limits.dailyCostUsd,
+      used: (today.cost_usd_micros || 0) / 1e6,
+      message: limitMessage("cost_day", limits.dailyCostUsd),
+    };
+  }
 
   const weekStart = dayKeyDaysAgo(day, 6);
   const week = getOriUsageRange(userId, weekStart, day);
   const weeklyUsed = week.requests + pending;
-  if (weeklyUsed >= limits.weekly) {
+  if (weeklyUsed + units > limits.weekly) {
     return {
       ok: false,
       scope: "week",
@@ -178,10 +203,19 @@ function checkOriQuotaFromLedger(userId) {
       message: limitMessage("week", limits.weekly, weeklyUsed),
     };
   }
+  if ((week.cost_usd_micros || 0) / 1e6 >= limits.weeklyCostUsd) {
+    return {
+      ok: false,
+      scope: "cost_week",
+      limit: limits.weeklyCostUsd,
+      used: (week.cost_usd_micros || 0) / 1e6,
+      message: limitMessage("cost_week", limits.weeklyCostUsd),
+    };
+  }
 
   const month = getOriUsageRange(userId, monthStartKey(day), day);
   const monthlyUsed = month.requests + pending;
-  if (monthlyUsed >= limits.monthly) {
+  if (monthlyUsed + units > limits.monthly) {
     return {
       ok: false,
       scope: "month",
@@ -190,12 +224,21 @@ function checkOriQuotaFromLedger(userId) {
       message: limitMessage("month", limits.monthly, monthlyUsed),
     };
   }
+  if ((month.cost_usd_micros || 0) / 1e6 >= limits.monthlyCostUsd) {
+    return {
+      ok: false,
+      scope: "cost_month",
+      limit: limits.monthlyCostUsd,
+      used: (month.cost_usd_micros || 0) / 1e6,
+      message: limitMessage("cost_month", limits.monthlyCostUsd),
+    };
+  }
   return { ok: true };
 }
 
-export function checkOriQuota(userId) {
+export function checkOriQuota(userId, { units = 1 } = {}) {
   try {
-    return checkOriQuotaFromLedger(userId);
+    return checkOriQuotaFromLedger(userId, units);
   } catch (error) {
     console.warn("[oriUsage] quota verification failed:", error.message);
     return {
@@ -207,12 +250,13 @@ export function checkOriQuota(userId) {
 }
 
 /** Atomically check the current process's ledger view and reserve one call. */
-export function acquireOriQuota(userId) {
-  const quota = checkOriQuota(userId);
+export function acquireOriQuota(userId, { units = 1 } = {}) {
+  const requestedUnits = Math.max(1, Math.min(3, Math.floor(Number(units) || 1)));
+  const quota = checkOriQuota(userId, { units: requestedUnits });
   if (!quota.ok || quota.unlimited) return { ...quota, reservation: null };
 
-  const reservation = { userId, released: false };
-  pendingOriRequests.set(userId, pendingCount(userId) + 1);
+  const reservation = { userId, units: requestedUnits, released: false };
+  pendingOriRequests.set(userId, pendingCount(userId) + requestedUnits);
   return { ...quota, reservation };
 }
 
@@ -221,8 +265,8 @@ export function releaseOriQuota(reservation) {
   if (!reservation || reservation.released) return;
   reservation.released = true;
   const count = pendingCount(reservation.userId);
-  if (count <= 1) pendingOriRequests.delete(reservation.userId);
-  else pendingOriRequests.set(reservation.userId, count - 1);
+  if (count <= reservation.units) pendingOriRequests.delete(reservation.userId);
+  else pendingOriRequests.set(reservation.userId, count - reservation.units);
 }
 
 /**
@@ -232,40 +276,80 @@ export function releaseOriQuota(reservation) {
  * @param {string} userId
  * @param {{ kind: 'chat' | 'plan', usage?: object, model?: string, fallback?: object }} opts
  */
-export async function recordOriUsage(userId, { kind, usage, model, fallback } = {}) {
+export async function recordOriUsage(userId, {
+  kind,
+  usage,
+  model,
+  fallback,
+  generations,
+} = {}) {
   if (!userId) return false;
   try {
     const isPlan = kind === "plan";
-    const usedModel = model || (isPlan ? frontierModel() : valueModel());
-    const t = await resolveTokenCounts({ usage, model: usedModel, fallback });
-    const cost = estimateCostUsd(usedModel, t);
+    const defaultModel = model || (isPlan ? frontierModel() : valueModel());
+    const entries = Array.isArray(generations) && generations.length
+      ? generations.slice(0, 3)
+      : [{ usage, model: defaultModel, fallback }];
+    const totals = {
+      promptTokens: 0,
+      cachedTokens: 0,
+      outputTokens: 0,
+      thoughtsTokens: 0,
+      costUsdMicros: 0,
+    };
+    let usedCountTokens = false;
+    for (const generation of entries) {
+      const generationModel = generation?.model || defaultModel;
+      const t = await resolveTokenCounts({
+        usage: generation?.usage,
+        model: generationModel,
+        fallback: generation?.fallback,
+      });
+      const cost = estimateCostUsd(generationModel, t);
+      totals.promptTokens += t.promptTokens;
+      totals.cachedTokens += t.cachedTokens;
+      totals.outputTokens += t.outputTokens;
+      totals.thoughtsTokens += t.thoughtsTokens || 0;
+      totals.costUsdMicros += cost.totalUsdMicros;
+      usedCountTokens ||= t.source === "countTokens";
+    }
+    const generationCount = entries.length;
     const at = Date.now();
     const delta = {
-      requests: 1,
+      requests: generationCount,
       chatRequests: isPlan ? 0 : 1,
       planRequests: isPlan ? 1 : 0,
-      promptTokens: t.promptTokens,
-      cachedTokens: t.cachedTokens,
-      outputTokens: t.outputTokens,
-      thoughtsTokens: t.thoughtsTokens || 0,
-      costUsdMicros: cost.totalUsdMicros,
+      promptTokens: totals.promptTokens,
+      cachedTokens: totals.cachedTokens,
+      outputTokens: totals.outputTokens,
+      thoughtsTokens: totals.thoughtsTokens,
+      costUsdMicros: totals.costUsdMicros,
     };
     if (isPlan) {
-      delta.planPromptTokens = t.promptTokens;
-      delta.planCachedTokens = t.cachedTokens;
-      delta.planOutputTokens = t.outputTokens;
-      delta.planThoughtsTokens = t.thoughtsTokens || 0;
-      delta.planCostUsdMicros = cost.totalUsdMicros;
+      delta.planPromptTokens = totals.promptTokens;
+      delta.planCachedTokens = totals.cachedTokens;
+      delta.planOutputTokens = totals.outputTokens;
+      delta.planThoughtsTokens = totals.thoughtsTokens;
+      delta.planCostUsdMicros = totals.costUsdMicros;
     } else {
-      delta.chatPromptTokens = t.promptTokens;
-      delta.chatCachedTokens = t.cachedTokens;
-      delta.chatOutputTokens = t.outputTokens;
-      delta.chatThoughtsTokens = t.thoughtsTokens || 0;
-      delta.chatCostUsdMicros = cost.totalUsdMicros;
+      delta.chatPromptTokens = totals.promptTokens;
+      delta.chatCachedTokens = totals.cachedTokens;
+      delta.chatOutputTokens = totals.outputTokens;
+      delta.chatThoughtsTokens = totals.thoughtsTokens;
+      delta.chatCostUsdMicros = totals.costUsdMicros;
     }
-    recordOriUsageLedger(userId, todayKey(), delta, isPlan ? "plan" : "chat", at);
-    if (t.source === "countTokens") {
-      console.log(`[oriUsage] countTokens fallback (${kind}): ${t.promptTokens}+${t.outputTokens} tok → ${cost.totalUsd.toFixed(4)} USD`);
+    recordOriUsageLedger(
+      userId,
+      todayKey(),
+      delta,
+      isPlan ? "plan" : "chat",
+      at,
+      generationCount,
+    );
+    if (usedCountTokens) {
+      console.log(
+        `[oriUsage] countTokens fallback (${kind}): ${totals.promptTokens}+${totals.outputTokens} tok → ${(totals.costUsdMicros / 1e6).toFixed(4)} USD`,
+      );
     }
     return true;
   } catch (e) {

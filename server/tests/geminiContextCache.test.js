@@ -2,15 +2,22 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   buildChatGeminiBody,
+  buildFmpPlanningGeminiBody,
   contentsWithDynamicContext,
   getChatContextCacheName,
   cacheTtlSeconds,
+  chatCacheModels,
+  chatCacheViews,
+  chatContextCacheEnvironmentEnabled,
+  ensureChatContextCaches,
+  fmpPlanningMaxOutputTokens,
   _resetChatContextCachesForTests,
   _setChatContextCacheForTests,
 } from "../geminiContextCache.js";
 import { ORI_SYSTEM_STATIC, ORI_SYSTEM_STATIC_DR } from "../oriSystemStatic.js";
 import { chatMaxOutputTokens } from "../geminiContextCache.js";
 import { valueModel } from "../geminiJson.js";
+import { liteModel } from "../geminiJson.js";
 
 beforeEach(() => {
   _resetChatContextCachesForTests();
@@ -113,4 +120,94 @@ test("buildChatGeminiBody bypasses cachedContent when request-level tools are pr
   assert.equal(toolEnabled.system_instruction.parts[1].text, "ctx");
   assert.deepEqual(toolEnabled.tools, [{ functionDeclarations: declarations }]);
   assert.equal(toolEnabled.toolConfig.functionCallingConfig.mode, "AUTO");
+});
+
+test("FMP planning body is Lite-sized and excludes Ori static/history context", () => {
+  const declarations = [{
+    name: "fmp_quote",
+    description: "Get a quote",
+    parameters: { type: "object", properties: { symbol: { type: "string" } } },
+  }];
+  const body = buildFmpPlanningGeminiBody(liteModel(), {
+    message: "What is the current AAPL price?",
+    view: "deep-research",
+    activeSymbol: "AAPL",
+  }, declarations);
+  assert.equal(body.generationConfig.maxOutputTokens, fmpPlanningMaxOutputTokens());
+  assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, "minimal");
+  assert.equal(body.toolConfig.functionCallingConfig.mode, "ANY");
+  assert.deepEqual(body.tools, [{ functionDeclarations: declarations }]);
+  assert.doesNotMatch(body.system_instruction.parts[0].text, /CURRENT REQUEST CONTEXT/);
+  assert.ok(body.system_instruction.parts[0].text.length < 600);
+  assert.equal(body.contents.length, 1);
+});
+
+test("cache targets default to production value+screener only", () => {
+  const previous = {
+    APP_ENV: process.env.APP_ENV,
+    GEMINI_CONTEXT_CACHE_NONPROD_ENABLED: process.env.GEMINI_CONTEXT_CACHE_NONPROD_ENABLED,
+    GEMINI_CONTEXT_CACHE_LITE_ENABLED: process.env.GEMINI_CONTEXT_CACHE_LITE_ENABLED,
+    GEMINI_CONTEXT_CACHE_VIEWS: process.env.GEMINI_CONTEXT_CACHE_VIEWS,
+  };
+  try {
+    process.env.APP_ENV = "production";
+    delete process.env.GEMINI_CONTEXT_CACHE_NONPROD_ENABLED;
+    delete process.env.GEMINI_CONTEXT_CACHE_LITE_ENABLED;
+    delete process.env.GEMINI_CONTEXT_CACHE_VIEWS;
+    assert.equal(chatContextCacheEnvironmentEnabled(), true);
+    assert.deepEqual(chatCacheModels(), [valueModel()]);
+    assert.deepEqual(chatCacheViews(), ["screener"]);
+
+    process.env.APP_ENV = "qa";
+    assert.equal(chatContextCacheEnvironmentEnabled(), false);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test("cache bootstrap reuses and extends a matching resource instead of creating another", async () => {
+  const previous = {
+    APP_ENV: process.env.APP_ENV,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_CONTEXT_CACHE_ENABLED: process.env.GEMINI_CONTEXT_CACHE_ENABLED,
+    GEMINI_CONTEXT_CACHE_VIEWS: process.env.GEMINI_CONTEXT_CACHE_VIEWS,
+  };
+  const originalFetch = global.fetch;
+  const calls = [];
+  try {
+    process.env.APP_ENV = "production";
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.GEMINI_CONTEXT_CACHE_ENABLED = "true";
+    process.env.GEMINI_CONTEXT_CACHE_VIEWS = "screener";
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), method: options.method || "GET" });
+      if (!options.method) {
+        return new Response(JSON.stringify({
+          cachedContents: [{
+            name: "cachedContents/existing",
+            model: `models/${valueModel()}`,
+            displayName: `orizin-ori-chat-static-v4-${valueModel()}`,
+            expireTime: new Date(Date.now() + 60_000).toISOString(),
+          }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      assert.equal(options.method, "PATCH");
+      return new Response(JSON.stringify({
+        name: "cachedContents/existing",
+        expireTime: new Date(Date.now() + 86_400_000).toISOString(),
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    await ensureChatContextCaches();
+    assert.deepEqual(calls.map((call) => call.method), ["GET", "PATCH"]);
+    assert.equal(getChatContextCacheName(valueModel()), "cachedContents/existing");
+  } finally {
+    global.fetch = originalFetch;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

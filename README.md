@@ -141,11 +141,12 @@ Chat with Ori using different analysis modes:
 - **Hold Duration** - Analyze by investment time horizon
 - **General** - Open discussion about your stocks
 
-Ori automatically discovers FMP's hosted MCP tools when `FMP_API_KEY` is set.
-Only a curated Starter-safe subset is offered to Gemini for each question, and
-results are cached, row-limited, and counted against the same `FMP_MAX_RPM`
-budget as the app's direct FMP requests. Set `FMP_MCP_ENABLED=false` to disable
-live tool use without affecting the rest of FMP-backed stock data.
+Ori discovers FMP's hosted MCP tools when `FMP_API_KEY` is set, but offers a
+curated Starter-safe subset only for questions with explicit live-data intent.
+A bounded Flash-Lite planner may select one cached, row-limited FMP result; the
+user-facing answer then returns to Ori's normal cached Gemini path. Calls share
+the app's `FMP_MAX_RPM` budget. Set `FMP_MCP_ENABLED=false` to disable live tool
+use without affecting the rest of FMP-backed stock data.
 
 ## License
 

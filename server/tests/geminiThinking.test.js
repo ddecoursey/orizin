@@ -89,12 +89,12 @@ test("geminiGenerateJson sends no thinkingConfig for the 'default' sentinel", as
   assert.equal(captured.generationConfig.maxOutputTokens, 900);
 });
 
-test("per-journey level getters default low / medium / minimal and honor env", () => {
+test("per-journey level getters default minimal / medium / minimal and honor env", () => {
   const keys = ["ORI_CHAT_THINKING_LEVEL", "GAME_PLAN_THINKING_LEVEL", "GEMINI_LITE_THINKING_LEVEL"];
   const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   try {
     keys.forEach((k) => delete process.env[k]);
-    assert.equal(chatThinkingLevel(), "low");
+    assert.equal(chatThinkingLevel(), "minimal");
     assert.equal(gamePlanThinkingLevel(), "medium");
     assert.equal(liteThinkingLevel(), "minimal");
 
