@@ -154,6 +154,14 @@ budgeting for the hourly large-cap scoring sweep. QA/staging deployment labels
 override `NODE_ENV=production`, so they stay Lite-only and do not create paid
 context caches or run autonomous Gemini jobs.
 
+## Release identification
+
+The account menu's **About Orizin** section shows the semantic app version and
+the first eight characters of the deployed source commit (for example,
+`v0.1.0 · 53a32bb`). Bump `package.json` with `npm version patch --no-git-tag-version`
+for a planned release; every deployment remains uniquely identifiable by its
+commit even when the semantic version is unchanged.
+
 ## License
 
 MIT

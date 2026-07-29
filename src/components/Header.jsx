@@ -3,6 +3,7 @@ import OrizinLogo from "./OrizinLogo.jsx";
 import RankBadge from "./RankBadge.jsx";
 import RankEmblem from "./RankEmblem.jsx";
 import { resolveRank, upgradeCta, hasOriAccess } from "../lib/ranks.js";
+import { APP_RELEASE } from "../lib/release.js";
 import {
   IconSun,
   IconMoon,
@@ -467,10 +468,22 @@ export default function Header({
                 </a>
               )}
 
+              <div
+                className="border-t border-gray-800 px-3 py-2"
+                title="Exact application version and source commit for this deployment"
+              >
+                <div className="text-[10px] uppercase tracking-wider text-gray-500">
+                  About Orizin
+                </div>
+                <div className="mt-1 font-mono text-[10px] text-gray-400">
+                  Release {APP_RELEASE}
+                </div>
+              </div>
+
               {onLogout && (
                 <MenuItem
                   onClick={() => { close(); onLogout(); }}
-                  className="text-red-300 hover:bg-red-950/40 border-t border-gray-800"
+                  className="text-red-300 hover:bg-red-950/40"
                 >
                   <span className="flex items-center gap-2">
                     <IconLogout className="w-3.5 h-3.5" /> Logout

@@ -267,3 +267,71 @@ test("cache bootstrap removes duplicate current-version resources", async () => 
     }
   }
 });
+
+test("cache bootstrap removes only known legacy Orizin resources", async () => {
+  const previous = {
+    APP_ENV: process.env.APP_ENV,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_CONTEXT_CACHE_ENABLED: process.env.GEMINI_CONTEXT_CACHE_ENABLED,
+    GEMINI_CONTEXT_CACHE_VIEWS: process.env.GEMINI_CONTEXT_CACHE_VIEWS,
+  };
+  const originalFetch = global.fetch;
+  const calls = [];
+  try {
+    process.env.APP_ENV = "production";
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.GEMINI_CONTEXT_CACHE_ENABLED = "true";
+    process.env.GEMINI_CONTEXT_CACHE_VIEWS = "screener";
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), method: options.method || "GET" });
+      if (!options.method) {
+        return new Response(JSON.stringify({
+          cachedContents: [
+            {
+              name: "cachedContents/current",
+              model: `models/${valueModel()}`,
+              displayName: `orizin-ori-chat-static-v4-${valueModel()}`,
+              expireTime: "2026-07-31T00:00:00Z",
+            },
+            {
+              name: "cachedContents/old-spelling",
+              model: `models/${valueModel()}`,
+              displayName: `orizen-ori-chat-static-v3-${valueModel()}`,
+              expireTime: "2026-07-31T00:00:00Z",
+            },
+            {
+              name: "cachedContents/old-version",
+              model: `models/${valueModel()}`,
+              displayName: `orizin-ori-chat-static-v3-${valueModel()}`,
+              expireTime: "2026-07-31T00:00:00Z",
+            },
+            {
+              name: "cachedContents/unrelated",
+              model: `models/${valueModel()}`,
+              displayName: "some-other-app-v3",
+              expireTime: "2026-07-31T00:00:00Z",
+            },
+          ],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (options.method === "DELETE") return new Response(null, { status: 204 });
+      assert.equal(options.method, "PATCH");
+      return new Response(JSON.stringify({
+        name: "cachedContents/current",
+        expireTime: "2026-08-01T00:00:00Z",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    await ensureChatContextCaches({ cleanupLegacy: true });
+    assert.deepEqual(calls.map((call) => call.method), ["GET", "DELETE", "DELETE", "PATCH"]);
+    assert.match(calls[1].url, /cachedContents\/old-spelling/);
+    assert.match(calls[2].url, /cachedContents\/old-version/);
+    assert.equal(calls.some((call) => call.url.includes("unrelated")), false);
+  } finally {
+    global.fetch = originalFetch;
+    _resetChatContextCachesForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});

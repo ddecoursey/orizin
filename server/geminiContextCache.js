@@ -15,6 +15,15 @@ import { oriStaticForView } from "./oriSystemStatic.js";
 
 const CACHE_URL = "https://generativelanguage.googleapis.com/v1beta/cachedContents";
 const CACHE_DISPLAY = "orizin-ori-chat-static-v4";
+// These exact prefixes were used by earlier Orizin releases. Keep both spellings:
+// pre-rename deployments used "orizen", while later v3 deployments used "orizin".
+// Restrict cleanup to this allowlist so we never delete another application's
+// cached content—or a future Orizin cache version during a rolling deployment.
+const LEGACY_CACHE_PREFIXES = [
+  "orizen-ori-chat-static-v2-",
+  "orizen-ori-chat-static-v3-",
+  "orizin-ori-chat-static-v3-",
+];
 
 /** @type {Map<string, { name: string, expireTime?: string }>} */
 const chatCachesByModel = new Map();
@@ -151,12 +160,17 @@ function matchingCaches(caches, model, view) {
     .sort((a, b) => Date.parse(b.expireTime || 0) - Date.parse(a.expireTime || 0));
 }
 
+function isKnownLegacyCache(cache) {
+  const displayName = String(cache?.displayName || "");
+  return LEGACY_CACHE_PREFIXES.some((prefix) => displayName.startsWith(prefix));
+}
+
 /**
  * Reuse and extend explicit caches instead of creating a fresh paid resource on
  * every process start/refresh. Production caches only the value-model screener
  * prompt by default; QA/dev and the rare lite fallback are opt-in.
  */
-export async function ensureChatContextCaches() {
+export async function ensureChatContextCaches({ cleanupLegacy = false } = {}) {
   if (!chatContextCacheEnabled() || !chatContextCacheEnvironmentEnabled()) return;
   const keys = geminiKeys();
   if (!keys.length) return;
@@ -168,6 +182,20 @@ export async function ensureChatContextCaches() {
   } catch (error) {
     console.warn(`[geminiCache] ${error.message}; cache creation skipped to avoid duplicates`);
     return;
+  }
+  if (cleanupLegacy) {
+    // Old deployments created four 24-hour resources per process start. Delete
+    // only the known historical Orizin names so stopped containers cannot leave
+    // paid storage behind until TTL expiry. Startup deliberately delays this:
+    // a retiring container may still need its v3 cache during traffic handoff.
+    for (const legacy of existing.filter(isKnownLegacyCache)) {
+      try {
+        await deleteChatCache(apiKey, legacy);
+        console.log(`[geminiCache] removed legacy cache ${legacy.displayName}`);
+      } catch (e) {
+        console.warn(`[geminiCache] ${e.message}`);
+      }
+    }
   }
   for (const model of chatCacheModels()) {
     for (const view of chatCacheViews()) {
@@ -206,8 +234,16 @@ export function startChatContextCacheRefresh() {
   if (!chatContextCacheEnabled() || !chatContextCacheEnvironmentEnabled()) return;
   const ttlSec = cacheTtlSeconds();
   const refreshMs = Math.max(5 * 60_000, Math.floor(ttlSec * 0.8) * 1000);
+  // Recheck after the normal Railway rolling-deploy overlap. An old container
+  // can create its legacy caches after the new container's startup cleanup but
+  // before traffic is fully switched and the old process is terminated.
+  setTimeout(() => {
+    ensureChatContextCaches({ cleanupLegacy: true }).catch((e) => {
+      console.warn("[geminiCache] post-deploy cleanup failed:", e.message);
+    });
+  }, 10 * 60_000).unref?.();
   setInterval(() => {
-    ensureChatContextCaches().catch((e) => {
+    ensureChatContextCaches({ cleanupLegacy: true }).catch((e) => {
       console.warn("[geminiCache] refresh failed:", e.message);
     });
   }, refreshMs).unref?.();
