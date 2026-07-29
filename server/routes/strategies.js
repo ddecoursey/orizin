@@ -204,9 +204,16 @@ async function generateMetered(userId, options) {
     throw Object.assign(new Error(quota.message), { code: "ori_limit", scope: quota.scope });
   }
   try {
-    const result = await geminiGenerateJson(options);
-    await recordOriUsage(userId, { kind: "chat", usage: result.usage, model: result.model });
-    return result;
+    try {
+      const result = await geminiGenerateJson(options);
+      await recordOriUsage(userId, { kind: "chat", usage: result.usage, model: result.model });
+      return result;
+    } catch (error) {
+      if (error?.billableGeneration) {
+        await recordOriUsage(userId, { kind: "chat", generations: [error.billableGeneration] });
+      }
+      throw error;
+    }
   } finally {
     releaseOriQuota(quota.reservation);
   }

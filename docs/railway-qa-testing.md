@@ -38,6 +38,7 @@ described below to its actual name) and give it:
 - A Railway-provided domain, even if QA also has a custom domain. Railway uses
   that domain when it creates PR environments.
 - `APP_ENV=qa`.
+- `SCREENER_INTANGIBLES_ENABLED=false` so QA never runs autonomous Gemini Lite scoring.
 - `APP_URL` set to the QA origin.
 - A QA-only `AUTH_SECRET` and `FIRST_ADMIN_SETUP_TOKEN`, both different from
   production.

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  countTokens,
   estimateCostUsd,
   tokensFromUsage,
   costBreakdownFromTotals,
@@ -35,6 +36,38 @@ test('estimateCostUsd splits cached vs uncached input', () => {
   assert.equal(c.cachedTokens, 4_000);
   assert.ok(c.uncachedCostUsd > c.cachedCostUsd);
   assert.ok(c.outputCostUsd > 0);
+});
+
+test('countTokens wraps system instructions in a generateContentRequest', async () => {
+  const previousKey = process.env.GEMINI_API_KEY;
+  const previousBackup = process.env.GEMINI_API_KEY_BACKUP;
+  const realFetch = global.fetch;
+  let captured;
+  try {
+    process.env.GEMINI_API_KEY = 'test-key';
+    delete process.env.GEMINI_API_KEY_BACKUP;
+    global.fetch = async (_url, options) => {
+      captured = JSON.parse(options.body);
+      return new Response(JSON.stringify({ totalTokens: 42 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const total = await countTokens(valueModel(), {
+      systemInstruction: { parts: [{ text: 'system' }] },
+      contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+    });
+    assert.equal(total, 42);
+    assert.equal(captured.generateContentRequest.model, `models/${valueModel()}`);
+    assert.equal(captured.generateContentRequest.systemInstruction.parts[0].text, 'system');
+    assert.equal(captured.generateContentRequest.contents[0].parts[0].text, 'hello');
+  } finally {
+    global.fetch = realFetch;
+    if (previousKey == null) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = previousKey;
+    if (previousBackup == null) delete process.env.GEMINI_API_KEY_BACKUP;
+    else process.env.GEMINI_API_KEY_BACKUP = previousBackup;
+  }
 });
 
 test('frontier plan tokens cost more than flash chat tokens at same volume', () => {

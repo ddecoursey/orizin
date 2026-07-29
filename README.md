@@ -148,6 +148,12 @@ user-facing answer then returns to Ori's normal cached Gemini path. Calls share
 the app's `FMP_MAX_RPM` budget. Set `FMP_MCP_ENABLED=false` to disable live tool
 use without affecting the rest of FMP-backed stock data.
 
+Autonomous Flash-Lite screener-intangibles generation is disabled by default.
+Set `SCREENER_INTANGIBLES_ENABLED=true` only in production when deliberately
+budgeting for the hourly large-cap scoring sweep. QA/staging deployment labels
+override `NODE_ENV=production`, so they stay Lite-only and do not create paid
+context caches or run autonomous Gemini jobs.
+
 ## License
 
 MIT

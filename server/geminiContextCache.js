@@ -129,13 +129,26 @@ async function extendChatCache(apiKey, cache) {
   return res.json();
 }
 
-function matchingCache(caches, model, view) {
+async function deleteChatCache(apiKey, cache) {
+  const name = String(cache?.name || "");
+  if (!/^cachedContents\/[A-Za-z0-9_-]+$/.test(name)) {
+    throw new Error("refusing to delete invalid cache name");
+  }
+  const url = new URL(`${CACHE_URL}/${name.replace(/^cachedContents\//, "")}`);
+  url.searchParams.set("key", apiKey);
+  const res = await fetch(url, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`delete duplicate ${name} failed ${res.status}`);
+  }
+}
+
+function matchingCaches(caches, model, view) {
   const displayName = cacheDisplayName(model, view);
   return caches
     .filter((cache) =>
       cache?.displayName === displayName
       && String(cache?.model || "").replace(/^models\//, "") === model)
-    .sort((a, b) => Date.parse(b.expireTime || 0) - Date.parse(a.expireTime || 0))[0] || null;
+    .sort((a, b) => Date.parse(b.expireTime || 0) - Date.parse(a.expireTime || 0));
 }
 
 /**
@@ -159,7 +172,15 @@ export async function ensureChatContextCaches() {
   for (const model of chatCacheModels()) {
     for (const view of chatCacheViews()) {
       try {
-        const current = matchingCache(existing, model, view);
+        const matches = matchingCaches(existing, model, view);
+        const current = matches[0] || null;
+        // Simultaneous rolling-deploy processes can both list before either
+        // creates, leaving duplicate paid resources. Keep the newest exact v4
+        // model/view match and remove only its redundant siblings.
+        for (const duplicate of matches.slice(1)) {
+          await deleteChatCache(apiKey, duplicate);
+          console.log(`[geminiCache] removed duplicate ${cacheKey(model, view)} cache`);
+        }
         const data = current
           ? await extendChatCache(apiKey, current)
           : await createChatCache(apiKey, model, view);

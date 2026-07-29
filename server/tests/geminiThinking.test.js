@@ -7,7 +7,9 @@ import {
   liteThinkingLevel,
   geminiGenerateJson,
   isProductionEnv,
+  backgroundLiteIntangiblesEnabled,
 } from "../geminiJson.js";
+import { chatModelsForRequest } from "../routes/chat.js";
 
 // Drive geminiGenerateJson with a stubbed fetch and return the captured outgoing
 // request body, so we can assert what the structured (Game Plan / trickle) path
@@ -110,17 +112,77 @@ test("per-journey level getters default minimal / medium / minimal and honor env
 });
 
 test("Railway preview environments do not silently enable paid Gemini tiers", () => {
-  const keys = ["NODE_ENV", "APP_ENV", "PAYPAL_ENV", "RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME"];
+  const keys = [
+    "NODE_ENV",
+    "APP_ENV",
+    "PAYPAL_ENV",
+    "RAILWAY_ENVIRONMENT",
+    "RAILWAY_ENVIRONMENT_NAME",
+    "GEMINI_ALLOW_PAID_NONPROD",
+    "SCREENER_INTANGIBLES_ENABLED",
+  ];
   const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     keys.forEach((key) => delete process.env[key]);
+    process.env.NODE_ENV = "production";
+    process.env.APP_ENV = "qa";
+    assert.equal(isProductionEnv(), false);
+    assert.deepEqual(chatModelsForRequest(["gemini-3.5-flash"]), ["gemini-3.1-flash-lite"]);
+
+    delete process.env.APP_ENV;
     process.env.RAILWAY_ENVIRONMENT = "preview-environment-id";
     process.env.RAILWAY_ENVIRONMENT_NAME = "staging";
     assert.equal(isProductionEnv(), false);
 
     process.env.RAILWAY_ENVIRONMENT_NAME = "production";
     assert.equal(isProductionEnv(), true);
+    assert.deepEqual(chatModelsForRequest(["gemini-3.5-flash"]), ["gemini-3.5-flash"]);
+
+    delete process.env.RAILWAY_ENVIRONMENT_NAME;
+    process.env.APP_ENV = "production";
+    assert.equal(backgroundLiteIntangiblesEnabled(), false);
+    process.env.SCREENER_INTANGIBLES_ENABLED = "true";
+    assert.equal(backgroundLiteIntangiblesEnabled(), true);
+    process.env.APP_ENV = "qa";
+    assert.equal(backgroundLiteIntangiblesEnabled(), false);
   } finally {
+    keys.forEach((key) => (prev[key] == null ? delete process.env[key] : (process.env[key] = prev[key])));
+  }
+});
+
+test("malformed structured output exposes its already-billable generation", async () => {
+  const keys = ["GEMINI_API_KEY", "GEMINI_API_KEY_BACKUP", "GEMINI_ALLOW_PAID_NONPROD"];
+  const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  const realFetch = global.fetch;
+  try {
+    process.env.GEMINI_API_KEY = "test-key";
+    delete process.env.GEMINI_API_KEY_BACKUP;
+    process.env.GEMINI_ALLOW_PAID_NONPROD = "1";
+    global.fetch = async () => ({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: '{"broken":' }] } }],
+        usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 4 },
+      }),
+    });
+
+    await assert.rejects(
+      geminiGenerateJson({
+        system: "system",
+        prompt: "prompt",
+        schema: { type: "OBJECT" },
+        models: ["gemini-3.5-flash"],
+      }),
+      (error) => {
+        assert.equal(error.code, "bad_json");
+        assert.equal(error.billableGeneration.model, "gemini-3.5-flash");
+        assert.equal(error.billableGeneration.usage.promptTokenCount, 20);
+        assert.equal(error.billableGeneration.fallback.outputText, '{"broken":');
+        return true;
+      },
+    );
+  } finally {
+    global.fetch = realFetch;
     keys.forEach((key) => (prev[key] == null ? delete process.env[key] : (process.env[key] = prev[key])));
   }
 });

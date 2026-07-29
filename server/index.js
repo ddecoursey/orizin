@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import helmet from 'helmet';
 import stocksRouter, { getDetailCacheStats, generateLiteIntangibles } from './routes/stocks.js';
-import { isProductionEnv } from './geminiJson.js';
+import { backgroundLiteIntangiblesEnabled } from './geminiJson.js';
 import chatRouter from './routes/chat.js';
 import usersRouter from './routes/users.js';
 import adminRouter from './routes/admin.js';
@@ -928,8 +928,9 @@ server = app.listen(PORT, '0.0.0.0', () => {
     try { db.pruneExpiredAuthSessions(); } catch (e) { console.error('[auth] session prune failed:', e.message); }
   }, 60 * 60 * 1000).unref?.();
 
-  // Shared baseline for screener intangibles: a deliberately SLOW, CHEAP, lite-only
-  // trickle. Each hourly tick generates a lite review for just the next
+  // Optional baseline for screener intangibles: a deliberately SLOW, CHEAP,
+  // lite-only trickle. It is OFF unless SCREENER_INTANGIBLES_ENABLED=true.
+  // Each hourly tick generates a lite review for just the next
   // SCREENER_INTANGIBLES_BATCH (default 1) large-cap name that doesn't already
   // have one — working down from the biggest above the $10B floor
   // (SCREENER_INTANGIBLES_MIN_MCAP, stocks only, no ETFs). It is CACHE-AWARE: a name
@@ -941,9 +942,9 @@ server = app.listen(PORT, '0.0.0.0', () => {
   // "too busy". Coverage ≈ BATCH × (24 / TICK_hours) names/day (default ≈24/day);
   // bump BATCH only if you want the first sweep to finish sooner.
   //
-  // Production-only: dev/staging must never spend on this background job.
-  const trickleEnabled =
-    process.env.SCREENER_INTANGIBLES_ENABLED !== 'false' && isProductionEnv();
+  // Production-only and explicit opt-in: dev/staging must never spend on this
+  // background job, even when NODE_ENV=production.
+  const trickleEnabled = backgroundLiteIntangiblesEnabled();
   if (trickleEnabled) {
     const TICK_MS = Number(process.env.SCREENER_INTANGIBLES_TICK_MS) || 60 * 60 * 1000; // hourly
     const BATCH = Number(process.env.SCREENER_INTANGIBLES_BATCH) || 1; // names generated per tick

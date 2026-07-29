@@ -682,19 +682,26 @@ function shouldFailover(status, bodyText) {
   return false;
 }
 
-// Walk the (key, model) ladder: value→lite on the primary key, then value→lite on
-// the backup key, failing over on each "too busy"/unavailable response. One attempt
-// per combo (no hammering the same model). Resolves to { res, model } on success,
-// or { friendly, status, body, timedOut } when every combo failed.
+// Resolve the model list with a hard non-production guard. Callers may request a
+// production-only model (for example final chat's value-only path), but QA must
+// still collapse that request to Lite.
+export function chatModelsForRequest(requestedModels) {
+  if (!paidTiersAllowed()) return [liteModel()];
+  if (Array.isArray(requestedModels) && requestedModels.length) {
+    return [...new Set(requestedModels)];
+  }
+  return [valueModel(), liteModel()];
+}
+
+// Walk the selected model(s) on the primary key, then the backup key, failing
+// over on each "too busy"/unavailable response. One attempt per combo (no
+// hammering the same model). Resolves to { res, model } on success, or a bounded
+// friendly failure when every combo failed.
 async function fetchGeminiWithRetry({ keys, buildBody, send, signal, models: requestedModels }) {
   let lastStatus = 0;
   let lastBody = "";
   let sawTimeout = false;
-  // Non-prod runs lite only so testing never spends on flash.
-  const defaultModels = paidTiersAllowed() ? [valueModel(), liteModel()] : [liteModel()];
-  const models = Array.isArray(requestedModels) && requestedModels.length
-    ? [...new Set(requestedModels)]
-    : defaultModels;
+  const models = chatModelsForRequest(requestedModels);
   const fetchTimeoutMs = chatFetchTimeoutMs();
 
   for (const apiKey of keys) {
@@ -868,30 +875,32 @@ router.post("/chat", chatLimiter, async (req, res) => {
       });
       if (planningAttempt.aborted || clientGone) return;
       if (planningAttempt.res) {
+        const planningBody = buildFmpPlanningGeminiBody(
+          planningAttempt.model,
+          planningContext,
+          fmpToolset.functionDeclarations,
+        );
+        // An HTTP-successful stream can still disconnect before its final usage
+        // frame. Reserve the ledger entry now so the fallback token counter can
+        // account for the billable input even when stream reading throws.
+        const planningGeneration = {
+          model: planningAttempt.model,
+          usage: null,
+          fallback: {
+            contents: planningBody.contents,
+            systemInstruction: planningBody.system_instruction,
+            outputText: "",
+          },
+        };
+        generations.push(planningGeneration);
         const planned = await readGeminiStream(planningAttempt.res, {
           timeoutMs: Math.min(chatStreamTimeoutMs(), 45_000),
           isCancelled: () => clientGone,
           onReader: (activeReader) => { reader = activeReader; },
         });
         reader = null;
-        generations.push({
-          model: planningAttempt.model,
-          usage: planned.usage,
-          fallback: {
-            ...(() => {
-              const body = buildFmpPlanningGeminiBody(
-                planningAttempt.model,
-                planningContext,
-                fmpToolset.functionDeclarations,
-              );
-              return {
-                contents: body.contents,
-                systemInstruction: body.system_instruction,
-                outputText: planned.text,
-              };
-            })(),
-          },
-        });
+        planningGeneration.usage = planned.usage;
+        planningGeneration.fallback.outputText = planned.text;
         const calls = planned.functionCalls.slice(0, maxToolCalls);
         if (!planned.timedOut && calls.length) {
           const liveRows = [];
@@ -952,6 +961,23 @@ ${JSON.stringify(liveRows).slice(0, 6_000)}`;
 
     usedModel = finalAttempt.model;
     send("model", { model: usedModel, tier: modelTier(usedModel) });
+    const finalBody = buildChatGeminiBody(
+      usedModel,
+      dynamicContext,
+      geminiContents,
+      context?.view,
+    );
+    const finalGeneration = {
+      model: usedModel,
+      usage: null,
+      fallback: {
+        contents: finalBody.contents,
+        systemInstruction: finalBody.system_instruction,
+        cachedContent: finalBody.cachedContent,
+        outputText: "",
+      },
+    };
+    generations.push(finalGeneration);
     const streamed = await readGeminiStream(finalAttempt.res, {
       timeoutMs: chatStreamTimeoutMs(),
       isCancelled: () => clientGone,
@@ -961,22 +987,8 @@ ${JSON.stringify(liveRows).slice(0, 6_000)}`;
     });
     reader = null;
     fullResponse = streamed.text;
-    const finalBody = buildChatGeminiBody(
-      usedModel,
-      dynamicContext,
-      geminiContents,
-      context?.view,
-    );
-    generations.push({
-      model: usedModel,
-      usage: streamed.usage,
-      fallback: {
-        contents: finalBody.contents,
-        systemInstruction: finalBody.system_instruction,
-        cachedContent: finalBody.cachedContent,
-        outputText: fullResponse,
-      },
-    });
+    finalGeneration.usage = streamed.usage;
+    finalGeneration.fallback.outputText = fullResponse;
     if (clientGone) return;
     if (streamed.timedOut) {
       send("error", {

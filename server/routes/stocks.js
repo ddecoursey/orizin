@@ -1395,6 +1395,7 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
       // Capture usage from the generator closure. didGenerate guards against a
       // coalesced waiter (which shares an in-flight promise) double-counting.
       let genUsage = null;
+      let genModel = null;
       let didGenerate = false;
       const data = await cachedDetail(`gameplan:${symbol}`, gamePlanFrontierTtlMs(), async () => {
         // Profile/news are enrichment for the prompt, not hard requirements — a
@@ -1419,19 +1420,26 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
           ...ladder,
         });
         genUsage = usage;
+        genModel = model;
         didGenerate = true;
         const sane = sanitizeGamePlan(raw);
         if (sane) { sane.model = model; sane.modelTier = modelTier(model); }
         return sane;
       }, false);
       if (didGenerate) {
-        await recordOriUsage(req.userId, { kind: "plan", usage: genUsage, model: data?.model });
+        await recordOriUsage(req.userId, { kind: "plan", usage: genUsage, model: genModel });
       }
       res.json({ symbol, ori: data, tier: data?.modelTier || "frontier" });
     } finally {
       releaseOriQuota(quota.reservation);
     }
   } catch (e) {
+    // A successful Gemini HTTP response can still contain empty/malformed JSON.
+    // Google has already billed that generation, so keep the user ledger and
+    // dollar guard honest even though the feature response fails.
+    if (e?.billableGeneration) {
+      await recordOriUsage(req.userId, { kind: "plan", generations: [e.billableGeneration] });
+    }
     if (e.code === "no_key") return res.status(503).json({ error: "Ori is not configured on this server." });
     if (e.code === "overloaded") return res.status(503).json({ error: "Ori is busy right now — try again in a moment." });
     if (e.code === "bad_json") return res.status(502).json({ error: "Ori couldn't produce a Game Plan — try again." });

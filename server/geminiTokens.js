@@ -110,10 +110,29 @@ export async function countTokens(model, body) {
   const key = pickGeminiKey();
   if (!key || !model) return 0;
   try {
+    // countTokens accepts bare `contents`, but steering fields must be nested
+    // inside a GenerateContentRequest. Sending systemInstruction or
+    // cachedContent at the root returns 400 and would silently undercount a
+    // billable generation when usageMetadata is unavailable.
+    const hasGenerateConfig = !!(
+      body?.systemInstruction
+      || body?.cachedContent
+      || body?.generationConfig
+      || body?.tools
+      || body?.toolConfig
+    );
+    const payload = hasGenerateConfig
+      ? {
+          generateContentRequest: {
+            model: `models/${model}`,
+            ...body,
+          },
+        }
+      : body;
     const res = await fetch(`${COUNT_URL(model)}?key=${encodeURIComponent(key)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
     if (!res.ok) return 0;
     const data = await res.json();

@@ -211,3 +211,59 @@ test("cache bootstrap reuses and extends a matching resource instead of creating
     }
   }
 });
+
+test("cache bootstrap removes duplicate current-version resources", async () => {
+  const previous = {
+    APP_ENV: process.env.APP_ENV,
+    GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+    GEMINI_CONTEXT_CACHE_ENABLED: process.env.GEMINI_CONTEXT_CACHE_ENABLED,
+    GEMINI_CONTEXT_CACHE_VIEWS: process.env.GEMINI_CONTEXT_CACHE_VIEWS,
+  };
+  const originalFetch = global.fetch;
+  const calls = [];
+  try {
+    process.env.APP_ENV = "production";
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.GEMINI_CONTEXT_CACHE_ENABLED = "true";
+    process.env.GEMINI_CONTEXT_CACHE_VIEWS = "screener";
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), method: options.method || "GET" });
+      if (!options.method) {
+        const displayName = `orizin-ori-chat-static-v4-${valueModel()}`;
+        return new Response(JSON.stringify({
+          cachedContents: [
+            {
+              name: "cachedContents/newest",
+              model: `models/${valueModel()}`,
+              displayName,
+              expireTime: "2026-07-31T00:00:00Z",
+            },
+            {
+              name: "cachedContents/duplicate",
+              model: `models/${valueModel()}`,
+              displayName,
+              expireTime: "2026-07-30T00:00:00Z",
+            },
+          ],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (options.method === "DELETE") return new Response(null, { status: 204 });
+      assert.equal(options.method, "PATCH");
+      return new Response(JSON.stringify({
+        name: "cachedContents/newest",
+        expireTime: "2026-08-01T00:00:00Z",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    };
+    await ensureChatContextCaches();
+    assert.deepEqual(calls.map((call) => call.method), ["GET", "DELETE", "PATCH"]);
+    assert.match(calls[1].url, /cachedContents\/duplicate/);
+    assert.equal(getChatContextCacheName(valueModel()), "cachedContents/newest");
+  } finally {
+    global.fetch = originalFetch;
+    _resetChatContextCachesForTests();
+    for (const [key, value] of Object.entries(previous)) {
+      if (value == null) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
