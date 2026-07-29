@@ -925,6 +925,10 @@ ${JSON.stringify(liveRows).slice(0, 6_000)}`;
     // so it can reference the explicit static cache.
     const finalAttempt = await fetchGeminiWithRetry({
       keys,
+      // Keep the user-facing turn on the value model. Falling through to Lite
+      // would resend the full dynamic prompt without a Lite context cache and
+      // make one chat action appear as spend on both model tiers.
+      models: [valueModel()],
       buildBody: (model) => buildChatGeminiBody(
         model,
         dynamicContext,
