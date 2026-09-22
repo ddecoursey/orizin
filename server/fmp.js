@@ -397,6 +397,27 @@ export async function fetchScreenerStocks({
   }
 }
 
+// ── Universe price sweep ────────────────────────────────────────────────────
+// Batch quote endpoints are plan-restricted (402), but the paged company
+// screener carries price / volume / market cap inline. One pass over the US
+// listings (stocks AND ETFs, no cap floor) costs ~1 call per 1,000 symbols
+// instead of one /quote call per symbol, so the whole universe can be kept
+// current through the session. Errors propagate so the caller can report them.
+export async function fetchScreenerQuotes({ exchange = "NYSE,NASDAQ,AMEX", limit = 30000 } = {}) {
+  const params = new URLSearchParams();
+  if (exchange) params.set("exchange", exchange);
+  params.set("isActivelyTrading", "true");
+  const data = await fetchScreenerPages(params, limit, "price sweep");
+  return data
+    .map((s) => ({
+      symbol: s?.symbol,
+      price: n(s?.price),
+      volume: n(s?.volume),
+      mcap: n(s?.marketCap ?? s?.mktCap),
+    }))
+    .filter((q) => q.symbol && q.price != null && q.price > 0);
+}
+
 // ── Stable list endpoints (preferred for complete universe: all stocks + all ETFs, no mcap floor) ─
 export async function fetchStockListStable() {
   const url = `${BASE}/stock-list?apikey=${KEY()}`;
@@ -695,6 +716,35 @@ export async function fetchKeyMetrics(symbol, opts = {}) {
 }
 
 // ── Ratios TTM (gross/op margin, D/E, EV/GP) ─────────────────────────────
+// key-metrics-ttm only reports EV-relative yields (earnings / FCF yield on EV,
+// EV/sales), so the margins and P/S the screener shows are derived from them
+// with the current market cap. Returns a copy ready for saveKm — the private
+// _ev / _haveEv hints are stripped — and never mutates the input (a cached
+// response may be reused). The ONE place this math lives; every gather path
+// (manual enrich, background job, add-ticker, Deep Research sync) uses it.
+export function deriveKeyMetrics(km, mcap) {
+  if (!km) return null;
+  const out = { ...km };
+  if (out._haveEv && out._ev && mcap) {
+    const ev = out._ev;
+    if (out.earnings_yield != null && out.ev_sales != null) out.net_margin = (mcap * out.earnings_yield * out.ev_sales) / ev;
+    if (out.fcf_yield != null && out.ev_sales != null) out.fcf_margin = (mcap * out.fcf_yield * out.ev_sales) / ev;
+    if (out.ev_sales != null) out.ps = (mcap * out.ev_sales) / ev;
+  }
+  delete out._ev;
+  delete out._haveEv;
+  return out;
+}
+
+// ratios-ttm has gross margin but not EV/gross profit; derive it from the row's
+// EV/sales. Returns a copy ready for saveRat.
+export function deriveRatios(rat, evSales) {
+  if (!rat) return null;
+  const out = { ...rat };
+  if (evSales != null && out.gross_margin != null && out.gross_margin > 0) out.ev_gp = evSales / out.gross_margin;
+  return out;
+}
+
 export async function fetchRatios(symbol, opts = {}) {
   const url = `${BASE}/ratios-ttm?symbol=${symbol}&apikey=${KEY()}`;
   try {

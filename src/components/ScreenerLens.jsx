@@ -62,7 +62,7 @@ export default function ScreenerLens({ persona, setPersona, risk, setRisk, horiz
   }, [open]);
 
   return (
-    <div className="relative shrink-0" ref={ref}>
+    <div className="relative shrink-0" ref={ref} data-tour="lens">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

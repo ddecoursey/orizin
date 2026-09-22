@@ -19,22 +19,49 @@ import StockTable from "./components/StockTable.jsx";
 import ScorecardGrid from "./components/ScorecardGrid.jsx";
 import ProgressBar from "./components/ProgressBar.jsx";
 import ChatPanel from "./components/ChatPanel.jsx";
+import OriEmblem from "./components/OriEmblem.jsx";
 
 // Lazy: the landing page (and framer-motion with it) is only downloaded by
 // signed-out visitors — signed-in users go straight to the app bundle.
 const HomePage = lazy(() => import("./pages/HomePage.jsx"));
-const StrategiesPage = lazy(() => import("./pages/StrategiesPage.jsx"));
-import UsersModal from "./components/UsersModal.jsx";
-import StockDetailModal from "./components/StockDetailModal.jsx";
-import CompareModal from "./components/CompareModal.jsx";
-import PortfolioGoalsPage from "./pages/PortfolioGoalsPage.jsx";
-import DeepResearchPage from "./components/DeepResearchPage.jsx";
+// Every page and modal that isn't on screen at first paint is its own chunk, so
+// the screener renders from a smaller main bundle. They're prefetched once the
+// app is idle (see prefetchAppChunks) so opening one is still instant.
+const loadStrategies = () => import("./pages/StrategiesPage.jsx");
+const loadDeepResearch = () => import("./components/DeepResearchPage.jsx");
+const loadPortfolio = () => import("./pages/PortfolioGoalsPage.jsx");
+const loadStockDetail = () => import("./components/StockDetailModal.jsx");
+const loadCompare = () => import("./components/CompareModal.jsx");
+const loadUsers = () => import("./components/UsersModal.jsx");
+const loadUpgrade = () => import("./components/UpgradeModal.jsx");
+const loadAddTicker = () => import("./components/AddTickerModal.jsx");
+const StrategiesPage = lazy(loadStrategies);
+const DeepResearchPage = lazy(loadDeepResearch);
+const PortfolioGoalsPage = lazy(loadPortfolio);
+const StockDetailModal = lazy(loadStockDetail);
+const CompareModal = lazy(loadCompare);
+const UsersModal = lazy(loadUsers);
+const UpgradeModal = lazy(loadUpgrade);
+const AddTickerModal = lazy(loadAddTicker);
+let chunksPrefetched = false;
+function prefetchAppChunks() {
+  if (chunksPrefetched) return;
+  chunksPrefetched = true;
+  for (const load of [loadDeepResearch, loadStockDetail, loadPortfolio, loadStrategies, loadCompare, loadUsers, loadUpgrade, loadAddTicker]) {
+    load().catch(() => { chunksPrefetched = false; });
+  }
+}
 import Footer from "./components/Footer.jsx";
-import UpgradeModal from "./components/UpgradeModal.jsx";
-import AddTickerModal from "./components/AddTickerModal.jsx";
+
+// Quiet placeholder while a page chunk loads (usually already prefetched).
+function PageFallback({ label = "Loading…" }) {
+  return <div className="flex h-full flex-1 items-center justify-center bg-gray-950 text-xs text-gray-500">{label}</div>;
+}
+import TourOverlay, { TourWelcome } from "./components/TourOverlay.jsx";
+import { useTour } from "./hooks/useTour.js";
+import { PAGE_TOURS } from "./lib/tours.jsx";
 import { discardPendingUserSettings, fetchUserSettings, flushUserSettings, patchUserSettings } from "./lib/userStore.js";
-import { computeFit } from "./lib/fitScore.js";
-import { computeVerdict } from "./lib/verdict.js";
+import { buildOriStockContext } from "./lib/oriContext.js";
 import { parseSessionPlan, hasOriAccess } from "./lib/ranks.js";
 
 
@@ -369,11 +396,27 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
   // Hydrate theme + sidebar from the server (follows the account across
   // devices). If absent server-side, migrate the current local values up once.
+  // Guided-tour progress from the settings blob: null until loaded (and left
+  // null if the read fails, so the first-run prompt never misfires).
+  const [tourPersisted, setTourPersisted] = useState(null);
+  const [tourReturningUser, setTourReturningUser] = useState(false);
+  // Only write tour progress back once the stored copy has actually loaded —
+  // otherwise a failed read followed by finishing a tour would overwrite the
+  // account's saved progress with an empty record.
+  const tourLoadedRef = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const server = await fetchUserSettings();
+      const loaded = await fetchUserSettings({ nullOnError: true });
       if (cancelled) return;
+      const server = loaded || {};
+      if (loaded) {
+        tourLoadedRef.current = true;
+        setTourPersisted(loaded.tour && typeof loaded.tour === "object" ? loaded.tour : {});
+        // Anything besides tour progress saved → an account from before tours.
+        setTourReturningUser(Object.keys(loaded).some((k) => k !== "tour"));
+      }
       const patch = {};
       if (typeof server.theme === "string") setTheme(server.theme);
       else patch.theme = theme;
@@ -415,6 +458,14 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
   useEffect(() => {
     document.title = 'Orizin';
+  }, []);
+
+  // Warm the lazy page/modal chunks once the first screen has painted.
+  useEffect(() => {
+    const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1200));
+    const cancel = window.cancelIdleCallback || clearTimeout;
+    const id = idle(() => prefetchAppChunks());
+    return () => cancel(id);
   }, []);
 
   // Use layout effect so the .light class is applied synchronously before the browser paints.
@@ -487,6 +538,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     deleteTab,
     loadStocks,
     refreshWatchlistQuotes,
+    syncSymbol,
     enrichAll,
     regatherSymbol,
     enrichLoading,
@@ -553,60 +605,66 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     return stale;
   }, [watchlists.watchlist, wlAlerts.snapshots, stockBySymbol, watchlistNow]);
 
+  // refreshWatchlistQuotes is a fresh function every render; depending on it
+  // directly re-ran this effect (and re-POSTed the quotes) on EVERY App render.
+  // Read it through a ref so only a watchlist change restarts the poll.
+  const refreshWatchlistQuotesRef = useRef(refreshWatchlistQuotes);
   useEffect(() => {
-    if (!watchlistSymbolsKey || !refreshWatchlistQuotes) return;
+    refreshWatchlistQuotesRef.current = refreshWatchlistQuotes;
+  }, [refreshWatchlistQuotes]);
+  useEffect(() => {
+    if (!watchlistSymbolsKey) return;
     const symbols = watchlistSymbolsKey.split(",").filter(Boolean);
     if (!symbols.length) return;
-    refreshWatchlistQuotes(symbols);
-    const id = setInterval(() => refreshWatchlistQuotes(symbols), 3 * 60 * 1000);
+    refreshWatchlistQuotesRef.current?.(symbols);
+    const id = setInterval(() => refreshWatchlistQuotesRef.current?.(symbols), 3 * 60 * 1000);
     return () => clearInterval(id);
-  }, [watchlistSymbolsKey, refreshWatchlistQuotes]);
+  }, [watchlistSymbolsKey]);
   // fitCtx (portfolio sectors, held symbols, goal/thesis keywords) is built inside
   // useScreener so the screener Conviction can fold in personal Fit; we reuse the
   // SAME context here for Deep Research + Ori chat so all three stay consistent.
-  // Bumped after a single-symbol re-gather so the Deep Research detail panes
-  // re-fetch the freshly gathered data. Reset when the DR symbol changes so Ori
-  // waits for the new symbol's auto re-gather before firing.
+  // Bumped only after an explicit (admin) Re-gather so the Deep Research detail
+  // panes re-read the freshly gathered caches. Opening a symbol does NOT bump
+  // it — the old open flow bumped it straight away, so every panel fetched
+  // twice and the ~34 requests tripped the per-minute limiter, which is what
+  // made Ori's Game Plan / "Refresh Ori" fail on the first try.
   const [detailReloadToken, setDetailReloadToken] = useState(0);
   useEffect(() => {
     setDetailReloadToken(0);
   }, [researchSymbol]);
 
-  // Deep Research data load: admins re-gather from FMP (shared SQLite for all users);
-  // everyone else reads the shared cache only — background job keeps it fresh.
-  const regatherRef = useRef(regatherSymbol);
+  // Opening a stock in Deep Research syncs it with FMP for EVERY account: a
+  // live quote plus key metrics / ratios when they are stale (the server
+  // decides what is due and coalesces concurrent opens). The heavy full
+  // re-gather stays an explicit admin action on the toolbar.
+  // Symbols outside the shared universe come back as a read-only row, kept
+  // here so the Game Plan can still be computed for them.
+  const [researchExtraRow, setResearchExtraRow] = useState(null);
+  const [researchSyncing, setResearchSyncing] = useState(false);
+  const syncSymbolRef = useRef(syncSymbol);
   const researchSymbolRef = useRef(researchSymbol);
   useEffect(() => {
-    regatherRef.current = regatherSymbol;
-  }, [regatherSymbol]);
+    syncSymbolRef.current = syncSymbol;
+  }, [syncSymbol]);
   useEffect(() => {
     researchSymbolRef.current = researchSymbol;
   }, [researchSymbol]);
-  const lastDrOpen = useRef({ view: null, symbol: null });
+  const lastDrOpen = useRef(null);
   useEffect(() => {
     if (currentView !== "deep-research") {
-      lastDrOpen.current = { view: null, symbol: null };
+      lastDrOpen.current = null;
       return;
     }
-    if (!researchSymbol) return;
-    if (
-      lastDrOpen.current.view === currentView &&
-      lastDrOpen.current.symbol === researchSymbol
-    ) {
-      return;
-    }
-    lastDrOpen.current = { view: currentView, symbol: researchSymbol };
+    if (!researchSymbol || lastDrOpen.current === researchSymbol) return;
+    lastDrOpen.current = researchSymbol;
     const requested = researchSymbol;
-    if (isAdmin) {
-      regatherRef.current(requested, () => {
-        if (researchSymbolRef.current === requested) {
-          setDetailReloadToken((t) => t + 1);
-        }
-      });
-    } else {
-      setDetailReloadToken(1);
-    }
-  }, [currentView, researchSymbol, isAdmin]);
+    setResearchSyncing(true);
+    syncSymbolRef.current(requested).then((result) => {
+      if (researchSymbolRef.current !== requested) return;
+      setResearchSyncing(false);
+      setResearchExtraRow(result && !result.inUniverse && result.row ? result.row : null);
+    });
+  }, [currentView, researchSymbol]);
 
   // Debounce stock search input for much better perf with large universes (tens of thousands of symbols).
   // Input feels instant; expensive re-filtering (applyFilters + memos + virtual list) only on pause.
@@ -674,6 +732,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     currentView === "deep-research" && researchSymbol
       ? filtered.find((r) => r.symbol === researchSymbol) ||
         stocks.find((r) => r.symbol === researchSymbol) ||
+        (researchExtraRow?.symbol === researchSymbol ? researchExtraRow : null) ||
         { symbol: researchSymbol }
       : null;
   const researchDetail = useStockDetail(
@@ -716,51 +775,14 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     });
   }
 
-  // Derive price performance and RSI trend for the open stock from the data we
-  // already fetched for the chart — gives Ori momentum/timing context for free.
-  const detailFit = detailRow ? computeFit(detailRow, fitCtx) : null;
-  const activeStock = detailRow
-    ? {
-        ...detailRow,
-        profile: detail.profile,
-        ratings: detail.ratings,
-        grades: detail.grades,
-        aiData: detail.aiData,
-        insider: detail.insider,
-        news: detail.news || [],
-        latestRsi: detail.rsi?.length ? detail.rsi[detail.rsi.length - 1].rsi : null,
-        performance: pricePerformance(detail.points),
-        rsiTrend: rsiTrend(detail.rsi),
-        technicals: detail.technicals,
-        earnings: detail.earnings,
-        smartMoney: detail.smartMoney,
-        fit: detailFit,
-        verdict: computeVerdict(detailRow, detail, detailFit, { risk, weights: pillarWeights }),
-      }
-    : null;
+  // Every stock handed to Ori is built by the same helper (lib/oriContext.js):
+  // row + fetched detail + momentum + personal Fit + the Game Plan verdict.
+  const oriLens = { risk, weights: pillarWeights };
+  const activeStock = buildOriStockContext(detailRow, detail, fitCtx, oriLens);
 
-  // The on-screen Deep Research stock, with full detail, framed exactly like
-  // activeStock so Ori treats it as the thing the user is currently studying.
-  const researchFit = researchRow ? computeFit(researchRow, fitCtx) : null;
-  const researchStock = researchRow
-    ? {
-        ...researchRow,
-        profile: researchDetail.profile,
-        ratings: researchDetail.ratings,
-        grades: researchDetail.grades,
-        aiData: researchDetail.aiData,
-        insider: researchDetail.insider,
-        news: researchDetail.news || [],
-        latestRsi: researchDetail.rsi?.length ? researchDetail.rsi[researchDetail.rsi.length - 1].rsi : null,
-        performance: pricePerformance(researchDetail.points),
-        rsiTrend: rsiTrend(researchDetail.rsi),
-        technicals: researchDetail.technicals,
-        earnings: researchDetail.earnings,
-        smartMoney: researchDetail.smartMoney,
-        fit: researchFit,
-        verdict: computeVerdict(researchRow, researchDetail, researchFit, { risk, weights: pillarWeights }),
-      }
-    : null;
+  // The on-screen Deep Research stock, framed exactly like activeStock so Ori
+  // treats it as the thing the user is currently studying.
+  const researchStock = buildOriStockContext(researchRow, researchDetail, fitCtx, oriLens);
 
   // Pinned screener rows (per-tab) — separate from watchlists used for monitoring.
   const activeScreenerName = tabs.find((t) => t.id === activeTab)?.name || null;
@@ -774,50 +796,12 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
   const focusRow1 = chatFocusSym1
     ? filtered.find((r) => r.symbol === chatFocusSym1) || stocks.find((r) => r.symbol === chatFocusSym1)
     : null;
-  const focus1Fit = focusRow1 ? computeFit(focusRow1, fitCtx) : null;
-  const focusStock1 = focusRow1
-    ? {
-        ...focusRow1,
-        profile: chatFocusDetail1.profile,
-        ratings: chatFocusDetail1.ratings,
-        grades: chatFocusDetail1.grades,
-        aiData: chatFocusDetail1.aiData,
-        insider: chatFocusDetail1.insider,
-        news: chatFocusDetail1.news || [],
-        latestRsi: chatFocusDetail1.rsi?.length ? chatFocusDetail1.rsi[chatFocusDetail1.rsi.length - 1].rsi : null,
-        performance: pricePerformance(chatFocusDetail1.points),
-        rsiTrend: rsiTrend(chatFocusDetail1.rsi),
-        technicals: chatFocusDetail1.technicals,
-        earnings: chatFocusDetail1.earnings,
-        smartMoney: chatFocusDetail1.smartMoney,
-        fit: focus1Fit,
-        verdict: computeVerdict(focusRow1, chatFocusDetail1, focus1Fit, { risk, weights: pillarWeights }),
-      }
-    : null;
+  const focusStock1 = buildOriStockContext(focusRow1, chatFocusDetail1, fitCtx, oriLens);
 
   const focusRow2 = chatFocusSym2
     ? filtered.find((r) => r.symbol === chatFocusSym2) || stocks.find((r) => r.symbol === chatFocusSym2)
     : null;
-  const focus2Fit = focusRow2 ? computeFit(focusRow2, fitCtx) : null;
-  const focusStock2 = focusRow2
-    ? {
-        ...focusRow2,
-        profile: chatFocusDetail2.profile,
-        ratings: chatFocusDetail2.ratings,
-        grades: chatFocusDetail2.grades,
-        aiData: chatFocusDetail2.aiData,
-        insider: chatFocusDetail2.insider,
-        news: chatFocusDetail2.news || [],
-        latestRsi: chatFocusDetail2.rsi?.length ? chatFocusDetail2.rsi[chatFocusDetail2.rsi.length - 1].rsi : null,
-        performance: pricePerformance(chatFocusDetail2.points),
-        rsiTrend: rsiTrend(chatFocusDetail2.rsi),
-        technicals: chatFocusDetail2.technicals,
-        earnings: chatFocusDetail2.earnings,
-        smartMoney: chatFocusDetail2.smartMoney,
-        fit: focus2Fit,
-        verdict: computeVerdict(focusRow2, chatFocusDetail2, focus2Fit, { risk, weights: pillarWeights }),
-      }
-    : null;
+  const focusStock2 = buildOriStockContext(focusRow2, chatFocusDetail2, fitCtx, oriLens);
 
   const chat = useChat(filtered, filters, applyRecommendation, currentView === "deep-research" ? (researchStock || activeStock) : activeStock, {
     // Which main view the user is on ('screener' | 'portfolio-goals') so Ori can
@@ -896,8 +880,62 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
     }
   };
 
-  // Ori launch: just open the chat. The helmet's orbit-out is driven by the
-  // AnimatePresence exit on the floating button (mirror image of orbit-in).
+  // ── Guided tours ─────────────────────────────────────────────────────────
+  // Steps drive the app through these actions (navigate, open a panel, pick a
+  // demo symbol). Anything a tour opens on the user's behalf is closed again
+  // when the tour ends, so it never leaves their saved layout changed.
+  const tourOpenedRef = useRef({ sidebar: false, chat: false });
+  const tourDemoSymbol = useMemo(
+    () => (stocks.find((r) => !r.is_etf && r.has_km) || stocks[0])?.symbol || null,
+    [stocks],
+  );
+  const tour = useTour({
+    persisted: tourPersisted,
+    onPersist: (blob) => {
+      setTourPersisted(blob);
+      if (tourLoadedRef.current) patchUserSettings({ tour: blob });
+    },
+    ctx: {
+      canUseOri,
+      isAdmin,
+      plan,
+      isMobile,
+      hasStocks: stocks.length > 0,
+      researchSymbol,
+      demoSymbol: tourDemoSymbol,
+      strategyCount: strategies.strategies?.length || 0,
+    },
+    actions: {
+      goto: navigateTo,
+      openResearch: openDeepResearch,
+      resetSurface: () => {
+        chat.setIsOpen(false);
+        setShowWatchlist(false);
+        setShowCompare(false);
+        setDetailStock(null);
+        setDetailStock2(null);
+        setPickingSecond(false);
+        if (isMobile) setSidebarCollapsed(true);
+      },
+      setChatOpen: (open) => {
+        if (open && !chat.isOpen) tourOpenedRef.current.chat = true;
+        chat.setIsOpen(open);
+      },
+      setWatchlistOpen: setShowWatchlist,
+      setSidebarCollapsed: (collapsed) => {
+        if (!collapsed && sidebarCollapsed) tourOpenedRef.current.sidebar = true;
+        setSidebarCollapsed(collapsed);
+      },
+      onExit: () => {
+        setShowWatchlist(false);
+        if (tourOpenedRef.current.chat) chat.setIsOpen(false);
+        if (tourOpenedRef.current.sidebar || isMobile) setSidebarCollapsed(true);
+        tourOpenedRef.current = { sidebar: false, chat: false };
+      },
+    },
+  });
+
+  // Ori launch: just open the chat (the launcher fades out via AnimatePresence).
   const launchOri = () => {
     if (chat.isOpen) return;
     chat.setIsOpen(true);
@@ -946,6 +984,10 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           portfolioCount: portfolioGoals.portfolios?.length || 0,
           goalCount: portfolioGoals.goals?.length || 0,
         }}
+        tours={tour.catalog}
+        pageTourId={PAGE_TOURS[currentView] || null}
+        onStartTour={(id) => tour.start(id)}
+        onResetTours={tour.resetProgress}
       />
 
       <ProgressBar progress={loadProgress} label={enrichLoading ? "Enriching…" : "Refreshing universe…"} onCancel={cancelOperation} />
@@ -970,6 +1012,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             The cross-fade between views is sacrificed for snappy interactions and correct theming.
             (The ori button, chat panel, and landing page still use motion where appropriate.) */}
         <div className="flex flex-col flex-1 overflow-hidden min-h-0">
+          <Suspense fallback={<PageFallback />}>
           {currentView === 'deep-research' ? (
             <DeepResearchPage
               fitCtx={fitCtx}
@@ -986,13 +1029,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               symbol={researchSymbol}
               stocks={stocks}
               onSelectSymbol={(sym) => openDeepResearch(sym)}
-              row={
-                researchSymbol
-                  ? filtered.find((r) => r.symbol === researchSymbol) ||
-                    stocks.find((r) => r.symbol === researchSymbol) ||
-                    { symbol: researchSymbol }
-                  : null
-              }
+              row={researchRow}
+              syncing={researchSyncing}
               onRegather={
                 isAdmin
                   ? (sym) => regatherSymbol(sym, () => setDetailReloadToken((t) => t + 1))
@@ -1030,14 +1068,12 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               setRisk={setRisk}
             />
           ) : currentView === 'strategies' ? (
-            <Suspense fallback={<div className="flex h-full items-center justify-center bg-gray-950 text-xs text-gray-500">Loading strategies...</div>}>
-              <StrategiesPage
-                strategiesStore={strategies}
-                stocks={stocks}
-                canUseOri={canUseOri}
-                onUpgradeToPro={openUpgradeModal}
-              />
-            </Suspense>
+            <StrategiesPage
+              strategiesStore={strategies}
+              stocks={stocks}
+              canUseOri={canUseOri}
+              onUpgradeToPro={openUpgradeModal}
+            />
           ) : (
             <>
               <TabsBar
@@ -1051,6 +1087,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
               {/* Controls bar — desktop / iPad landscape (≥ lg) */}
               <div className="hidden lg:flex flex-wrap items-center gap-3 gap-y-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
                 <div
+                  data-tour="screener-search"
                   className="flex items-center gap-2 flex-1 min-w-[140px] max-w-xs bg-gray-900 border border-gray-800
                   rounded-lg px-3 py-1.5"
                 >
@@ -1068,7 +1105,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   />
                 </div>
 
-                <span className="text-xs text-gray-600 whitespace-nowrap">
+                <span data-tour="screener-count" className="text-xs text-gray-600 whitespace-nowrap">
                   {filtered.length} / {stocks.length}
                 </span>
 
@@ -1087,7 +1124,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   goal={goal} setGoal={setGoal}
                 />
 
-                <div className="flex shrink-0 border border-gray-700 rounded-md overflow-hidden ml-auto">
+                <div data-tour="view-toggle" className="flex shrink-0 border border-gray-700 rounded-md overflow-hidden ml-auto">
                   {[
                     ["table", "▦ Table"],
                     ["cards", "▤ Scorecards"],
@@ -1109,7 +1146,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
               {/* Controls bar — compact (< lg) */}
               <div className="flex lg:hidden flex-col gap-2 px-3 py-2 border-b border-gray-800 bg-gray-950 shrink-0">
-                <div className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+                <div data-tour="screener-search" className="flex items-center gap-2 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
                   <span className="text-gray-600 text-sm">⌕</span>
                   <input
                     type="text"
@@ -1124,15 +1161,8 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   />
                 </div>
 
-                <div className="flex justify-end">
-                  <ScreenerLens
-                    persona={persona} setPersona={setPersona}
-                    risk={risk} setRisk={setRisk}
-                    horizon={horizon} setHorizon={setHorizon}
-                    goal={goal} setGoal={setGoal}
-                  />
-                </div>
-
+                {/* One row for every control (the Lens used to sit alone on its
+                    own row, pushing the first result ~50px further down). */}
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => setSidebarCollapsed(false)}
@@ -1148,12 +1178,18 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   >
                     {copiedTickers ? <CheckIcon className="w-4 h-4 text-emerald-400" /> : <ClipboardIcon className="w-4 h-4" />}
                   </button>
-                  <span className="text-xs text-gray-600 whitespace-nowrap">
+                  <span data-tour="screener-count" className="text-xs text-gray-600 whitespace-nowrap">
                     {filtered.length} / {stocks.length}
                   </span>
 
                   <div className="ml-auto flex items-center gap-2">
-                    <div className="flex border border-gray-700 rounded-md overflow-hidden">
+                    <ScreenerLens
+                      persona={persona} setPersona={setPersona}
+                      risk={risk} setRisk={setRisk}
+                      horizon={horizon} setHorizon={setHorizon}
+                      goal={goal} setGoal={setGoal}
+                    />
+                    <div data-tour="view-toggle" className="flex border border-gray-700 rounded-md overflow-hidden">
                       {[
                         ["table", "▦"],
                         ["cards", "▤"],
@@ -1212,7 +1248,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   </div>
                 )
               ) : view === "table" ? (
-                <div className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
+                <div data-tour="results" className="flex-1 min-h-0 overflow-hidden overscroll-contain" style={{ height: '100%' }}>
                   <StockTable
                     rows={filtered}
                     heatRows={filteredRows}
@@ -1230,14 +1266,16 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
                   />
                 </div>
               ) : (
-                <div className="flex-1 min-h-0 overflow-auto overscroll-contain" style={{ height: '100%' }}>
+                <div data-tour="results" className="flex-1 min-h-0 overflow-auto overscroll-contain pb-24 lg:pb-0" style={{ height: '100%' }}>
                   <ScorecardGrid rows={filtered} canUseOri={canUseOri} onSelectStock={handleSelectStock} pins={pins} onTogglePin={togglePin} />
                 </div>
               )}
             </>
           )}
+          </Suspense>
         </div>
 
+        <Suspense fallback={null}>
         {currentView !== 'deep-research' && detailRow && (
           <StockDetailModal
             row={detailRow}
@@ -1298,6 +1336,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
             onScrollSync={() => syncScroll(bScrollRef, aScrollRef)}
           />
         )}
+        </Suspense>
 
         {chat.isOpen && currentView !== 'strategies' && (
           <ChatPanel
@@ -1312,118 +1351,65 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
 
       <Footer news={news} />
 
-      {/* Floating Ori button — a little planet that orbits up into the chat panel
-          on open and settles back down from orbit on close. Slides left to clear
-          the company detail pane(s) when open. */}
+      {/* Floating "Ask Ori" launcher. Deliberately quiet: a dark pill with the
+          Ori mark and a label on desktop, a compact circle on phones. No idle
+          animation — only a short fade/rise on show and a slight lift on hover.
+          Slides left to clear the company detail pane(s) when they're open. */}
       <AnimatePresence>
         {!chat.isOpen && currentView !== 'strategies' && (
           <m.div
             key="ori-fab"
-            className={`fixed bottom-14 z-50 transition-[right] duration-300 ease-out
-              ${detailStock2 ? 'right-6 lg:right-[49.5rem]' : detailStock ? 'right-6 lg:right-[25.5rem]' : 'right-6'}`}
-            // Open and close are mirror images: the planet orbits in from the
-            // upper-right on mount (close) and orbits back out the same way on
-            // unmount (open), using the same spring.
-            initial={reduceMotion ? false : { opacity: 0, scale: 0.2, x: 70, y: -210, rotate: 40 }}
-            animate={{ opacity: 1, scale: 1, x: 0, y: 0, rotate: 0 }}
-            exit={reduceMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, scale: 0.2, x: 70, y: -210, rotate: 40 }}
-            transition={reduceMotion ? { duration: 0 } : { type: "spring", stiffness: 170, damping: 18, mass: 0.9 }}
+            className={`fixed bottom-12 lg:bottom-14 z-50 transition-[right] duration-300 ease-out
+              ${detailStock2 ? 'right-3 lg:right-[49.5rem]' : detailStock ? 'right-3 lg:right-[25.5rem]' : 'right-3 lg:right-6'}`}
+            initial={reduceMotion ? false : { opacity: 0, y: 10, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduceMotion ? { opacity: 0, transition: { duration: 0 } } : { opacity: 0, y: 10, scale: 0.96 }}
+            transition={reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
           >
-            <m.button
+            <button
+              type="button"
               onClick={launchOri}
-              whileHover={reduceMotion ? undefined : { scale: 1.1 }}
-              whileTap={reduceMotion ? undefined : { scale: 0.92 }}
-              animate={reduceMotion ? { y: 0 } : { y: [0, -6, 0] }}
-              transition={reduceMotion ? { duration: 0 } : { y: { duration: 3.6, repeat: Infinity, ease: "easeInOut" } }}
-              className="group relative grid place-items-center w-16 h-16 cursor-pointer rounded-full
-                focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-400"
-              title="Ask Ori — your AI analyst"
+              data-tour="ori-launch"
+              title="Ask Ori — your AI research analyst"
               aria-label="Ask Ori — open the AI chat"
+              className="ori-launcher group relative isolate block rounded-full p-px cursor-pointer
+                transition-transform duration-200 ease-out hover:-translate-y-0.5 active:translate-y-0 active:scale-[0.98]
+                focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-indigo-400"
             >
-              {/* Pulsing aura — draws the eye to the button */}
-              {!reduceMotion && (
-                <m.span
-                  aria-hidden="true"
-                  className="absolute -inset-1.5 -z-10 rounded-full"
-                  style={{ background: "radial-gradient(circle, rgba(129,140,248,0.6) 0%, rgba(129,140,248,0) 70%)" }}
-                  animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.85, 0.4] }}
-                  transition={{ duration: 2.6, repeat: Infinity, ease: "easeInOut" }}
-                />
-              )}
-
-              {/* Orbital ring (behind the planet) */}
-              <svg
-                viewBox="0 0 64 64"
-                className="absolute inset-0 h-full w-full overflow-visible pointer-events-none"
-                fill="none"
-              >
-                <ellipse
-                  cx="32" cy="32" rx="30" ry="8.5"
-                  transform="rotate(-22 32 32)"
-                  stroke="rgba(165,180,252,0.75)" strokeWidth="2.5"
-                />
-              </svg>
-
-              {/* Planet sphere with the Ori wordmark on its face */}
+              {/* Soft indigo halo that slowly breathes (static with reduced motion). */}
+              <span aria-hidden="true" className="ori-launcher-halo absolute -inset-2 -z-10 rounded-full bg-indigo-500/30 blur-xl" />
+              {/* 1px gradient border. */}
+              <span aria-hidden="true" className="ori-launcher-border absolute inset-0 rounded-full opacity-75 transition-opacity duration-200 group-hover:opacity-100" />
               <span
-                className="relative grid h-12 w-12 place-items-center rounded-full shadow-lg shadow-indigo-500/40 ring-1 ring-white/25 transition-shadow duration-300 group-hover:shadow-indigo-400/70"
-                style={{ background: "radial-gradient(circle at 34% 28%, #e0e7ff 0%, #a5b4fc 30%, #6366f1 62%, #3730a3 100%)" }}
+                className="relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-full bg-gray-950
+                  lg:h-12 lg:w-auto lg:justify-start lg:gap-2.5 lg:pl-1.5 lg:pr-4
+                  shadow-[0_10px_30px_-10px_rgba(99,102,241,0.65)]"
               >
-                {/* sphere sheen — light from the upper-left */}
-                <span className="absolute left-[18%] top-[16%] h-3.5 w-3.5 rounded-full bg-white/55 blur-[1px]" />
-                {/* Ori wordmark with a soft glow */}
-                <span
-                  className="relative text-[12.5px] font-bold tracking-[0.5px] text-white"
-                  style={{
-                    fontFamily: '"Space Grotesk", system-ui, sans-serif',
-                    textShadow: "0 0 7px rgba(199,210,254,0.85), 0 1px 2px rgba(49,46,129,0.85)",
-                  }}
-                >
-                  Ori
+                {/* One light sweep when it appears, again on hover. */}
+                <span aria-hidden="true" className="ori-launcher-sheen pointer-events-none absolute inset-y-0 left-0 w-1/3 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+                {/* Emblem orb with an "available" dot. */}
+                <span className="ori-launcher-orb relative grid h-9 w-9 shrink-0 place-items-center rounded-full ring-1 ring-inset ring-indigo-300/30">
+                  <OriEmblem className="h-7 w-7 transition-transform duration-300 ease-out group-hover:rotate-[-12deg] group-hover:scale-110" />
+                  <span aria-hidden="true" className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-gray-950 bg-emerald-400" />
+                </span>
+                <span className="hidden lg:flex flex-col items-start leading-none">
+                  <span className="flex items-center gap-1.5 text-[13px] font-semibold tracking-tight text-gray-50">
+                    Ask Ori
+                    {!canUseOri && (
+                      <span className="rounded-full border border-violet-500/50 bg-violet-500/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-violet-200">
+                        Pro
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-1 text-[10px] font-medium text-gray-400">AI research analyst</span>
                 </span>
               </span>
-
-              {/* Moon orbiting the planet */}
-              <m.span
-                aria-hidden="true"
-                className="absolute left-1/2 top-1/2 h-2.5 w-2.5 rounded-full bg-white shadow ring-1 ring-indigo-400/70"
-                style={{ marginLeft: "-5px", marginTop: "-5px" }}
-                animate={
-                  reduceMotion
-                    ? { x: 17, y: -11 }
-                    : {
-                        x: [28, 23, 5, -16, -28, -23, -5, 16, 28],
-                        y: [-11, 0, 11, 16, 11, 0, -11, -16, -11],
-                        scale: [0.8, 0.95, 1.15, 1.2, 1.1, 0.95, 0.8, 0.72, 0.8],
-                        opacity: [0.75, 0.9, 1, 1, 1, 0.9, 0.75, 0.7, 0.75],
-                      }
-                }
-                transition={reduceMotion ? { duration: 0 } : { duration: 7, repeat: Infinity, ease: "linear" }}
-              />
-
-              {/* AI sparkles — twinkle to signal "AI" */}
-              {!reduceMotion &&
-                [
-                  { cls: "right-0.5 top-0", delay: 0, peak: 1 },
-                  { cls: "left-1 bottom-1.5", delay: 1.2, peak: 0.75 },
-                ].map((sp, i) => (
-                  <m.span
-                    key={i}
-                    aria-hidden="true"
-                    className={`absolute ${sp.cls} text-violet-100`}
-                    animate={{ scale: [0, sp.peak, 0], opacity: [0, 1, 0], rotate: [0, 90, 0] }}
-                    transition={{ duration: 2.2, repeat: Infinity, delay: sp.delay, ease: "easeInOut" }}
-                  >
-                    <svg viewBox="0 0 12 12" className="h-2.5 w-2.5" fill="currentColor">
-                      <path d="M6 0c.4 2.8 1.2 3.6 4 4-2.8.4-3.6 1.2-4 4-.4-2.8-1.2-3.6-4-4 2.8-.4 3.6-1.2 4-4Z" />
-                    </svg>
-                  </m.span>
-                ))}
-            </m.button>
+            </button>
           </m.div>
         )}
       </AnimatePresence>
 
+      <Suspense fallback={null}>
       {showUsersModal && (
         <UsersModal
           onClose={() => setShowUsersModal(false)}
@@ -1440,7 +1426,9 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           testWatchlistAlertOk={wlTestOk}
         />
       )}
+      </Suspense>
 
+      <Suspense fallback={null}>
       {showCompare && (
         <CompareModal
           rows={filtered}
@@ -1458,6 +1446,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           }}
         />
       )}
+      </Suspense>
 
       <WatchlistPanel
         open={showWatchlist}
@@ -1487,6 +1476,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
         testAlertOk={wlTestOk}
       />
 
+      <Suspense fallback={null}>
       {showUpgradeModal && (
         <UpgradeModal
           onClose={() => setShowUpgradeModal(false)}
@@ -1502,7 +1492,30 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           }}
         />
       )}
+      </Suspense>
 
+      {tour.active && (
+        <TourOverlay
+          tour={tour.tour}
+          step={tour.step}
+          stepReady={tour.stepReady}
+          index={tour.index}
+          total={tour.total}
+          onNext={tour.next}
+          onPrev={tour.prev}
+          onGoto={tour.goto}
+          onSkip={() => tour.stop()}
+        />
+      )}
+      {!tour.active && tour.shouldOfferWelcome && !showUpgradeModal && !showUsersModal && (
+        <TourWelcome
+          returning={tourReturningUser}
+          onStart={() => tour.start("welcome")}
+          onDismiss={tour.dismissWelcome}
+        />
+      )}
+
+      <Suspense fallback={null}>
       {showAddTicker && (
         <AddTickerModal
           onClose={() => setShowAddTicker(false)}
@@ -1510,6 +1523,7 @@ function MainApp({ currentUser, isAdmin, plan = "free", appEnv = "production", o
           onView={(stock) => { setShowAddTicker(false); handleSelectStock(stock); }}
         />
       )}
+      </Suspense>
     </div>
     </LazyMotion>
   );
@@ -1615,34 +1629,3 @@ function extractSymbols(text, knownSymbolSet) {
   return [...new Set(candidates.filter((c) => knownSymbolSet.has(c)))];
 }
 
-// Price % change over ~N trading days back from the latest close.
-// points: [{ date, price }] oldest→newest. The detail chart loads ~5 years of
-// dailies, so "1y" must be ~252 trading days back — using the full window here
-// previously reported the 5-year change as "1yr" to Ori and the UI.
-function pricePerformance(points) {
-  if (!points || points.length < 2) return null;
-  const last = points[points.length - 1].price;
-  const at = (n) => {
-    const base = points[Math.max(0, points.length - 1 - n)].price;
-    return base ? (last - base) / base : null;
-  };
-  return {
-    m1: at(21),
-    m3: at(63),
-    m6: at(126),
-    y1: at(Math.min(252, points.length - 1)),
-  };
-}
-
-// Latest RSI plus its direction over the last ~5 sessions. rsi: [{ date, rsi }].
-function rsiTrend(rsi) {
-  if (!rsi || rsi.length < 2) return null;
-  const latest = rsi[rsi.length - 1].rsi;
-  const prev = rsi[Math.max(0, rsi.length - 6)].rsi;
-  const change5d = latest - prev;
-  return {
-    latest,
-    change5d,
-    direction: change5d > 1 ? "rising" : change5d < -1 ? "falling" : "flat",
-  };
-}

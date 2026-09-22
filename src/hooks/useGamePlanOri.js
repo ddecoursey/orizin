@@ -8,9 +8,9 @@ const DEFER_MS = 350;
 // return a friendly 503) rather than aborting mid-retry.
 const ORI_TIMEOUT_MS = 70_000;
 
-// Transient failures worth auto-retrying: 429 (rate limiter — Deep Research fires
-// several aiDetailLimiter endpoints at once, so a burst can momentarily trip it)
-// and 503 (Gemini overloaded). Anything else surfaces immediately.
+// Transient failures worth auto-retrying: 429 (the per-user Game Plan limiter or
+// the Ori concurrency guard) and 503 (Gemini overloaded). Anything else surfaces
+// immediately.
 const TRANSIENT_STATUS = new Set([429, 503]);
 const MAX_AUTO_RETRIES = 3;
 const BASE_BACKOFF_MS = 700;
@@ -90,6 +90,9 @@ export function useGamePlanOri(symbol, {
   const deferTimerRef = useRef(null);
   const abortRef = useRef(null);
   const abortReasonRef = useRef(null);
+  // Last take successfully shown for a symbol. A failed REFRESH restores it
+  // (with a notice) instead of wiping a perfectly good cached review.
+  const lastGoodRef = useRef({ sym: null, ori: null });
 
   const cancel = useCallback(() => {
     clearTimeout(deferTimerRef.current);
@@ -110,7 +113,14 @@ export function useGamePlanOri(symbol, {
   }, [symbol]);
 
   useEffect(() => {
-    if (!symbol || !enabled) return;
+    if (!symbol || !enabled) {
+      // Record the disabled state. Previously `prev` kept enabled=true through a
+      // disable, so when the cleanup aborted an in-flight request and the hook
+      // was re-enabled for the same symbol, nothing re-fired: the take stayed on
+      // "loading" forever and refresh()/retry() were no-ops.
+      prev.current = { ...prev.current, enabled: false };
+      return;
+    }
 
     const symbolChanged = prev.current.symbol !== symbol;
     const nonceChanged = prev.current.nonce !== retryNonce;
@@ -131,10 +141,12 @@ export function useGamePlanOri(symbol, {
     const skipFetch = !liteRefresh && !nonceChanged;
     const frontierSeed = skipFetch ? cachedFrontierSeed(initialOri, initialOriCachedAt) : null;
     const liteSeed = skipFetch ? cachedLiteSeed(initialOri) : null;
+    if (frontierSeed || liteSeed) lastGoodRef.current = { sym: requestSym, ori: frontierSeed || liteSeed };
     setState({
       sym: requestSym,
       ori: frontierSeed || liteSeed,
       error: null,
+      notice: null,
       locked: false,
       done: !!frontierSeed,
       cancelled: false,
@@ -158,7 +170,18 @@ export function useGamePlanOri(symbol, {
 
     const settle = (patch) => {
       if (cancelled) return;
+      if (patch.ori) lastGoodRef.current = { sym: requestSym, ori: patch.ori };
       setState({ sym: requestSym, ...patch });
+    };
+    // Failure path. After an explicit refresh / retry, fall back to the take the
+    // user was already reading (if any) and say the refresh didn't land.
+    const fail = (message) => {
+      const previous = (liteRefresh || isRetry) && lastGoodRef.current.sym === requestSym
+        ? lastGoodRef.current.ori
+        : null;
+      settle(previous
+        ? { ori: previous, error: null, notice: `${message} Showing the previous take.`, locked: false, done: true, cancelled: false }
+        : { ori: null, error: message, locked: false, done: true, cancelled: false });
     };
 
     // Small defer so the deterministic Game Plan renders first.
@@ -183,49 +206,29 @@ export function useGamePlanOri(symbol, {
             // Still transient after the auto-retries — tell the user it's busy and
             // a manual "try again" in a moment will likely work.
             const transient = TRANSIENT_STATUS.has(r.status);
-            settle({
-              ori: null,
-              error: transient
-                ? "Ori is busy right now — give it a moment and try again."
-                : (j?.error || "Ori couldn't weigh in right now."),
-              locked: false,
-              done: true,
-              cancelled: false,
-            });
+            fail(transient
+              ? "Ori is busy right now — give it a moment and try again."
+              : (j?.error || "Ori couldn't weigh in right now."));
             return;
           }
           const j = await r.json();
           if (cancelled) return;
-          settle({
-            ori: j?.ori || null,
-            error: j?.ori ? null : "Ori couldn't weigh in right now.",
-            locked: false,
-            done: true,
-            cancelled: false,
-          });
+          if (!j?.ori) {
+            fail("Ori couldn't weigh in right now.");
+            return;
+          }
+          settle({ ori: j.ori, error: null, notice: null, locked: false, done: true, cancelled: false });
         })
         .catch((err) => {
           clearTimeout(timeoutId);
           if (cancelled) return;
           if (err?.name === "AbortError") {
             if (abortReasonRef.current === "timeout") {
-              settle({
-                ori: null,
-                error: "Ori's take timed out — Gemini may be overloaded. Try again in a moment.",
-                locked: false,
-                done: true,
-                cancelled: false,
-              });
+              fail("Ori's take timed out — Gemini may be overloaded. Try again in a moment.");
             }
             return;
           }
-          settle({
-            ori: null,
-            error: "Ori couldn't weigh in right now.",
-            locked: false,
-            done: true,
-            cancelled: false,
-          });
+          fail("Ori couldn't weigh in right now.");
         });
     }, DEFER_MS);
 
@@ -248,6 +251,8 @@ export function useGamePlanOri(symbol, {
   return {
     ori: forSym ? state.ori : null,
     error: forSym ? state.error : null,
+    // Set when a refresh/retry failed but an earlier take is still shown.
+    notice: forSym ? state.notice || null : null,
     locked: forSym ? state.locked : false,
     cancelled: forSym ? state.cancelled : false,
     // "loading" until this symbol's request settles (and only while enabled).

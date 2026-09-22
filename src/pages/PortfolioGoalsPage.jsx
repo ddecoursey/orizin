@@ -128,7 +128,7 @@ export default function PortfolioGoalsPage({
   if (!portfolioGoals || !hydrated) return <div className="p-8 text-gray-400">Loading...</div>;
 
   return (
-    <div className="h-full flex flex-col bg-gray-950 text-gray-100 overflow-y-auto overscroll-contain lg:overflow-hidden">
+    <div className="h-full flex flex-col bg-gray-950 text-gray-100 overflow-y-auto overscroll-contain pb-24 lg:pb-0 lg:overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-4 sm:px-6 py-3 sm:py-4 shrink-0 bg-gray-950">
         <div><h1 className="text-xl font-semibold tracking-tight">Portfolio</h1><p className="text-xs text-gray-500 mt-0.5">Your holdings, goals and theses are sent to Ori automatically. Changes save as you type.</p></div>
         <div className="flex items-center gap-3 sm:gap-6">
@@ -138,13 +138,16 @@ export default function PortfolioGoalsPage({
           <div className="text-right"><div className="text-[10px] uppercase tracking-widest text-gray-500">Total Portfolio Value</div><div className="text-2xl font-semibold tabular-nums text-emerald-400">{formatMoney(grandTotal)}</div></div>
         </div>
       </div>
-      <div className="flex-1 flex flex-col lg:flex-row overflow-visible lg:overflow-hidden min-h-0">
-        <div className="flex-1 flex flex-col border-r border-gray-800 min-h-0 overflow-hidden">
-          <div className="px-6 pt-4 pb-3 flex items-center justify-between shrink-0 border-b border-gray-800 bg-gray-950">
+      {/* Phones: one naturally-tall column that the page scrolls. Desktop: two
+          independently scrolling panes. (The panes used to be flex-1 + min-h-0
+          at every size, which collapsed the holdings pane to 0px on phones.) */}
+      <div className="flex-none lg:flex-1 flex flex-col lg:flex-row overflow-visible lg:overflow-hidden lg:min-h-0">
+        <div data-tour="portfolio-holdings" className="flex-none lg:flex-1 flex flex-col lg:border-r border-gray-800 lg:min-h-0 lg:overflow-hidden">
+          <div className="px-4 sm:px-6 pt-4 pb-3 flex items-center justify-between shrink-0 border-b border-gray-800 bg-gray-950">
             <div className="text-sm font-semibold text-gray-300">Your Portfolios</div>
             <button onClick={handleAddPortfolio} className="text-xs px-3 py-1.5 lg:py-1 rounded-md bg-blue-600 hover:bg-blue-500 text-white font-medium cursor-pointer active:scale-95 transition-transform">+ New Portfolio</button>
           </div>
-          <div className="flex-1 overflow-auto p-6 space-y-6 text-gray-200">
+          <div className="lg:flex-1 lg:overflow-auto p-4 sm:p-6 space-y-6 text-gray-200">
             {overallAllocations.length > 0 && (
               <div className="rounded-2xl border border-gray-800 bg-gray-900/50 p-5 mb-8 oz-fade-rise">
                 <div className="flex items-center justify-between mb-4"><h3 className="text-sm font-semibold text-gray-300 flex items-center gap-2"><IconPie className="w-4 h-4 text-blue-400" />Combined Allocation</h3><div className="text-[10px] text-gray-500 uppercase tracking-widest">Across all {portfolios.length} portfolios</div></div>
@@ -259,7 +262,7 @@ export default function PortfolioGoalsPage({
           </div>
         </div>
         {goalsVisible && (
-          <div className="w-full lg:w-96 xl:w-[420px] flex flex-col border-t lg:border-t-0 lg:border-l border-gray-800 bg-gray-900/30 min-h-0 shrink-0 oz-pane-in">
+          <div data-tour="portfolio-goals" className="w-full lg:w-96 xl:w-[420px] flex flex-col border-t lg:border-t-0 lg:border-l border-gray-800 bg-gray-900/30 lg:min-h-0 shrink-0 oz-pane-in">
             <div className="px-5 pt-4 pb-3 border-b border-gray-800 shrink-0">
               <div className="text-sm font-semibold text-gray-300">Goals &amp; Theses</div>
               <p className="text-[10px] text-gray-500 mt-1 leading-snug">Sent to Ori automatically for context.</p>

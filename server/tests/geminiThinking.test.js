@@ -107,8 +107,8 @@ test("geminiGenerateJson injects thinkingConfig into the structured request body
   assert.equal(captured.systemInstruction.parts[0].text, "sys");
 });
 
-test("current 3.5/3.6 models omit deprecated sampling controls", async () => {
-  for (const model of ["gemini-3.5-flash-lite", "gemini-3.6-flash"]) {
+test("current 3.5+ models omit deprecated sampling controls", async () => {
+  for (const model of ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.8-flash", "gemini-4.0-flash"]) {
     const { captured } = await captureStructuredBody({
       model,
       thinkingLevel: "minimal",
@@ -242,14 +242,18 @@ test("cost-optimized model defaults replace stale former-default environment val
   const prev = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     keys.forEach((key) => delete process.env[key]);
-    assert.equal(frontierModel(), "gemini-3.6-flash");
+    assert.equal(frontierModel(), "gemini-3.8-flash");
     assert.equal(valueModel(), "gemini-3.5-flash-lite");
     assert.equal(liteModel(), "gemini-3.1-flash-lite");
+
+    // A variable still pinned to the previous default upgrades too.
+    process.env.GEMINI_FRONTIER_MODEL = "gemini-3.6-flash";
+    assert.equal(frontierModel(), "gemini-3.8-flash");
 
     process.env.GEMINI_FRONTIER_MODEL = "gemini-3.1-pro-preview";
     process.env.GEMINI_VALUE_MODEL = "gemini-3.5-flash";
     process.env.GEMINI_LITE_MODEL = "gemini-2.5-flash-lite";
-    assert.equal(frontierModel(), "gemini-3.6-flash");
+    assert.equal(frontierModel(), "gemini-3.8-flash");
     assert.equal(valueModel(), "gemini-3.5-flash-lite");
     assert.equal(liteModel(), "gemini-3.1-flash-lite");
 

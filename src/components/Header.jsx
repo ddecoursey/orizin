@@ -13,6 +13,7 @@ import {
   IconLogout,
   IconRefresh,
   IconChevronDown,
+  IconCompass,
   IconChart,
   IconSignal,
 } from "./icons.jsx";
@@ -80,10 +81,11 @@ function MenuItem({ onClick, disabled, children, className = "" }) {
 }
 
 // Top-level page navigation link. Active page is highlighted.
-function NavButton({ active, onClick, children }) {
+function NavButton({ active, onClick, children, tour }) {
   return (
     <button
       onClick={onClick}
+      data-tour={tour}
       className={`flex-1 lg:flex-none text-center px-2 sm:px-3 py-1.5 lg:px-2.5 lg:py-1 text-xs rounded-md transition-colors duration-150 whitespace-nowrap cursor-pointer active:scale-95
         focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500
         ${active
@@ -120,7 +122,12 @@ export default function Header({
   watchlistUnread = 0,
   refreshNotice = null,
   onClearRefreshNotice,
+  tours = [],
+  pageTourId = null,
+  onStartTour,
+  onResetTours,
 }) {
+  const pageTour = pageTourId ? tours.find((t) => t.id === pageTourId) : null;
   // ETFs are never enriched, so they don't count toward "missing" data.
   const missing = filtered.filter((r) => !r.is_etf && (!r.has_km || !r.has_rat)).length;
   const isFullyEnriched = missing === 0;
@@ -241,19 +248,19 @@ export default function Header({
       {/* Top-level page navigation. On mobile it drops to its own full-width row
           (order-last + w-full) so the top row never scrunches; desktop keeps
           it inline (lg:* resets). */}
-      <nav className="order-last w-full justify-center flex items-center gap-1 pt-1.5 border-t border-gray-800/60
+      <nav data-tour="nav" className="order-last w-full justify-center flex items-center gap-1 pt-1.5 border-t border-gray-800/60
         lg:order-none lg:w-auto lg:justify-start lg:gap-1 lg:pt-0 lg:border-t-0 lg:border-l lg:border-gray-800 lg:pl-3 shrink-0">
-        <NavButton active={currentView === 'screener'} onClick={() => onNavigate?.('screener')}>
+        <NavButton tour="nav-screener" active={currentView === 'screener'} onClick={() => onNavigate?.('screener')}>
           Screener
         </NavButton>
-        <NavButton active={currentView === 'deep-research'} onClick={() => onNavigate?.('deep-research')}>
+        <NavButton tour="nav-deep-research" active={currentView === 'deep-research'} onClick={() => onNavigate?.('deep-research')}>
           <span className="hidden lg:inline">Deep Research</span>
           <span className="lg:hidden">Research</span>
         </NavButton>
-        <NavButton active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
+        <NavButton tour="nav-portfolio" active={currentView === 'portfolio-goals'} onClick={() => onNavigate?.('portfolio-goals')}>
           Portfolio
         </NavButton>
-        <NavButton active={currentView === 'strategies'} onClick={() => onNavigate?.('strategies')}>
+        <NavButton tour="nav-strategies" active={currentView === 'strategies'} onClick={() => onNavigate?.('strategies')}>
           Strategies
         </NavButton>
       </nav>
@@ -264,6 +271,7 @@ export default function Header({
           <button
             type="button"
             onClick={onOpenWatchlist}
+            data-tour="watchlist-button"
             className="relative px-2.5 py-1.5 lg:px-2 lg:py-1 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700/80 hover:border-gray-600 rounded-md transition-colors cursor-pointer whitespace-nowrap"
             title={watchlistUnread > 0 ? `${watchlistUnread} watchlist alert${watchlistUnread === 1 ? "" : "s"}` : "Open watchlist"}
           >
@@ -285,6 +293,7 @@ export default function Header({
             button={(open, toggle) => (
             <button
               onClick={toggle}
+              data-tour="data-menu"
               className={`px-2 py-1.5 lg:px-1.5 lg:py-1 text-xs transition-colors flex items-center gap-1 bg-transparent cursor-pointer
                 ${open ? "text-gray-200" : "text-gray-400 hover:text-gray-200"}`}
               title="Data actions"
@@ -360,12 +369,81 @@ export default function Header({
         </HeaderMenu>
         )}
 
+        {/* Guided tours — available to every account, at any time. */}
+        {onStartTour && tours.length > 0 && (
+          <HeaderMenu
+            width="w-72"
+            button={(open, toggle) => (
+              <button
+                onClick={toggle}
+                data-tour="help-button"
+                aria-label="Guided tours and help"
+                className={`px-2 py-1.5 lg:px-2 lg:py-1 text-xs font-medium border rounded-md transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1
+                  ${open
+                    ? "text-violet-200 border-violet-700/70 bg-violet-950/30"
+                    : "text-gray-400 border-gray-700/80 hover:text-gray-200 hover:border-gray-600"}`}
+                title="Guided tours — learn any part of Orizin"
+              >
+                <IconCompass className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Guide</span>
+              </button>
+            )}
+          >
+            {(close) => (
+              <>
+                <div className="px-3 py-2 border-b border-gray-800">
+                  <div className="text-[10px] uppercase tracking-wider text-gray-500">Guided tours</div>
+                  <p className="mt-1 text-[11px] leading-relaxed text-gray-400">
+                    Short walkthroughs of each page. Leave any tour with Esc.
+                  </p>
+                </div>
+                {pageTour && (
+                  <div className="border-b border-gray-800">
+                    <MenuItem
+                      onClick={() => { close(); onStartTour(pageTour.id); }}
+                      className="bg-violet-950/20 hover:bg-violet-950/40"
+                    >
+                      <span className="flex items-center gap-2">
+                        <IconCompass className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                        <span className="font-semibold text-violet-200">Tour this page</span>
+                        <span className="ml-auto shrink-0 text-[10px] text-gray-500">{pageTour.name}</span>
+                      </span>
+                    </MenuItem>
+                  </div>
+                )}
+                {tours.map((t) => (
+                  <MenuItem key={t.id} onClick={() => { close(); onStartTour(t.id); }}>
+                    <span className="flex items-center gap-2">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.done ? "bg-emerald-500" : "bg-violet-500"}`} />
+                      <span className="font-medium text-gray-200">{t.name}</span>
+                      <span className="ml-auto shrink-0 text-[10px] text-gray-600">
+                        {t.done ? "done" : `${t.steps} steps`}
+                      </span>
+                    </span>
+                    <span className="block text-[10px] text-gray-500 mt-0.5 pl-[14px] leading-relaxed">
+                      {t.blurb}
+                    </span>
+                  </MenuItem>
+                ))}
+                {onResetTours && tours.some((t) => t.done) && (
+                  <div className="border-t border-gray-800">
+                    <MenuItem onClick={() => { close(); onResetTours(); }}>
+                      <span className="text-[11px] text-gray-500">Mark all tours unseen</span>
+                    </MenuItem>
+                  </div>
+                )}
+              </>
+            )}
+          </HeaderMenu>
+        )}
+
         {/* Profile menu (account / theme / logout) */}
         <HeaderMenu
           width="w-56"
           button={(open, toggle) => (
             <button
               onClick={toggle}
+              data-tour="profile-button"
               className={`relative w-9 h-9 lg:w-8 lg:h-8 rounded-full p-[2px] bg-gradient-to-br transition duration-150 cursor-pointer hover:brightness-110 active:scale-95
                 ${rank.ringGradient}
                 ${open ? "ring-2 ring-blue-400/40 ring-offset-2 ring-offset-gray-950" : ""}

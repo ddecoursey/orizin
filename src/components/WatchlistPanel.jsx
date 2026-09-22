@@ -111,7 +111,7 @@ export default function WatchlistPanel({
   return (
     <div className="fixed inset-0 z-40 flex justify-end">
       <button type="button" className="absolute inset-0 bg-black/50" aria-label="Close watchlist" onClick={onClose} />
-      <aside className="relative w-full max-w-sm bg-gray-950 border-l border-gray-800 flex flex-col shadow-2xl oz-pane-in">
+      <aside data-tour="watchlist-panel" className="relative w-full max-w-sm bg-gray-950 border-l border-gray-800 flex flex-col shadow-2xl oz-pane-in">
         <header className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 shrink-0">
           <div className="min-w-0 flex-1">
             <h2 className="text-sm font-bold text-gray-100">Watchlist</h2>

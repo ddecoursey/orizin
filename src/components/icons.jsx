@@ -224,6 +224,16 @@ export function IconRefresh({ className = "" }) {
   );
 }
 
+/** Compass rose — the guided-tour / "show me around" affordance. */
+export function IconCompass({ className = "" }) {
+  return (
+    <Svg className={className} strokeWidth="1.8">
+      <circle cx="12" cy="12" r="9" />
+      <path d="m15.2 8.8-1.9 4.5-4.5 1.9 1.9-4.5z" />
+    </Svg>
+  );
+}
+
 export function IconChevronDown({ className = "" }) {
   return (
     <Svg className={className} strokeWidth="2">

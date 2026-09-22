@@ -310,6 +310,11 @@ function OriTake({ ori, oriState, canUseOri = false, oriReady = false }) {
         </div>
       ) : ori ? (
         <div className="space-y-3 text-[12px] text-gray-300 leading-relaxed">
+          {oriState?.notice && (
+            <p role="status" className="rounded-md border border-amber-900/50 bg-amber-950/25 px-2.5 py-1.5 text-[11px] text-amber-200">
+              {oriState.notice}
+            </p>
+          )}
           {ori.bottomLine && <p className="text-gray-100 font-medium">{ori.bottomLine}</p>}
 
           {ori.futurePotential && (

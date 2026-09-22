@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from "react";
+import { decodeStockRows } from "../lib/stocksPayload.js";
 import { scoreRows } from "../lib/scoring.js";
 import { quickConviction } from "../lib/verdict.js";
 import { buildFitContext, computeFit } from "../lib/fitScore.js";
@@ -894,15 +895,35 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       });
   }
 
+  // A Deep Research page opened straight from a URL can get its sync result
+  // back before /api/stocks has loaded; the patch then had nothing to apply to
+  // and the page showed the stale (or empty) row. Park it until rows arrive.
+  const pendingRowPatchesRef = useRef(new Map());
+  function withPendingPatches(rows) {
+    const pending = pendingRowPatchesRef.current;
+    if (!pending.size) return rows;
+    const out = rows.map((r) => {
+      const fresh = pending.get(r.symbol);
+      if (!fresh) return r;
+      // Only if the parked row is still the newer of the two.
+      const newer = (fresh.price_updated_at || 0) >= (r.price_updated_at || 0);
+      return newer ? { ...r, ...fresh } : r;
+    });
+    pending.clear();
+    return out;
+  }
+
   async function loadStocks(forceRefresh = false, silent = false) {
     const hasStocks = stocksRef.current.length > 0;
     if (!silent && !hasStocks) {
       setStatus({ type: "loading", msg: "Loading universe…" });
     }
     try {
-      const res = await fetchWithRetry("/api/stocks", {}, 3, 200);
+      const res = await fetchWithRetry("/api/stocks?format=columns", {}, 3, 200);
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      // Compact columnar payload → row objects (falls back to the object shape).
+      data.stocks = decodeStockRows(data) || data.stocks || [];
 
       if (!data.stocks?.length || forceRefresh) {
         // DB empty or forced — stream a fresh fetch
@@ -910,7 +931,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
         return;
       }
 
-      const rows = data.stocks || [];
+      const rows = withPendingPatches(data.stocks || []);
       setStocks(rows);
       stocksRef.current = rows;
       const { count, enrichedCount, lastFetch } = data.meta || {};
@@ -1051,12 +1072,115 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
         results.filter((r) => r && r.symbol).map((r) => [r.symbol, r]),
       );
       if (!fresh.size) return;
-      const apply = (arr) => arr.map((r) => fresh.get(r.symbol) || r);
+      // /api/stocks/:symbol is the bare `stocks` row. Layer it OVER the loaded
+      // row so the fields /api/stocks joins in (analyst targets, ratings
+      // snapshot, cached Ori review) survive — replacing the row outright used
+      // to drop them, which silently changed Conviction after a re-gather.
+      const apply = (arr) => arr.map((r) => (fresh.has(r.symbol) ? { ...r, ...fresh.get(r.symbol) } : r));
       stocksRef.current = apply(stocksRef.current);
       setStocks((prev) => apply(prev));
     } catch {
       // Fall back to a full reload if the targeted merge fails.
       loadStocks(false, true);
+    }
+  }
+
+  // Patch price fields in place from a minimal quote payload. Only a quote that
+  // is NEWER than what the row already has is applied, so an older poll can
+  // never roll back a fresher watchlist / Deep Research quote.
+  function applyQuotePatches(quotes) {
+    const fresh = new Map(
+      (quotes || []).filter((q) => q?.symbol && q.price != null).map((q) => [q.symbol, q]),
+    );
+    if (!fresh.size) return;
+    const patch = (row) => {
+      const q = fresh.get(row.symbol);
+      if (!q) return row;
+      if (row.price_updated_at && q.price_updated_at && q.price_updated_at < row.price_updated_at) return row;
+      return {
+        ...row,
+        price: q.price ?? row.price,
+        volume: q.volume ?? row.volume,
+        mcap: q.mcap ?? row.mcap,
+        price_updated_at: q.price_updated_at ?? row.price_updated_at,
+      };
+    };
+    stocksRef.current = stocksRef.current.map(patch);
+    setStocks((prev) => prev.map(patch));
+  }
+
+  // ── Live price sync for an open tab ────────────────────────────────────────
+  // /api/stocks is read once on load; without this the table froze at that
+  // snapshot for as long as the tab stayed open, while the server kept
+  // re-pricing the universe. Poll the incremental feed (SQLite only — no FMP
+  // cost) and patch just the rows whose price moved.
+  const pricesSinceRef = useRef(0);
+  const pricesPollingRef = useRef(false);
+  const lastPricesPollRef = useRef(0);
+  async function syncPrices() {
+    if (pricesPollingRef.current || !stocksRef.current.length) return;
+    pricesPollingRef.current = true;
+    lastPricesPollRef.current = Date.now();
+    try {
+      if (!pricesSinceRef.current) {
+        // Seed from the newest price clock we already hold.
+        let max = 0;
+        for (const r of stocksRef.current) if (r.price_updated_at > max) max = r.price_updated_at;
+        pricesSinceRef.current = max;
+      }
+      const res = await fetch(`/api/stocks/prices?since=${pricesSinceRef.current}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (Number.isFinite(data?.asOf) && data.asOf > pricesSinceRef.current) pricesSinceRef.current = data.asOf;
+      if (Array.isArray(data?.prices) && data.prices.length) applyQuotePatches(data.prices);
+    } catch {
+      // transient network error — the next tick retries
+    } finally {
+      pricesPollingRef.current = false;
+    }
+  }
+  useEffect(() => {
+    const POLL_MS = 3 * 60 * 1000;
+    const tick = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      syncPrices();
+    };
+    const id = setInterval(tick, POLL_MS);
+    // Returning to a backgrounded tab catches up at once instead of waiting a tick.
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && Date.now() - lastPricesPollRef.current > 60 * 1000) syncPrices();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+    // syncPrices only reads refs — mount-only by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Deep Research: bring ONE symbol up to date (live quote + stale fundamentals,
+  // server decides what is actually due). Available to every account. Resolves
+  // to the server's { row, inUniverse, refreshed } or null on failure.
+  async function syncSymbol(symbol) {
+    if (!symbol) return null;
+    try {
+      const res = await fetch(`/api/stocks/sync/${encodeURIComponent(symbol)}`, { method: "POST" });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data?.inUniverse && data.row?.symbol) {
+        const fresh = data.row;
+        if (!stocksRef.current.length) {
+          pendingRowPatchesRef.current.set(fresh.symbol, fresh);
+        } else {
+          const apply = (arr) => arr.map((r) => (r.symbol === fresh.symbol ? { ...r, ...fresh } : r));
+          stocksRef.current = apply(stocksRef.current);
+          setStocks((prev) => apply(prev));
+        }
+      }
+      return data;
+    } catch {
+      return null;
     }
   }
 
@@ -1073,20 +1197,7 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
       const data = await res.json();
       const quotes = data?.quotes;
       if (!Array.isArray(quotes) || !quotes.length) return;
-      const fresh = new Map(quotes.filter((q) => q?.symbol).map((q) => [q.symbol, q]));
-      const patch = (row) => {
-        const q = fresh.get(row.symbol);
-        if (!q) return row;
-        return {
-          ...row,
-          price: q.price ?? row.price,
-          volume: q.volume ?? row.volume,
-          mcap: q.mcap ?? row.mcap,
-          price_updated_at: q.price_updated_at ?? row.price_updated_at,
-        };
-      };
-      stocksRef.current = stocksRef.current.map(patch);
-      setStocks((prev) => prev.map(patch));
+      applyQuotePatches(quotes);
     } catch {
       // ignore transient network errors
     }
@@ -1095,7 +1206,13 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
   // ── Combined enrichment SSE loader ───────────────────────────────────────
 
   function enrichAll(symbols, force = false, onComplete = null) {
-    if (enrichLoading) return;
+    // Already gathering: don't start a second stream, but still release a
+    // caller waiting on completion (Deep Research's re-gather) instead of
+    // leaving it hanging forever.
+    if (enrichLoading) {
+      onComplete?.();
+      return;
+    }
 
     // Fire the completion callback exactly once, however the stream ends (done,
     // error, or network failure) — used by the per-symbol re-gather to know when
@@ -1395,6 +1512,8 @@ export function useScreener(currentUser, portfolioGoals = {}, canUseOri = false,
     loadStocks,
     mergeStocks,
     refreshWatchlistQuotes,
+    syncPrices,
+    syncSymbol,
     // scope='visible' (default): act only on the on-screen (filtered) rows — fetch
     //   the ones still missing data, or force-refresh them all if they're already
     //   enriched.

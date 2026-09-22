@@ -6,7 +6,7 @@
 // Errors carry a `code` so callers can map them to friendly HTTP responses.
 
 // ── Model tiers (env-overridable so we can re-point without a deploy) ─────────
-//   frontier — best cost/quality for Deep Research (one 3.6 Flash generation per
+//   frontier — best cost/quality for Deep Research (one 3.8 Flash generation per
 //              stock per week thanks to the per-symbol cache).
 //   value    — the interactive chat workhorse (3.5 Flash-Lite).
 //   lite     — cheapest reliable structured model (3.1 Flash-Lite).
@@ -21,8 +21,10 @@ function configuredModel(envName, selected, retiredDefaults = []) {
 
 export const frontierModel = () => configuredModel(
   "GEMINI_FRONTIER_MODEL",
-  "gemini-3.6-flash",
-  ["gemini-3.1-pro-preview", "gemini-2.5-pro"],
+  "gemini-3.8-flash",
+  // 3.6 / 3.7 Flash are listed so a Railway variable still pinned to the old
+  // default upgrades automatically (3.8 Flash is priced the same as 3.6).
+  ["gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-3.6-flash", "gemini-3.7-flash"],
 );
 export const valueModel = () => configuredModel(
   "GEMINI_VALUE_MODEL",
@@ -369,11 +371,23 @@ export async function geminiGenerateJson({
   }
 }
 
+// True for Gemini 3.5+ (3.5, 3.6 … 3.9, 4.x …) — any version from the line that
+// stopped accepting temperature / topP / topK. A version-number check rather
+// than a list of ids, so the next model bump can't silently start sending
+// fields the API rejects.
+export function dropsLegacySampling(model) {
+  const m = /^gemini-(\d+)\.(\d+)-/.exec(String(model || ""));
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return major > 3 || (major === 3 && minor >= 5);
+}
+
 function bodyForModel(baseBody, model, { system, cachedContent, getCachedContent, thinkingLevel }) {
   const generationConfig = { ...baseBody.generationConfig };
-  // Gemini 3.5/3.6 no longer accept the legacy sampling knobs. Keep them for
-  // older/custom models, but strip them from the current 3.5/3.6 request shape.
-  if (/^gemini-3\.(5|6)-/.test(model)) {
+  // Gemini 3.5 and later no longer accept the legacy sampling knobs. Keep them
+  // for older/custom models, but strip them from the current request shape.
+  if (dropsLegacySampling(model)) {
     delete generationConfig.temperature;
     delete generationConfig.topP;
     delete generationConfig.topK;

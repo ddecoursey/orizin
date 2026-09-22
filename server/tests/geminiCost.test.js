@@ -94,6 +94,11 @@ test('selected models use current standard token prices', () => {
     cachedPer1M: 0.15,
     outputPer1M: 7.5,
   });
+  assert.deepEqual(pricingForModel('gemini-3.8-flash'), {
+    inputPer1M: 1.5,
+    cachedPer1M: 0.15,
+    outputPer1M: 7.5,
+  });
 });
 
 test('Flex prices the selected background model at half Standard', () => {

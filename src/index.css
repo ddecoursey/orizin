@@ -253,3 +253,39 @@ body { background-color: var(--color-gray-950); }
 .light .upgrade-modal-card .text-gray-500 {
   color: #9ca3af !important;
 }
+
+/* ── "Ask Ori" launcher ──────────────────────────────────────────────────────
+   Always dark (like the upgrade card) so it reads as a premium control on both
+   themes. Motion is quiet: a slow halo "breath", one light sweep when it first
+   appears, and a sweep + ring tilt on hover. All of it is off for users who
+   prefer reduced motion. */
+.ori-launcher {
+  --color-gray-50: #f9fafb;
+  --color-gray-400: #9ca3af;
+  --color-gray-950: #030712;
+}
+.ori-launcher-border {
+  background: linear-gradient(135deg, #818cf8 0%, #c084fc 45%, #22d3ee 100%);
+}
+.ori-launcher-orb {
+  background: radial-gradient(circle at 35% 30%, rgba(165, 180, 252, 0.32), rgba(49, 46, 129, 0.55) 70%);
+}
+@keyframes ori-halo {
+  0%, 100% { opacity: 0.45; transform: scale(0.98); }
+  50% { opacity: 0.8; transform: scale(1.03); }
+}
+@keyframes ori-sheen {
+  from { transform: translateX(-120%) skewX(-18deg); }
+  to { transform: translateX(320%) skewX(-18deg); }
+}
+/* Separate name so hovering restarts the sweep (same-name changes don't). */
+@keyframes ori-sheen-hover {
+  from { transform: translateX(-120%) skewX(-18deg); }
+  to { transform: translateX(320%) skewX(-18deg); }
+}
+.ori-launcher-sheen { transform: translateX(-120%) skewX(-18deg); }
+@media (prefers-reduced-motion: no-preference) {
+  .ori-launcher-halo { animation: ori-halo 4.5s ease-in-out infinite; }
+  .ori-launcher-sheen { animation: ori-sheen 1.1s ease-out 0.9s 1 both; }
+  .ori-launcher:hover .ori-launcher-sheen { animation: ori-sheen-hover 0.9s ease-out 1 both; }
+}

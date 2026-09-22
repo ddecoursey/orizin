@@ -7,6 +7,8 @@ import {
   fetchProfile,
   fetchQuote,
   profileToRow,
+  deriveKeyMetrics,
+  deriveRatios,
 } from './fmp.js';
 import { logError } from './logger.js';
 import { marketSession } from './marketHours.js';
@@ -150,18 +152,7 @@ class EnrichmentManager {
       if (needKm) {
         const km = await fetchKeyMetrics(symbol, { maxRetries: 2, timeoutMs: 12000 });
         if (km) {
-          if (km._haveEv && km._ev && mcap) {
-            // same derivations as main enrich
-            const ev = km._ev;
-            if (km.earnings_yield != null && km.ev_sales != null)
-              km.net_margin = (mcap * km.earnings_yield * km.ev_sales) / ev;
-            if (km.fcf_yield != null && km.ev_sales != null)
-              km.fcf_margin = (mcap * km.fcf_yield * km.ev_sales) / ev;
-            if (km.ev_sales != null) km.ps = (mcap * km.ev_sales) / ev;
-          }
-          delete km._ev;
-          delete km._haveEv;
-          db.saveKm(symbol, km);
+          db.saveKm(symbol, deriveKeyMetrics(km, mcap));
           didWork = true;
         }
       }
@@ -169,10 +160,7 @@ class EnrichmentManager {
       if (needRat) {
         const rat = await fetchRatios(symbol, { maxRetries: 2, timeoutMs: 12000 });
         if (rat) {
-          const updated = db.getStock(symbol);
-          if (updated?.ev_sales != null && rat.gross_margin != null && rat.gross_margin > 0)
-            rat.ev_gp = updated.ev_sales / rat.gross_margin;
-          db.saveRat(symbol, rat);
+          db.saveRat(symbol, deriveRatios(rat, db.getStock(symbol)?.ev_sales));
           didWork = true;
         }
       }

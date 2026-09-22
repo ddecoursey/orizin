@@ -17,6 +17,8 @@
 - **Multi-Tab Portfolio Organization** - Create and manage multiple stock lists/tabs
 - **Favorite Pinning** - Pin your watchlist stocks for quick access
 - **Local Database** - SQLite for fast, persistent data storage
+- **Guided tours** - A first-run overview plus a tour for every page (Screener, Deep Research, Ori, Portfolio, Strategies, Watchlist), available to every account at any time from **Guide** in the header. Progress follows the account (`tour` in the per-user settings blob); tour copy lives in `src/lib/tours.jsx` and spotlights `[data-tour="…"]` hooks
+- **Fresh prices** - A session-aware universe price sweep re-prices every US-listed row from the paged company screener (every 10 min while the market is open), open tabs pull just the changed prices from `/api/stocks/prices`, and opening a stock in Deep Research syncs its live quote and any stale fundamentals for every account
 
 ## Tech Stack
 
@@ -155,7 +157,7 @@ override `NODE_ENV=production`, so they stay Lite-only and do not create paid
 context caches or run autonomous Gemini jobs.
 
 The cost-optimized model routing is Gemini 3.1 Flash-Lite for trickle/FMP
-planning, Gemini 3.5 Flash-Lite for interactive chat, and Gemini 3.6 Flash at
+planning, Gemini 3.5 Flash-Lite for interactive chat, and Gemini 3.8 Flash at
 medium thinking for weekly cached Deep Research. Explicit Gemini chat context
 caching is off by default because its fixed storage cost does not break even at
 normal traffic; enabling it requires `GEMINI_CONTEXT_CACHE_OPT_IN=true`.

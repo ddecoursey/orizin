@@ -12,6 +12,10 @@ const STANDARD_PRICING = {
   "gemini-3.5-flash-lite": { inputPer1M: 0.3, cachedPer1M: 0.03, outputPer1M: 2.5 },
   "gemini-3.5-flash": { inputPer1M: 1.5, cachedPer1M: 0.15, outputPer1M: 9 },
   "gemini-3.6-flash": { inputPer1M: 1.5, cachedPer1M: 0.15, outputPer1M: 7.5 },
+  // Same list price as 3.6 Flash (Google pricing page, Sept 2026; the lower
+  // introductory rate through 2026-12-31 is deliberately not used, so cost
+  // ceilings stay conservative).
+  "gemini-3.8-flash": { inputPer1M: 1.5, cachedPer1M: 0.15, outputPer1M: 7.5 },
   "gemini-3.1-pro-preview": { inputPer1M: 2, cachedPer1M: 0.2, outputPer1M: 12 },
   "gemini-2.5-flash-lite": { inputPer1M: 0.1, cachedPer1M: 0.01, outputPer1M: 0.4 },
   "gemini-2.5-flash": { inputPer1M: 0.3, cachedPer1M: 0.03, outputPer1M: 2.5 },
@@ -23,6 +27,7 @@ const FLEX_PRICING = {
   "gemini-3.5-flash-lite": { inputPer1M: 0.15, cachedPer1M: 0.02, outputPer1M: 1.25 },
   "gemini-3.5-flash": { inputPer1M: 0.75, cachedPer1M: 0.08, outputPer1M: 4.5 },
   "gemini-3.6-flash": { inputPer1M: 0.75, cachedPer1M: 0.075, outputPer1M: 3.75 },
+  "gemini-3.8-flash": { inputPer1M: 0.75, cachedPer1M: 0.075, outputPer1M: 3.75 },
   "gemini-3.1-pro-preview": { inputPer1M: 1, cachedPer1M: 0.1, outputPer1M: 6 },
 };
 
@@ -42,7 +47,7 @@ export function geminiPricingTable() {
   const frontier = frontierModel();
   const valueDefault = standardPricing(value, STANDARD_PRICING["gemini-3.5-flash-lite"]);
   const liteDefault = standardPricing(lite, STANDARD_PRICING["gemini-3.1-flash-lite"]);
-  const frontierDefault = standardPricing(frontier, STANDARD_PRICING["gemini-3.6-flash"]);
+  const frontierDefault = standardPricing(frontier, STANDARD_PRICING["gemini-3.8-flash"]);
   return {
     [value]: row(
       n("GEMINI_VALUE_INPUT_PER_1M", valueDefault.inputPer1M),
