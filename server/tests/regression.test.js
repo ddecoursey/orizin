@@ -415,6 +415,48 @@ test('settings are stored per user and shallow-merged', async () => {
   assert.equal(adminSettings.data.theme, undefined);
 });
 
+test('settings sanitize guided-tour progress', async () => {
+  const completed = { welcome: true, screener: true, skipped: false };
+  for (let i = 0; i < 60; i++) completed[`t${i}`] = true;
+  completed['x'.repeat(41)] = true;
+  const put = await fetch(api('/api/settings'), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', cookie: userCookie },
+    body: JSON.stringify({ tour: { version: 'not-a-number', seenWelcome: 'yes', completed, extra: 'dropped' } }),
+  });
+  assert.equal(put.status, 200);
+  const { data } = await json(await fetch(api('/api/settings'), { headers: { cookie: userCookie } }));
+  assert.equal(data.tour.version, 0);
+  assert.equal(data.tour.seenWelcome, true);
+  assert.equal(data.tour.extra, undefined);
+  assert.equal(data.tour.completed.welcome, true);
+  assert.equal(data.tour.completed.skipped, undefined, 'falsy entries are dropped');
+  assert.equal(data.tour.completed['x'.repeat(41)], undefined, 'over-long ids are dropped');
+  assert.ok(Object.keys(data.tour.completed).length <= 40, 'tour ids are capped');
+});
+
+test('price feed is incremental and never mistaken for a ticker', async () => {
+  const res = await fetch(api('/api/stocks/prices?since=0'), { headers: { cookie: userCookie } });
+  assert.equal(res.status, 200);
+  const body = await json(res);
+  assert.ok(Array.isArray(body.prices));
+  assert.equal(typeof body.asOf, 'number');
+  const future = await json(await fetch(api(`/api/stocks/prices?since=${Date.now() + 60_000}`), { headers: { cookie: userCookie } }));
+  assert.deepEqual(future.prices, []);
+  const anon = await fetch(api('/api/stocks/prices'));
+  assert.equal(anon.status, 401);
+});
+
+test('Deep Research symbol sync validates input and never invents rows', async () => {
+  const bad = await fetch(api('/api/stocks/sync/not%20a%20ticker!'), { method: 'POST', headers: { cookie: userCookie } });
+  assert.equal(bad.status, 400);
+  // No FMP key in the test server → an off-universe symbol cannot be resolved.
+  const unknown = await fetch(api('/api/stocks/sync/ZZZQX'), { method: 'POST', headers: { cookie: userCookie } });
+  assert.equal(unknown.status, 404);
+  const anon = await fetch(api('/api/stocks/sync/AAPL'), { method: 'POST' });
+  assert.equal(anon.status, 401);
+});
+
 test('settings persist paper strategies and the active strategy per user', async () => {
   const strategy = {
     id: 'strat_test',

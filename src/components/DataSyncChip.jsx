@@ -31,24 +31,27 @@ export default function DataSyncChip({ isAdmin = false }) {
   const lastMs = sync.lastUpdate ? (typeof sync.lastUpdate === "number" ? sync.lastUpdate : Date.parse(sync.lastUpdate)) : null;
   const age = lastMs && Number.isFinite(lastMs) && now ? fmtAge(now - lastMs) : null;
   const session = sync.marketSession || "closed";
-  const label = sync.backgroundRunning
-    ? age
-      ? `Syncing · ${sync.lastSymbol || "…"} · ${age} ago`
-      : "Data syncing…"
-    : "Sync paused";
+  const pricesAge = sync.pricesAt && now ? fmtAge(now - sync.pricesAt) : null;
+  const label = pricesAge
+    ? `Prices · ${pricesAge}`
+    : sync.backgroundRunning
+      ? age
+        ? `Syncing · ${sync.lastSymbol || "…"} · ${age}`
+        : "Data syncing…"
+      : "Sync paused";
 
   return (
     <span
       className="hidden sm:inline-flex items-center gap-1.5 text-[10px] text-gray-500 tabular-nums"
       title={
         isAdmin
-          ? `Background enrich · ${session} · ${sync.missingCount ?? "?"} symbols missing metrics`
-          : "Shared market data — refreshed automatically for all users"
+          ? `Background enrich · ${session} · ${sync.missingCount ?? "?"} symbols missing metrics${age ? ` · last ${sync.lastSymbol || "?"} ${age}` : ""}`
+          : "Shared market data — the whole universe is re-priced automatically through the trading day"
       }
     >
       <span
         className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-          sync.backgroundRunning ? "bg-emerald-500 animate-pulse" : "bg-gray-600"
+          sync.backgroundRunning || pricesAge ? "bg-emerald-500 animate-pulse" : "bg-gray-600"
         }`}
       />
       {label}

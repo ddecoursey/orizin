@@ -12,8 +12,9 @@ const router = Router();
 const ALLOWED_KEYS = new Set([
   "tabs", "activeTab", "weights", "risk", "persona", "horizon", "goal", "sort", "theme", "sidebarCollapsed",
   "portfolios", "goals", "theses", "oriMemory", "watchlists", "activeWatchlistId",
-  "watchlistAlerts", "nickname", "strategies", "activeStrategyId",
+  "watchlistAlerts", "nickname", "strategies", "activeStrategyId", "tour",
 ]);
+const MAX_TOUR_IDS = 40;
 const MAX_NICKNAME_LEN = 64;
 const MAX_WATCHLIST_PAYLOAD_LISTS = 20;
 const MAX_BODY_BYTES = 256 * 1024;
@@ -129,6 +130,25 @@ function sanitizeSettings(partial) {
     }
     if (k === "watchlistAlerts" && v && typeof v === "object") {
       out.watchlistAlerts = sanitizeWatchlistAlerts(v);
+      continue;
+    }
+    // Guided-tour progress: { version, seenWelcome, completed: { [tourId]: true } }.
+    // Tour ids are client-defined, so cap both their count and their length
+    // rather than trusting the blob.
+    if (k === "tour" && v && typeof v === "object" && !Array.isArray(v)) {
+      const completed = {};
+      if (v.completed && typeof v.completed === "object" && !Array.isArray(v.completed)) {
+        for (const [id, done] of Object.entries(v.completed)) {
+          if (!done) continue;
+          if (Object.keys(completed).length >= MAX_TOUR_IDS) break;
+          if (typeof id === "string" && id.length <= 40) completed[id] = true;
+        }
+      }
+      out.tour = {
+        version: Number.isFinite(Number(v.version)) ? Math.max(0, Math.min(1000, Number(v.version))) : 0,
+        seenWelcome: !!v.seenWelcome,
+        completed,
+      };
       continue;
     }
     if (k === "nickname" && typeof v === "string") {

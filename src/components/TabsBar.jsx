@@ -18,7 +18,7 @@ export default function TabsBar({ tabs, activeTab, onActivate, onCreate, onDelet
   function cancel() { setAdding(false); setNewName(''); }
 
   return (
-    <div className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-800
+    <div data-tour="tabs" className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-800
       bg-gray-950 overflow-x-auto shrink-0">
       {tabs.map(tab => (
         <div

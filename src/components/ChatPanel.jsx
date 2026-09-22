@@ -293,6 +293,7 @@ export default function ChatPanel({ chat, canUseOri = true, floating = false, el
         animate={{ opacity: 1, y: 0 }}
         exit={reduce ? { opacity: 0 } : { opacity: 0, y: 12 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+        data-tour="chat-panel"
         className={
           overlayMode
             ? `fixed inset-x-0 bottom-0 z-[70] max-h-[min(52vh,440px)] rounded-t-2xl shadow-2xl border-t border-gray-700

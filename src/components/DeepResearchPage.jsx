@@ -240,7 +240,7 @@ function smLabel(signal) {
   return signal === "buying" ? "Net Buying" : signal === "selling" ? "Net Selling" : signal === "mixed" ? "Mixed" : "Quiet";
 }
 
-export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgradeToPro, stocks = [], onSelectSymbol, onRegather, regathering = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", setRisk, persona = "balanced_growth", setPersona, horizon = "medium", setHorizon, goal = "grow", setGoal, pillarWeights = undefined, onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
+export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgradeToPro, stocks = [], onSelectSymbol, onRegather, regathering = false, syncing = false, detailReloadToken = 0, detail = {}, fitCtx = null, risk = "balanced", setRisk, persona = "balanced_growth", setPersona, horizon = "medium", setHorizon, goal = "grow", setGoal, pillarWeights = undefined, onConvictionChange, isAdmin = false, canUseOri = false, onToggleWatchlist, isInWatchlist = false }) {
   const isLight = useIsLightTheme();
   // Personalized fit (portfolio / theses / goals). Cheap — one stock.
   const fit = computeFit(row || { symbol }, fitCtx);
@@ -407,7 +407,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-lg sm:text-xl font-black text-gray-100 shrink-0">{symbol}</span>
               <span
-                className="inline-block rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0 hidden md:inline"
+                className="hidden md:inline-block rounded-full px-2 py-0.5 text-[10px] font-medium shrink-0"
                 style={{ background: sec.bg, color: sec.fg }}
               >
                 {row?.sector || "—"}
@@ -427,6 +427,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
                 stocks={stocks}
                 onSelect={handleSearch}
                 placeholder="Switch symbol…"
+                tour="dr-search"
                 className="max-w-none flex-none w-full"
               />
             </Tooltip>
@@ -441,7 +442,19 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
           </div>
 
           <div className="shrink-0 text-right ml-auto sm:ml-0">
-            <div className="text-sm sm:text-lg font-bold font-mono text-gray-100 leading-tight">
+            <div
+              className="text-sm sm:text-lg font-bold font-mono text-gray-100 leading-tight flex items-center justify-end gap-1.5"
+              title={
+                syncing
+                  ? "Refreshing the live quote and fundamentals from FMP…"
+                  : row?.price_updated_at
+                    ? `Price as of ${new Date(row.price_updated_at).toLocaleString()}`
+                    : undefined
+              }
+            >
+              {syncing && (
+                <IconRefresh className="w-3 h-3 text-gray-500 animate-spin" />
+              )}
               {fmt(row?.price, "price") ?? "—"}
             </div>
             {sc != null && (
@@ -451,7 +464,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
             )}
           </div>
 
-          <div className="flex items-center rounded-lg border border-gray-800/90 bg-gray-900/40 divide-x divide-gray-800/80 shrink-0">
+          <div data-tour="dr-toolbar" className="flex items-center rounded-lg border border-gray-800/90 bg-gray-900/40 divide-x divide-gray-800/80 shrink-0">
             {onToggleWatchlist && (
               <ToolbarIcon
                 onClick={() => onToggleWatchlist(symbol)}
@@ -499,9 +512,10 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
         </div>
       </div>
 
-      <div className="p-4 sm:p-6 space-y-6">
+      {/* Bottom padding on phones so the last panel scrolls clear of the Ori button. */}
+      <div className="p-4 sm:p-6 pb-28 lg:pb-6 space-y-6">
         {/* Beginner Game Plan — the first thing you see: what to do with this stock */}
-        <div className="oz-fade-rise">
+        <div data-tour="dr-gameplan" className="oz-fade-rise">
           {overlapNote && (
             <div className="mb-3 rounded-lg border border-amber-800/40 bg-amber-950/25 px-3 py-2 text-[11px] text-amber-200">
               {overlapNote}
@@ -515,7 +529,7 @@ export default function DeepResearchPage({ symbol, row, onBack, onAskOri, onUpgr
         </div>
 
         {/* Price + RSI chart alongside the company profile, under the name bar */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise" style={{ animationDelay: "40ms" }}>
+        <div data-tour="dr-panels" className="grid grid-cols-1 lg:grid-cols-3 gap-4 oz-fade-rise" style={{ animationDelay: "40ms" }}>
           <section className="lg:col-span-2 bg-gray-900 border border-gray-800 rounded-xl p-4">
             <h3 className="text-[11px] uppercase tracking-wider font-bold text-gray-400 mb-2">
               Price &amp; RSI

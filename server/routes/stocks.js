@@ -23,8 +23,8 @@ import {
   pruneUniverse,
   kvGet,
   kvSet,
-  kvPurgeOlderThan,
   getUserByUsername,
+  getPricesUpdatedSince,
 } from "../db.js";
 import { logError } from "../logger.js";
 import { requireAdmin } from "../auth.js";
@@ -61,6 +61,8 @@ import {
 } from "../gamePlanCache.js";
 import { acquireOriQuota, recordOriUsage, releaseOriQuota } from "../oriUsage.js";
 import { execCompAllowed } from "../fmpPlanLimits.js";
+import { getPriceSweepStatus } from "../priceSweep.js";
+import { encodeStockRows } from "../../src/lib/stocksPayload.js";
 
 // Rate limiters for expensive operations (per user or IP)
 // Relaxed in dev (non-prod) so you can iterate on Universe Refresh / gather without
@@ -86,12 +88,54 @@ const enrichLimiter = rateLimit({
   validate: { trustProxy: false },
 });
 
-// Light limiter for the per-symbol valuation lookup (DCF / targets / owner
-// earnings). It's cached 24h in the DB, so this only guards against bursts.
+// Burst guard for the per-symbol detail endpoints (profile, ratings, grades,
+// technicals, statements, filings, peers …). Every one is served from the
+// two-level detail cache and upstream FMP traffic is already bounded by the
+// global rate gate, so this only stops a runaway client. One Deep Research open
+// fires ~16 of these; the old ceiling of 30/min meant a second open (or the
+// post-regather reload) inside the same minute tripped 429s on the page.
 const aiDetailLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
-  max: 30,
+  max: 150,
   message: { error: 'Too many requests — slow down a moment.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  validate: { trustProxy: false },
+});
+
+// Ori's Game Plan has its OWN budget. It used to share aiDetailLimiter with the
+// ~16 data-panel requests Deep Research fires on open, so the Game Plan call —
+// always last, after its render defer — was the one that hit the ceiling and
+// "Refresh Ori" failed on the first click. Spend is metered separately by the
+// Ori quota; this only caps request bursts.
+const gamePlanLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  message: { error: 'Too many Ori Game Plan requests — give it a moment.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  validate: { trustProxy: false },
+});
+
+// Deep Research symbol sync (live quote + stale fundamentals) — open to every
+// account, freshness-gated and coalesced per symbol server-side.
+const symbolSyncLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  message: { error: 'Too many symbol refreshes — slow down a moment.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.userId || ipKeyGenerator(req),
+  validate: { trustProxy: false },
+});
+
+// Incremental price feed polled by open tabs (SQLite only, no FMP).
+const pricesLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 12,
+  message: { error: 'Too many price refreshes — slow down a moment.' },
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req) => req.userId || ipKeyGenerator(req),
@@ -173,8 +217,17 @@ async function resolveSparklinePrices(symbol, days, force = false, maxAgeMs = nu
       if (wider?.length) return wider.slice(-days);
     }
   }
-  const history = await loadAndCacheSparkline(symbol);
-  return history?.slice(-days) || [];
+  const history = await loadAndCacheSparkline(symbol).catch(() => []);
+  if (history?.length) return history.slice(-days);
+  // Upstream failed or returned nothing: an aged chart beats an empty one.
+  if (!force && maxAgeMs) {
+    for (const win of [days, 1825, 365, 45]) {
+      if (win < days) continue;
+      const stale = sparklinePricesFromRow(getSparkline(symbol, win));
+      if (stale?.length) return stale.slice(-days);
+    }
+  }
+  return [];
 }
 
 /** Persist 45/365/1825 spark windows from one historical download. */
@@ -223,6 +276,8 @@ import {
   fetchIntraday,
   fetchUniverseRows,
   fetchEtfsFunds,
+  deriveKeyMetrics,
+  deriveRatios,
 } from "../fmp.js";
 // Universe refresh uses company-screener as the primary source: stocks are fetched
 // with a market-cap floor and isEtf/isFund=false (full data inline — mcap/sector/
@@ -317,16 +372,9 @@ async function cachedDetail(key, ttlMs, fn, force = false) {
   }
 }
 
-// Bound the persistent cache once a day. kvPurgeOlderThan protects Ori trickle
-// scores for their separate (default 30-day) configured lifetime.
-setInterval(() => {
-  try {
-    const purged = kvPurgeOlderThan(14 * 24 * 60 * 60 * 1000);
-    if (purged > 0) console.log(`[cache] purged ${purged} stale kv_cache entries`);
-  } catch (e) {
-    console.warn('[cache] purge failed:', e.message);
-  }
-}, 24 * 60 * 60 * 1000).unref();
+// The persistent cache is bounded by the daily maintenance job
+// (server/maintenance.js → kvPurgeOlderThan, 14 days; Ori trickle scores keep
+// their own configured lifetime).
 
 async function getUniverse(force = false) {
   const cachedAt = getMeta("universe_cache_at");
@@ -442,8 +490,11 @@ router.get("/stocks", (req, res) => {
   try {
     const stocks = getAllStocks();
     const lastFetch = getMeta("last_screener_fetch");
+    // ?format=columns → compact columnar payload (see src/lib/stocksPayload.js);
+    // the default object-per-row shape stays for any other caller.
+    const body = req.query.format === "columns" ? encodeStockRows(stocks) : { stocks };
     res.json({
-      stocks,
+      ...body,
       meta: {
         count: stocks.length,
         enrichedCount: stocks.filter((s) => s.has_km && s.has_rat).length,
@@ -451,7 +502,24 @@ router.get("/stocks", (req, res) => {
       },
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
+  }
+});
+
+// ── GET /api/stocks/prices?since=<ms> ─────────────────────────────────────
+// Incremental price feed: only rows re-priced after `since`, as a minimal
+// payload. An open tab polls this so its table tracks the background price
+// sweep instead of freezing at whatever /api/stocks returned on page load.
+// `asOf` is the newest price clock returned — pass it back as the next `since`.
+// Registered before /stocks/:symbol so "prices" is never read as a ticker.
+router.get("/stocks/prices", pricesLimiter, (req, res) => {
+  try {
+    const since = Math.max(0, Number(req.query.since) || 0);
+    const prices = getPricesUpdatedSince(since);
+    const asOf = prices.length ? prices[prices.length - 1].price_updated_at : since;
+    res.json({ prices, asOf });
+  } catch (e) {
+    res.status(500).json({ error: "Could not load prices" });
   }
 });
 
@@ -739,26 +807,13 @@ router.post("/stocks/enrich", enrichLimiter, requireAdmin, async (req, res) => {
             }
 
             if (km) {
-              if (km._haveEv && km._ev && mcap) {
-                const ev = km._ev;
-                if (km.earnings_yield != null && km.ev_sales != null)
-                  km.net_margin = (mcap * km.earnings_yield * km.ev_sales) / ev;
-                if (km.fcf_yield != null && km.ev_sales != null)
-                  km.fcf_margin = (mcap * km.fcf_yield * km.ev_sales) / ev;
-                if (km.ev_sales != null) km.ps = (mcap * km.ev_sales) / ev;
-              }
-              delete km._ev;
-              delete km._haveEv;
-              saveKm(symbol, km);
+              saveKm(symbol, deriveKeyMetrics(km, mcap));
             } else if (needKm) {
               console.warn(`[Enrich] No key-metrics returned for ${symbol}`);
             }
 
             if (rat) {
-              const updated = getStock(symbol);
-              if (updated?.ev_sales != null && rat.gross_margin != null && rat.gross_margin > 0)
-                rat.ev_gp = updated.ev_sales / rat.gross_margin;
-              saveRat(symbol, rat);
+              saveRat(symbol, deriveRatios(rat, getStock(symbol)?.ev_sales));
             } else if (needRat) {
               console.warn(`[Enrich] No ratios returned for ${symbol}`);
             }
@@ -886,7 +941,7 @@ router.post("/stocks/ai-enrich", enrichLimiter, requireAdmin, async (req, res) =
     }
     res.json({ data: results });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -913,25 +968,15 @@ router.post("/stocks/add", enrichLimiter, requireAdmin, async (req, res) => {
     ]);
     if (!prof)
       return res.status(404).json({ error: `Symbol ${sym} not found` });
-    saveScreenerBatch([profileToRow(prof)]);
-    if (km) {
-      delete km._ev;
-      delete km._haveEv;
-      saveKm(sym, km);
-    }
-    if (rat) {
-      const row = getStock(sym);
-      if (
-        row?.ev_sales != null &&
-        rat.gross_margin != null &&
-        rat.gross_margin > 0
-      )
-        rat.ev_gp = row.ev_sales / rat.gross_margin;
-      saveRat(sym, rat);
-    }
+    const profRow = profileToRow(prof);
+    saveScreenerBatch([profRow]);
+    // Previously this path skipped the derivation, so a manually added ticker
+    // had no net margin / FCF margin / P/S until its next full gather.
+    if (km) saveKm(sym, deriveKeyMetrics(km, profRow.mcap));
+    if (rat) saveRat(sym, deriveRatios(rat, getStock(sym)?.ev_sales));
     res.json({ stock: getStock(sym) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -947,7 +992,7 @@ router.get("/stocks/rsi/:symbol", aiDetailLimiter, guardFmpDetailRequest, async 
     );
     res.json({ symbol, periodLength, rsi });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1209,7 +1254,7 @@ router.get("/stocks/smart-money/:symbol", aiDetailLimiter, guardFmpDetailRequest
 // macro tail/headwinds, bull & bear cases, and a BOUNDED adjustment to the
 // verdict. Pro-gated, rate-limited, cached by model tier (frontier default: 1w;
 // sub-frontier fallback: short lite window) and shared company-wide.
-const GAME_PLAN_SCHEMA = {
+export const GAME_PLAN_SCHEMA = {
   type: "OBJECT",
   properties: {
     bottomLine: { type: "STRING" },
@@ -1252,7 +1297,7 @@ const GAME_PLAN_SCHEMA = {
   ],
 };
 
-function buildGamePlanPrompt({ symbol, profile, news, stats, verdict }) {
+export function buildGamePlanPrompt({ symbol, profile, news, stats, verdict }) {
   const p = profile || {};
   const s = stats || {};
   const v = verdict || {};
@@ -1296,6 +1341,36 @@ RECENT HEADLINES:
 ${headlines || "(none available)"}
 
 Assess the intangibles and future potential of ${symbol}, then fill the JSON schema. Remember: the data verdict above is the anchor — your convictionDelta and horizon view should ADJUST within reason, not overrule it, unless the intangible story is genuinely decisive.`;
+}
+
+// The Game Plan is cached per symbol and served to EVERY user for up to a
+// week, so the fundamentals in its prompt must not be whatever one client chose
+// to POST. Wherever the shared database has a value, it wins; the client only
+// fills gaps (e.g. an off-universe symbol) and supplies its own Conviction.
+// Numbers are coerced so a crafted body can't smuggle text through a stat.
+const GAME_PLAN_STAT_KEYS = [
+  "price", "mcap", "beta", "pe", "ps", "pb", "fcf_yield", "div_yield", "roic", "roe",
+  "net_margin", "op_margin", "gross_margin", "fcf_margin", "revenue_growth", "eps_growth",
+  "debt_equity", "net_debt_ebitda", "dcf", "target", "conviction",
+];
+export function trustedGamePlanStats(symbol, clientStats = {}, deps = { getStock, getAiEnrichment }) {
+  const row = deps.getStock(symbol) || null;
+  const enrichment = deps.getAiEnrichment(symbol) || null;
+  const server = {
+    ...stockRowToLiteStats(row, enrichment),
+    dcf: enrichment?.dcf ?? null,
+    target: enrichment?.target_consensus ?? row?.target_consensus ?? null,
+  };
+  const out = {};
+  for (const key of GAME_PLAN_STAT_KEYS) {
+    const trusted = server[key];
+    const raw = trusted != null ? trusted : clientStats?.[key];
+    const n = raw == null || raw === "" ? null : Number(raw);
+    out[key] = Number.isFinite(n) ? n : null;
+  }
+  const sector = row?.sector || (typeof clientStats?.sector === "string" ? clientStats.sector : null);
+  out.sector = sector ? String(sector).slice(0, 60) : null;
+  return out;
 }
 
 function sanitizeGamePlan(o) {
@@ -1344,7 +1419,7 @@ function sanitizeGamePlan(o) {
   };
 }
 
-router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
+router.post("/stocks/game-plan/:symbol", gamePlanLimiter, async (req, res) => {
   const symbol = validSymbol(req.params.symbol);
   if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
   if (!hasOriAccess(req.userId)) {
@@ -1365,7 +1440,8 @@ router.post("/stocks/game-plan/:symbol", aiDetailLimiter, async (req, res) => {
     const ladder = retry
       ? { models: [liteModel(), valueModel()] }
       : { models: [frontierModel(), valueModel(), liteModel()] };
-    const stats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
+    const clientStats = req.body?.stats && typeof req.body.stats === "object" ? req.body.stats : {};
+    const stats = trustedGamePlanStats(symbol, clientStats);
     const verdict = req.body?.verdict && typeof req.body.verdict === "object" ? req.body.verdict : {};
 
     if (refreshLite) {
@@ -1566,7 +1642,7 @@ router.get("/stocks/earnings/:symbol", aiDetailLimiter, guardFmpDetailRequest, a
     );
     res.json({ symbol, earnings: earnings || [] });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1582,7 +1658,7 @@ router.get("/stocks/ratings/:symbol", aiDetailLimiter, guardFmpDetailRequest, as
     if (!ratings) return res.status(404).json({ error: "No ratings available" });
     res.json({ ratings });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1597,7 +1673,7 @@ router.get("/stocks/grades/:symbol", aiDetailLimiter, guardFmpDetailRequest, asy
     );
     res.json({ symbol, grades });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1614,7 +1690,7 @@ router.get("/stocks/profile/:symbol", aiDetailLimiter, guardFmpDetailRequest, as
     if (!profile) return res.status(404).json({ error: "Profile not found" });
     res.json({ profile });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1630,7 +1706,7 @@ router.get("/stocks/insider/:symbol", aiDetailLimiter, guardFmpDetailRequest, as
     );
     res.json({ symbol, trades });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1645,7 +1721,7 @@ router.get("/stocks/intraday/:symbol", aiDetailLimiter, guardFmpDetailRequest, a
     );
     res.json({ symbol, prices });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1660,7 +1736,7 @@ router.get("/stocks/news/:symbol", aiDetailLimiter, guardFmpDetailRequest, async
     );
     res.json({ symbol, news });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1675,7 +1751,7 @@ router.get("/news", aiDetailLimiter, guardFmpDetailRequest, async (req, res) => 
     );
     res.json({ news });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1698,7 +1774,7 @@ router.get("/stocks/statements/:symbol", aiDetailLimiter, guardFmpDetailRequest,
     ]);
     res.json({ symbol, period, income, balance, cashflow });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1712,7 +1788,7 @@ router.get("/stocks/filings/:symbol", aiDetailLimiter, guardFmpDetailRequest, as
     );
     res.json({ symbol, filings });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1728,7 +1804,7 @@ router.get("/stocks/exec-comp/:symbol", aiDetailLimiter, guardFmpDetailRequest, 
       : [];
     res.json({ symbol, compensation, planLimited: !allowed });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1761,7 +1837,7 @@ router.get("/stocks/peers/:symbol", aiDetailLimiter, guardFmpDetailRequest, asyn
     });
     res.json({ symbol, peers: enriched });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1775,7 +1851,7 @@ router.get("/stocks/growth-history/:symbol", aiDetailLimiter, guardFmpDetailRequ
     );
     res.json({ symbol, growth });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1823,7 +1899,7 @@ router.get("/stocks/ai/:symbol", aiDetailLimiter, guardFmpDetailRequest, async (
     saveAiEnrichment(symbol, row);
     res.json({ data: { symbol, ...row, updated_at: Date.now() } });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
   }
 });
 
@@ -1841,7 +1917,118 @@ router.get("/stocks/estimates/:symbol", aiDetailLimiter, (req, res) => {
     }
     res.json({ estimates, updated_at: cached?.updated_at ?? null });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    { console.error("[stocks]", req.method, req.path, e?.message || e); res.status(500).json({ error: "Internal error — please try again." }); }
+  }
+});
+
+// ── POST /api/stocks/sync/:symbol ─────────────────────────────────────────
+// Opening a stock in Deep Research should never show yesterday's numbers. This
+// brings ONE symbol up to date for any account, spending FMP calls only on what
+// is actually stale:
+//   • live quote   when the last price is > SYNC_QUOTE_FRESH_MS old in a live
+//                  session (or > SYNC_QUOTE_CLOSED_MS while the market is shut,
+//                  so an intraday price left over from the afternoon settles)
+//   • key metrics + ratios  when missing or older than SYNC_FUNDAMENTALS_MS
+// Symbols outside the shared universe are NOT inserted into it (that stays an
+// admin action); they get a transient row built from cached profile/metrics so
+// the Game Plan can still be computed. Concurrent opens of the same symbol share
+// one pass, and a symbol synced in the last SYNC_MIN_INTERVAL_MS is returned
+// as-is, so a crowd opening the same name costs one upstream refresh.
+const SYNC_QUOTE_FRESH_MS = 60 * 1000;
+const SYNC_QUOTE_CLOSED_MS = 6 * 60 * 60 * 1000;
+const SYNC_FUNDAMENTALS_MS = 24 * 60 * 60 * 1000;
+const SYNC_MIN_INTERVAL_MS = 30 * 1000;
+const symbolSyncInflight = new Map();
+const symbolSyncedAt = new Map();
+
+async function syncUniverseSymbol(symbol, row) {
+  const now = Date.now();
+  const session = marketSession();
+  const refreshed = { quote: false, fundamentals: false };
+  const quoteAge = row.price_updated_at ? now - row.price_updated_at : Infinity;
+  const quoteDue = session === "closed" ? quoteAge > SYNC_QUOTE_CLOSED_MS : quoteAge > SYNC_QUOTE_FRESH_MS;
+  const fundamentalsDue =
+    !row.is_etf && (!row.has_km || !row.has_rat || !row.updated_at || now - row.updated_at > SYNC_FUNDAMENTALS_MS);
+  const opts = { maxRetries: 1, timeoutMs: 9000 };
+
+  const [quote, km, rat] = await Promise.all([
+    quoteDue ? fetchQuote(symbol, opts).catch(() => null) : null,
+    fundamentalsDue ? fetchKeyMetrics(symbol, opts).catch(() => null) : null,
+    fundamentalsDue ? fetchRatios(symbol, opts).catch(() => null) : null,
+  ]);
+  if (quote?.price != null) {
+    saveQuote(symbol, quote);
+    refreshed.quote = true;
+  }
+  const mcap = quote?.mcap ?? row.mcap ?? null;
+  if (km) {
+    saveKm(symbol, deriveKeyMetrics(km, mcap));
+    refreshed.fundamentals = true;
+  }
+  if (rat) {
+    saveRat(symbol, deriveRatios(rat, getStock(symbol)?.ev_sales));
+    refreshed.fundamentals = true;
+  }
+  return { row: getStock(symbol), inUniverse: true, refreshed };
+}
+
+// Off-universe symbol: build (and cache) a read-only row. Nothing is written to
+// the shared `stocks` table.
+async function transientSymbolRow(symbol) {
+  const day = 24 * 60 * 60 * 1000;
+  const prof = await cachedDetail(`profile:${symbol}`, day, () => fetchProfile(symbol)).catch(() => null);
+  if (!prof) return { row: null, inUniverse: false, refreshed: { quote: false, fundamentals: false } };
+  const base = profileToRow(prof);
+  const [quote, km, rat] = await Promise.all([
+    cachedDetail(`quote:${symbol}`, SYNC_QUOTE_FRESH_MS, () => fetchQuote(symbol)).catch(() => null),
+    base.is_etf ? null : cachedDetail(`km:${symbol}`, day, () => fetchKeyMetrics(symbol)).catch(() => null),
+    base.is_etf ? null : cachedDetail(`rat:${symbol}`, day, () => fetchRatios(symbol)).catch(() => null),
+  ]);
+  const mcap = quote?.mcap ?? base.mcap ?? null;
+  const row = {
+    ...base,
+    ...(rat ? { ...rat, has_rat: 1 } : {}),
+    ...(km ? { ...deriveKeyMetrics(km, mcap), has_km: 1 } : {}),
+    price: quote?.price ?? base.price,
+    mcap,
+    volume: quote?.volume ?? base.volume,
+    price_updated_at: quote?.price != null ? Date.now() : null,
+    transient: true,
+  };
+  return { row, inUniverse: false, refreshed: { quote: quote?.price != null, fundamentals: !!(km || rat) } };
+}
+
+export async function syncSymbol(symbol) {
+  const pending = symbolSyncInflight.get(symbol);
+  if (pending) return pending;
+  const row = getStock(symbol);
+  const last = symbolSyncedAt.get(symbol) || 0;
+  if (row && Date.now() - last < SYNC_MIN_INTERVAL_MS) {
+    return { row, inUniverse: true, refreshed: { quote: false, fundamentals: false }, skipped: true };
+  }
+  const p = (row ? syncUniverseSymbol(symbol, row) : transientSymbolRow(symbol))
+    .finally(() => {
+      symbolSyncInflight.delete(symbol);
+      symbolSyncedAt.set(symbol, Date.now());
+      // Bound the throttle map on a long-lived process.
+      if (symbolSyncedAt.size > 5000) {
+        const cutoff = Date.now() - SYNC_MIN_INTERVAL_MS;
+        for (const [k, at] of symbolSyncedAt) if (at < cutoff) symbolSyncedAt.delete(k);
+      }
+    });
+  symbolSyncInflight.set(symbol, p);
+  return p;
+}
+
+router.post("/stocks/sync/:symbol", symbolSyncLimiter, async (req, res) => {
+  const symbol = validSymbol(req.params.symbol);
+  if (!symbol) return res.status(400).json({ error: "Invalid symbol" });
+  try {
+    const result = await syncSymbol(symbol);
+    if (!result.row) return res.status(404).json({ error: `Symbol ${symbol} not found` });
+    res.json(result);
+  } catch (e) {
+    res.status(502).json({ error: "Could not refresh this symbol right now" });
   }
 });
 
@@ -1890,6 +2077,8 @@ router.get("/status", (req, res) => {
       lastUpdate: enrich.lastUpdate,
       marketSession: marketSession(),
       missingCount: enrich.missingCount ?? null,
+      // Last whole-universe re-price (null until the first sweep lands).
+      pricesAt: getPriceSweepStatus().lastAt,
     },
   };
   // Key configuration is admin-only — don't leak integration status to every user.

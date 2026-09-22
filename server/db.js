@@ -377,11 +377,21 @@ try {
     // bounce no longer makes it look healthy).
     ["sma50", "REAL"],
     ["sma200", "REAL"],
+    // Last time an upstream source actually returned a price for this symbol
+    // (screener, profile, quote or the price sweep). Unlike price_updated_at,
+    // a FAILED quote attempt never advances it, so it is what retention uses
+    // to recognise listings that have gone dark (delisted / renamed).
+    ["price_seen_at", "INTEGER"],
   ];
   for (const [name, type] of NEW_COLS) {
     if (!existingCols.has(name)) {
       db.exec(`ALTER TABLE stocks ADD COLUMN ${name} ${type}`);
       console.log(`[db] Migration: added column "${name} ${type}" to stocks`);
+      if (name === "price_seen_at") {
+        // Start every existing row from its best known price time so retention
+        // measures from now, never from zero.
+        db.exec(`UPDATE stocks SET price_seen_at = COALESCE(price_updated_at, updated_at, CAST(strftime('%s','now') AS INTEGER) * 1000)`);
+      }
       // One-time backfill: tag existing ETF/fund rows by name so they immediately
       // drop out of the enrichment queues. The next screener refresh sets is_etf
       // authoritatively (and corrects any heuristic mistake), so this is just a
@@ -570,11 +580,12 @@ const upsertStock = db.prepare(`
   INSERT INTO stocks (
     symbol, name, sector, industry, exchange, country,
     price, mcap, volume, beta,
-    div_yield, is_etf, updated_at
+    div_yield, is_etf, updated_at, price_seen_at
   ) VALUES (
     @symbol, @name, @sector, @industry, @exchange, @country,
     @price, @mcap, @volume, @beta,
-    @div_yield, @is_etf, @updated_at
+    @div_yield, @is_etf, @updated_at,
+    CASE WHEN @price IS NOT NULL THEN @updated_at END
   )
   ON CONFLICT(symbol) DO UPDATE SET
     -- Preserve existing values when the incoming row is a "placeholder" (null,
@@ -596,7 +607,13 @@ const upsertStock = db.prepare(`
     -- screener/profile carry an authoritative 0/1, so this corrects the migration
     -- heuristic; COALESCE only guards against a caller that omits the field.
     is_etf    = COALESCE(excluded.is_etf, stocks.is_etf),
-    updated_at = excluded.updated_at
+    price_seen_at = CASE WHEN excluded.price IS NOT NULL THEN excluded.updated_at ELSE stocks.price_seen_at END,
+    -- updated_at is the FUNDAMENTALS clock (key metrics / ratios). A universe or
+    -- profile refresh only carries listing + price fields, so it must not move
+    -- it; it used to, which made every row look freshly enriched after a
+    -- Universe Refresh and pushed genuinely stale fundamentals out of the
+    -- refresh rotation. New rows still start from the insert's updated_at.
+    updated_at = COALESCE(stocks.updated_at, excluded.updated_at)
 `);
 
 const applyKm = db.prepare(`
@@ -980,7 +997,8 @@ const applyQuoteStmt = db.prepare(`
     price            = COALESCE(@price, price),
     volume           = COALESCE(@volume, volume),
     mcap             = COALESCE(@mcap, mcap),
-    price_updated_at = @price_updated_at
+    price_updated_at = @price_updated_at,
+    price_seen_at    = CASE WHEN @price IS NOT NULL THEN @price_updated_at ELSE price_seen_at END
   WHERE symbol = @symbol
 `);
 
@@ -992,6 +1010,51 @@ export function saveQuote(symbol, q) {
     mcap: q?.mcap ?? null,
     price_updated_at: Date.now(),
   });
+}
+
+// Bulk variant for the universe price sweep. Only rows that already exist are
+// touched (an UPDATE on an unknown symbol is a no-op), only the price fields and
+// price clock move — never updated_at, which drives the fundamentals rotation —
+// and a row quoted more recently than `skipNewerThan` (a live per-symbol quote
+// that landed while the sweep was paging) keeps its fresher value.
+const applySweepQuoteStmt = db.prepare(`
+  UPDATE stocks SET
+    price            = @price,
+    volume           = COALESCE(@volume, volume),
+    mcap             = COALESCE(@mcap, mcap),
+    price_updated_at = @price_updated_at,
+    price_seen_at    = @price_updated_at
+  WHERE symbol = @symbol
+    AND (price_updated_at IS NULL OR price_updated_at < @skip_newer_than)
+`);
+
+export const applyQuoteBatch = db.transaction((quotes, { at = Date.now(), skipNewerThan = at } = {}) => {
+  let updated = 0;
+  for (const q of quotes || []) {
+    if (!q?.symbol || q.price == null || !Number.isFinite(Number(q.price))) continue;
+    updated += applySweepQuoteStmt.run({
+      symbol: q.symbol,
+      price: Number(q.price),
+      volume: q.volume ?? null,
+      mcap: q.mcap ?? null,
+      price_updated_at: at,
+      skip_newer_than: skipNewerThan,
+    }).changes;
+  }
+  return updated;
+});
+
+// Minimal price payload for every row whose quote moved after `since` — lets an
+// open browser tab keep its table in sync without re-downloading ~10k full rows.
+export function getPricesUpdatedSince(since = 0, limit = 20000) {
+  return db
+    .prepare(
+      `SELECT symbol, price, volume, mcap, price_updated_at FROM stocks
+         WHERE price_updated_at > ?
+         ORDER BY price_updated_at ASC
+         LIMIT ?`,
+    )
+    .all(Number(since) || 0, Math.max(1, Math.min(50000, Number(limit) || 20000)));
 }
 
 // Advance only the quote clock (used when a quote attempt returned nothing, so
@@ -1262,7 +1325,8 @@ export function pruneUniverse(floor, refreshStart = 0) {
     stalePlaceholders =
       db
         .prepare(
-          `DELETE FROM stocks WHERE is_etf = 0 AND mcap IS NULL AND (updated_at IS NULL OR updated_at < ?)`,
+          // Rows this refresh re-listed have price_seen_at ≥ refreshStart.
+          `DELETE FROM stocks WHERE is_etf = 0 AND mcap IS NULL AND COALESCE(price_seen_at, updated_at, 0) < ?`,
         )
         .run(refreshStart).changes || 0;
   }
@@ -2161,6 +2225,142 @@ export function listWatchlistAlertStatesForUser(userId) {
 
 export function deleteWatchlistAlertState(userId, symbol) {
   db.prepare('DELETE FROM watchlist_alert_state WHERE user_id = ? AND symbol = ?').run(userId, symbol);
+}
+
+// ── Retention (driven by server/maintenance.js) ─────────────────────────────
+// Every refresh path UPDATES rows in place (all market-data tables are keyed by
+// symbol), so steady-state growth comes only from the things below. Each helper
+// is bounded and idempotent; maintenance runs them once a day.
+
+/** Listings no upstream source has priced since `cutoff`, oldest first. */
+export function getDarkListings(cutoff, limit = 500) {
+  return db
+    .prepare(
+      `SELECT symbol FROM stocks
+         WHERE COALESCE(price_seen_at, 0) < ?
+         ORDER BY COALESCE(price_seen_at, 0) ASC
+         LIMIT ?`,
+    )
+    .all(cutoff, limit)
+    .map((r) => r.symbol);
+}
+
+/** Delete listings and their per-symbol market data in one transaction. */
+export const deleteListings = db.transaction((symbols) => {
+  const delStock = db.prepare('DELETE FROM stocks WHERE symbol = ?');
+  const delSpark = db.prepare('DELETE FROM sparklines WHERE symbol = ?');
+  const delAi = db.prepare('DELETE FROM ai_enrichment WHERE symbol = ?');
+  let removed = 0;
+  for (const sym of symbols || []) {
+    removed += delStock.run(sym).changes;
+    delSpark.run(sym);
+    delAi.run(sym);
+  }
+  return removed;
+});
+
+/**
+ * Per-symbol market data whose listing no longer exists. Kept for `graceMs`
+ * after its last write, so Deep Research on an off-universe symbol still gets
+ * a cached chart for a while.
+ */
+export function pruneOrphanMarketData(beforeMs) {
+  const sparklines = db
+    .prepare(`DELETE FROM sparklines WHERE updated_at < ? AND symbol NOT IN (SELECT symbol FROM stocks)`)
+    .run(beforeMs).changes;
+  const aiEnrichment = db
+    .prepare(
+      `DELETE FROM ai_enrichment WHERE COALESCE(updated_at, 0) < ? AND symbol NOT IN (SELECT symbol FROM stocks)`,
+    )
+    .run(beforeMs).changes;
+  return { sparklines, aiEnrichment };
+}
+
+// Cached universe payloads live in `meta` as <family>[:<variant>] with a
+// <family>_at[:<variant>] timestamp. Every distinct scope / market-cap floor
+// used to leave a 1–2 MB blob behind forever. Only these families are touched.
+const META_CACHE_FAMILIES = ['universe_rows_cache', 'screener_rows_cache', 'universe_cache'];
+export function pruneStaleMetaCaches(beforeMs, { emailBeforeDay = null } = {}) {
+  const rows = db.prepare('SELECT key, value FROM meta').all();
+  const values = new Map(rows.map((r) => [r.key, r.value]));
+  const doomed = [];
+  for (const { key } of rows) {
+    const family = META_CACHE_FAMILIES.find((f) => key === f || key.startsWith(`${f}:`));
+    if (family) {
+      const atKey = `${family}_at${key.slice(family.length)}`;
+      const at = Number(values.get(atKey));
+      if (!Number.isFinite(at) || at < beforeMs) doomed.push(key, atKey);
+      continue;
+    }
+    // Daily email-quota counters: one row per day, only today's is ever read.
+    if (emailBeforeDay && key.startsWith('email_sent:') && key.slice('email_sent:'.length) < emailBeforeDay) {
+      doomed.push(key);
+    }
+  }
+  const del = db.prepare('DELETE FROM meta WHERE key = ?');
+  let removed = 0;
+  db.transaction(() => {
+    for (const key of new Set(doomed)) removed += del.run(key).changes;
+  })();
+  return removed;
+}
+
+/** Keep each user's newest `keep` chat sessions. */
+export function capChatSessionsPerUser(keep = 200) {
+  return db
+    .prepare(
+      `DELETE FROM chat_sessions WHERE rowid IN (
+         SELECT rowid FROM (
+           SELECT rowid, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY updated_at DESC) AS rn
+             FROM chat_sessions
+         ) WHERE rn > ?
+       )`,
+    )
+    .run(keep).changes;
+}
+
+/** Keep each user's newest `keep` finished simulated orders (pending ones stay). */
+export function capBrokerageOrdersPerUser(keep = 1000) {
+  return db
+    .prepare(
+      `DELETE FROM brokerage_orders WHERE rowid IN (
+         SELECT rowid FROM (
+           SELECT rowid, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC) AS rn
+             FROM brokerage_orders WHERE status != 'pending'
+         ) WHERE rn > ?
+       )`,
+    )
+    .run(keep).changes;
+}
+
+/** Drop alert state for symbols a user no longer watches. */
+export function pruneWatchlistAlertStates(watchedByUser) {
+  const rows = db.prepare('SELECT user_id, symbol FROM watchlist_alert_state').all();
+  const del = db.prepare('DELETE FROM watchlist_alert_state WHERE user_id = ? AND symbol = ?');
+  let removed = 0;
+  db.transaction(() => {
+    for (const { user_id: userId, symbol } of rows) {
+      const watched = watchedByUser.get(userId);
+      if (!watched || !watched.has(symbol)) removed += del.run(userId, symbol).changes;
+    }
+  })();
+  return removed;
+}
+
+/** SQLite housekeeping. VACUUM only when asked and worth it. */
+export function sqliteHousekeeping({ vacuum = false, minFreeRatio = 0.25, minFreeBytes = 64 * 1024 * 1024 } = {}) {
+  const pageSize = db.pragma('page_size', { simple: true });
+  const pages = db.pragma('page_count', { simple: true });
+  const free = db.pragma('freelist_count', { simple: true });
+  const out = { sizeBytes: pages * pageSize, freeBytes: free * pageSize, vacuumed: false };
+  try { db.pragma('optimize'); } catch { /* best effort */ }
+  try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch { /* busy — next run */ }
+  if (vacuum && pages > 0 && free / pages >= minFreeRatio && free * pageSize >= minFreeBytes) {
+    db.exec('VACUUM');
+    out.vacuumed = true;
+    out.sizeBytesAfter = db.pragma('page_count', { simple: true }) * pageSize;
+  }
+  return out;
 }
 
 export default db;

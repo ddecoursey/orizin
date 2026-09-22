@@ -44,8 +44,9 @@ export function useStockDetail(symbol, reloadToken = 0) {
     getJson(`/api/stocks/news/${symbol}`).then((d) => {
       if (!cancelled) setNews({ sym: symbol, value: d?.news || [] });
     });
-    // 5Y chart — served from DB after enrich; no force=1 re-download.
-    getJson(`/api/stocks/sparkline/${symbol}?days=1825`).then((d) => {
+    // 5Y chart — served from the DB cache, but re-pulled (one call) once it is
+    // more than ~a day old so the chart never ends weeks before today.
+    getJson(`/api/stocks/sparkline/${symbol}?days=1825&maxAgeHours=20`).then((d) => {
       if (!cancelled) setPoints({ sym: symbol, value: d?.prices || [] });
     });
     getJson(`/api/stocks/rsi/${symbol}?periodLength=10`).then((d) => {

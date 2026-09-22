@@ -48,7 +48,7 @@ export function gamePlanMaxOutputTokens() {
   return Math.min(6000, Math.max(4000, envInt("GAME_PLAN_MAX_OUTPUT", 4000)));
 }
 
-/** Frontier Deep Research Game Plan (Gemini 3.6 Flash) — default 1 week. */
+/** Frontier Deep Research Game Plan (Gemini 3.8 Flash) — default 1 week. */
 export function gamePlanFrontierTtlMs() {
   return envDays("GAME_PLAN_FRONTIER_TTL_DAYS", 7) * DAY_MS;
 }

@@ -23,6 +23,8 @@ import { sendEmail, welcomeEmail, resetPasswordEmail, deletedAccountEmail } from
 import * as db from './db.js';
 import { cancelLinkedSubscription, cancellationErrorResponse } from './subscriptionLifecycle.js';
 import { enrichmentManager, startBackgroundEnrichmentIfEnabled } from './enrichment.js';
+import { getPriceSweepStatus, startPriceSweep, stopPriceSweep } from './priceSweep.js';
+import { getMaintenanceStatus, startMaintenance, stopMaintenance } from './maintenance.js';
 import { startWatchlistAlertJobs } from './watchlistAlerts.js';
 import { marketSession, marketStatusLine } from './marketHours.js';
 import { displayNameFor, emailForNotifications } from './userProfile.js';
@@ -771,6 +773,8 @@ app.get('/api/debug/fmp-stats', requireAdmin, (req, res) => {
     fmp: fmp.getFmpStats(),
     detailCache: getDetailCacheStats(),
     freshness: db.getFreshnessSummary(),
+    priceSweep: getPriceSweepStatus(),
+    maintenance: getMaintenanceStatus(),
     market: { session: marketSession(), statusLine: marketStatusLine() },
   });
 });
@@ -902,6 +906,10 @@ server = app.listen(PORT, '0.0.0.0', () => {
 
   // Start the always-on low-rate background enrichment job (if not disabled)
   startBackgroundEnrichmentIfEnabled();
+  // Whole-universe re-price from the paged screener (a few calls per sweep).
+  startPriceSweep();
+  // Daily retention + SQLite housekeeping (see server/maintenance.js).
+  startMaintenance();
   startWatchlistAlertJobs();
 
   // One-time: backfill the screener momentum signal from sparklines we already
@@ -1010,6 +1018,8 @@ function shutdown(signal, exitCode = 0) {
   };
 
   try { enrichmentManager.stop(); } catch { /* ignore */ }
+  try { stopPriceSweep(); } catch { /* ignore */ }
+  try { stopMaintenance(); } catch { /* ignore */ }
   try { fmp.abortAllOngoingFetches?.(); } catch { /* ignore */ }
 
   if (server?.listening) {

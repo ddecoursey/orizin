@@ -113,6 +113,48 @@ test.describe.serial("production-critical browser flows", () => {
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
   });
 
+  test("guided tours: first-run prompt, stepping, Esc, and replay from the Guide menu", async ({ page }) => {
+    await signIn(page);
+    await page.goto("/");
+
+    // Offered once, never started automatically.
+    const prompt = page.getByRole("dialog", { name: /New: guided tours|New to Orizin\?/ });
+    await expect(prompt).toBeVisible();
+    await prompt.getByRole("button", { name: /Show me around|Start the tour/ }).click();
+
+    const first = page.getByRole("dialog", { name: "Welcome to Orizin" });
+    await expect(first).toBeVisible();
+    await first.getByRole("button", { name: "Next", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Your four pages" })).toBeVisible();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByRole("dialog", { name: "Welcome to Orizin" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Welcome to Orizin" })).toHaveCount(0);
+
+    // Leaving the tour records that the prompt was seen, on the account.
+    await expect.poll(async () => {
+      const body = await (await page.request.get("/api/settings")).json();
+      return body.data?.tour?.seenWelcome;
+    }).toBe(true);
+    await page.reload();
+    const guide = page.getByRole("button", { name: "Guided tours and help" });
+    await expect(guide).toBeVisible();
+    await expect(page.getByRole("dialog", { name: /New: guided tours|New to Orizin\?/ })).toHaveCount(0);
+
+    // Any page's tour can be replayed at any time.
+    await guide.hover();
+    await page.getByRole("button", { name: /Tour this page/ }).click();
+    await expect(page.getByRole("dialog", { name: "Finding candidates" })).toBeVisible();
+    await page.getByRole("button", { name: "End tour" }).click();
+    await expect(page.getByRole("dialog", { name: "Finding candidates" })).toHaveCount(0);
+
+    await guide.hover();
+    await page.getByRole("button", { name: /Strategies.*Turn an investing idea/ }).click();
+    await expect(page).toHaveURL(/\?v=strategies$/);
+    await expect(page.getByRole("dialog", { name: "Strategies are simulated portfolios" })).toBeVisible();
+    await page.keyboard.press("Escape");
+  });
+
   test("logout revokes only that copied device session", async ({ page, browser, request }) => {
     await signIn(page);
     const otherContext = await browser.newContext();

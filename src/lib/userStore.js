@@ -4,14 +4,18 @@
 // drags, repeated filter edits) collapse into a single request. Server-side the
 // PUT is a shallow merge, so independent callers only send the keys they own.
 
-export async function fetchUserSettings() {
+// `nullOnError` lets a caller tell "no settings saved yet" ({}) apart from "the
+// read failed" (null) — e.g. so a first-run prompt is never shown to a
+// returning user just because their settings didn't load.
+export async function fetchUserSettings({ nullOnError = false } = {}) {
+  const failed = nullOnError ? null : {};
   try {
     const res = await fetch("/api/settings");
-    if (!res.ok) return {};
+    if (!res.ok) return failed;
     const data = await res.json();
     return data?.data || {};
   } catch {
-    return {};
+    return failed;
   }
 }
 

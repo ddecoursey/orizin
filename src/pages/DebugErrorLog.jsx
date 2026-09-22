@@ -469,7 +469,7 @@ export default function DebugErrorLog() {
                     <div className="flex justify-between"><span className="text-gray-500">older / never</span><span className="text-amber-300">{stats.freshness.price.older.toLocaleString()}</span></div>
                   </div>
                   <div className="text-[10px] text-gray-600 mt-2">
-                    Top names refresh ~30 min while the market is open; the rest rotate through the session. Quote churn pauses overnight &amp; weekends.
+                    The universe price sweep re-prices every US listing ~every 10 min while the market is open (30 min pre/after, 6 h closed); per-symbol quotes cover the rest.
                   </div>
                 </div>
                 <div className="bg-gray-950 border border-gray-800 rounded p-3">
@@ -482,6 +482,49 @@ export default function DebugErrorLog() {
                   <div className="text-[10px] text-gray-600 mt-2">
                     Stalest enriched rows are re-fetched continuously with spare budget (24 h cycle).
                   </div>
+                </div>
+                <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-2">Universe price sweep</div>
+                  {stats.priceSweep ? (
+                    <div className="space-y-1 text-[11px] font-mono">
+                      <div className="flex justify-between"><span className="text-gray-500">status</span><span className={stats.priceSweep.enabled ? 'text-emerald-400' : 'text-gray-400'}>{stats.priceSweep.running ? 'running…' : stats.priceSweep.enabled ? 'scheduled' : 'disabled'}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">last sweep</span><span className="text-gray-300">{stats.priceSweep.lastAt ? `${new Date(stats.priceSweep.lastAt).toLocaleTimeString()} · ${stats.priceSweep.lastSession || '—'}` : 'never'}</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">rows re-priced</span><span className="text-gray-300">{(stats.priceSweep.lastCount || 0).toLocaleString()} / {(stats.priceSweep.lastReturned || 0).toLocaleString()} returned</span></div>
+                      <div className="flex justify-between"><span className="text-gray-500">duration</span><span className="text-gray-300">{stats.priceSweep.lastDurationMs != null ? `${(stats.priceSweep.lastDurationMs / 1000).toFixed(1)} s` : '—'}</span></div>
+                      {stats.priceSweep.lastError && <div className="text-red-400 break-words">error: {stats.priceSweep.lastError}</div>}
+                    </div>
+                  ) : <div className="text-[11px] text-gray-500">No data.</div>}
+                  <div className="text-[10px] text-gray-600 mt-2">
+                    Each sweep costs ~1 FMP call per 1,000 listings (see <code>company-screener</code> above).
+                  </div>
+                </div>
+                <div className="bg-gray-950 border border-gray-800 rounded p-3">
+                  <div className="text-gray-400 text-xs mb-2">Data maintenance (daily)</div>
+                  {stats.maintenance ? (
+                    <div className="space-y-1 text-[11px] font-mono">
+                      <div className="flex justify-between"><span className="text-gray-500">last run</span><span className="text-gray-300">{new Date(stats.maintenance.at).toLocaleString()} · {stats.maintenance.durationMs} ms</span></div>
+                      {[
+                        ['darkListings', 'delisted listings'],
+                        ['orphanMarketData', 'orphan market data'],
+                        ['kvCache', 'expired cache'],
+                        ['metaCaches', 'stale universe blobs'],
+                        ['chatSessions', 'chat sessions over cap'],
+                        ['watchlistAlertState', 'unwatched alert state'],
+                      ].map(([key, label]) => {
+                        const v = stats.maintenance[key] || {};
+                        const n = v.removed ?? (v.sparklines != null ? v.sparklines + (v.aiEnrichment || 0) : null);
+                        return (
+                          <div key={key} className="flex justify-between gap-3">
+                            <span className="text-gray-500">{label}</span>
+                            <span className={v.error ? 'text-red-400' : 'text-gray-300'}>{v.error ? 'error' : v.skipped ? `skipped (${v.skipped})` : `${n ?? 0} removed`}</span>
+                          </div>
+                        );
+                      })}
+                      {stats.maintenance.sqlite && (
+                        <div className="flex justify-between"><span className="text-gray-500">database</span><span className="text-gray-300">{(stats.maintenance.sqlite.sizeBytes / 1e6).toFixed(0)} MB · {(stats.maintenance.sqlite.freeBytes / 1e6).toFixed(0)} MB free{stats.maintenance.sqlite.vacuumed ? ' · vacuumed' : ''}</span></div>
+                      )}
+                    </div>
+                  ) : <div className="text-[11px] text-gray-500">Not run yet — first run is ~10 min after the server starts.</div>}
                 </div>
               </div>
             </div>

@@ -40,9 +40,23 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_APP_COMMIT': JSON.stringify(commit),
     },
     build: {
-      // The main app chunk is ~540KB minified (158KB gzip) by design — the data
-      // grid, charts and motion runtime ship together for signed-in users.
       chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        output: {
+          // Third-party code changes far less often than the app, so it gets its
+          // own long-cached chunks: a deploy only re-downloads app code. Pages
+          // and modals are already split by lazy() in App.jsx.
+          manualChunks(id) {
+            if (!id.includes('node_modules')) return undefined
+            if (/node_modules\/(react|react-dom|scheduler)\//.test(id)) return 'vendor-react'
+            if (/node_modules\/(framer-motion|motion-dom|motion-utils)\//.test(id)) return 'vendor-motion'
+            // Everything else stays with whichever chunk imports it, so a
+            // library only one lazy page uses (e.g. yaml for Strategies) is not
+            // pulled into the first load.
+            return undefined
+          },
+        },
+      },
     },
     server: {
       host: '0.0.0.0', // Listen on all interfaces so it's reachable from outside the container

@@ -16,6 +16,13 @@ import db, { getStock } from "../db.js";
 // the same; only the provider object changes.
 
 const PROVIDER = process.env.BROKERAGE_PROVIDER || "simulated";
+const MAX_LINKED_ACCOUNTS = 10;
+
+// Log the detail server-side; never echo internal error text to the browser.
+function serverError(req, res, e) {
+  console.error(`[brokerage] ${req.method} ${req.path}:`, e?.message || e);
+  return res.status(500).json({ error: "Something went wrong — please try again." });
+}
 
 const INSTITUTIONS = [
   { id: "robinhood", name: "Robinhood" },
@@ -253,18 +260,22 @@ router.get("/brokerage/accounts", (req, res) => {
     const accounts = accountsForUser.all(req.userId).map(viewAccount);
     res.json({ accounts, simulated: PROVIDER === "simulated" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(req, res, e);
   }
 });
 
 router.post("/brokerage/link", (req, res) => {
   try {
     const institutionId = String(req.body?.institutionId || "");
+    // Bound per-user rows (simulated accounts cost nothing to create).
+    if (accountsForUser.all(req.userId).length >= MAX_LINKED_ACCOUNTS) {
+      return res.status(400).json({ error: `You can link up to ${MAX_LINKED_ACCOUNTS} accounts. Remove one first.` });
+    }
     const result = getProvider().link(req.userId, institutionId);
     if (result.error) return res.status(400).json({ error: result.error });
     res.json({ ok: true, ...result, simulated: PROVIDER === "simulated" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(req, res, e);
   }
 });
 
@@ -274,7 +285,7 @@ router.delete("/brokerage/accounts/:id", (req, res) => {
     if (!info.changes) return res.status(404).json({ error: "Account not found" });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(req, res, e);
   }
 });
 
@@ -282,7 +293,7 @@ router.get("/brokerage/orders", (req, res) => {
   try {
     res.json({ orders: ordersForUser.all(req.userId) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(req, res, e);
   }
 });
 
@@ -314,7 +325,7 @@ router.post("/brokerage/orders", (req, res) => {
     }
     res.json({ ok: true, order: result.order, simulated: PROVIDER === "simulated" });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(req, res, e);
   }
 });
 
@@ -328,7 +339,7 @@ router.delete("/brokerage/orders/:id", (req, res) => {
     setOrderStatus.run("cancelled", Date.now(), order.id);
     res.json({ ok: true, order: orderById.get(order.id, req.userId) });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(req, res, e);
   }
 });
 
